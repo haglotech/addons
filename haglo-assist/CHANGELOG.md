@@ -24,7 +24,7 @@
 
 ## 0.11.0
 
-- Nutzungslimits wie bei Claude: ein 5-Stunden-Limit und ein Wochenlimit, angezeigt in Prozent.
+- Nutzungslimits: ein 5-Stunden-Limit und ein Wochenlimit, angezeigt in Prozent.
   Kleine Änderungen verbrauchen weniger als große Dashboards.
 
 ## 0.10.0

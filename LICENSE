@@ -1,0 +1,41 @@
+Haglo Assist – Lizenz
+
+Copyright (c) 2026 Jonas Hagenlocher (Haglo). Alle Rechte vorbehalten.
+
+Diese Software ist die App zum Dienst "Haglo Assist". Der Quelltext ist einsehbar,
+die Software ist aber keine Open-Source-Software.
+
+Erlaubt ist:
+  - die unveränderte Software auf eigenen Home-Assistant-Systemen zu installieren
+    und zu betreiben, um den Dienst Haglo Assist zu nutzen;
+  - den Quelltext einzusehen, um nachzuvollziehen, was die Software tut.
+
+Nicht erlaubt ist ohne vorherige schriftliche Zustimmung des Rechteinhabers:
+  - die Software ganz oder in Teilen weiterzugeben, zu verkaufen oder zu vermieten;
+  - veränderte Fassungen zu veröffentlichen oder zu verbreiten;
+  - die Software mit anderen Diensten als Haglo Assist zu betreiben;
+  - die Namen "Haglo" und "Haglo Assist" sowie die Logos zu verwenden, außer um
+    auf die unveränderte Software hinzuweisen.
+
+Die Nutzung des Dienstes richtet sich nach den AGB und der Datenschutzerklärung:
+https://haglotech.com/policies/terms-of-service
+https://haglotech.com/policies/privacy-policy
+
+Bestandteile Dritter stehen unter ihren eigenen Lizenzen. Die Schrift "Work Sans"
+steht unter der SIL Open Font License 1.1, siehe
+haglo-assist/app/static/fonts/OFL-LICENSE.txt.
+
+Die Software wird ohne Gewährleistung bereitgestellt, soweit das gesetzlich zulässig
+ist. Zwingende gesetzliche Rechte von Verbrauchern bleiben unberührt.
+
+Kontakt: info@haglotech.com
+
+--------------------------------------------------------------------------------
+English summary (the German text above prevails)
+
+Copyright (c) 2026 Jonas Hagenlocher (Haglo). All rights reserved. This is
+source-available, proprietary software. You may install and run the unmodified
+software on your own Home Assistant systems to use the Haglo Assist service, and
+you may read the source code. You may not redistribute it, publish modified
+versions, use it with other services, or use the Haglo names and logos without
+prior written permission. Third-party components keep their own licenses.

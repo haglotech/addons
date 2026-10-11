@@ -43,3 +43,8 @@ Details: [Datenschutzerklärung](https://haglotech.com/policies/privacy-policy) 
 ### Hilfe
 
 [Beratung buchen](https://haglotech.com/pages/termin) · info@haglotech.com
+
+### Lizenz
+
+Der Quelltext ist einsehbar, die Software ist aber nicht Open Source. Du darfst sie unverändert
+installieren und nutzen. Einzelheiten stehen in der Datei [LICENSE](LICENSE).
