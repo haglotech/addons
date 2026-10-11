@@ -1,5 +1,9 @@
 # Änderungen
 
+## 0.16.2
+
+- Aufgeräumte Leiste unter der Eingabe: links das Dashboard, rechts Verlauf, Automationen und Versionen
+
 ## 0.16.1
 
 - Beim Öffnen ist die Oberfläche immer leer und aufgeräumt. Der Gesprächsfaden erscheint mit deiner

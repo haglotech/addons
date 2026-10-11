@@ -50,7 +50,17 @@
   body.has-thread .sub { font-size: 11px; margin-top: 6px; }
   body.has-thread .tag, body.has-thread .chips { display: none; }
   .composer { flex: none; width: 100%; max-width: 752px; margin: 0 auto; padding: 6px 16px 0; }
-  .crow { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; min-height: 34px; padding: 0 8px; }
+  /* Zeile unter der Eingabe: links, woran gearbeitet wird – rechts, was man nachsehen kann */
+  .crow { display: flex; align-items: center; justify-content: space-between; gap: 8px 12px; flex-wrap: wrap; padding: 10px 4px 0; }
+  .tools { display: flex; gap: 6px; flex-wrap: wrap; margin-left: auto; }
+  .tool { display: inline-flex; align-items: center; gap: 6px; font: inherit; font-size: 13px; color: var(--muted); background: transparent;
+          border: 1px solid var(--line); border-radius: 999px; padding: 6px 12px; cursor: pointer; transition: color .15s, border-color .15s, background .15s; }
+  .tool:hover { color: var(--brand); border-color: var(--brand); background: var(--brand-soft); }
+  .tool svg { flex: none; }
+  #freshSlot button { font: inherit; font-size: 12px; color: var(--muted); background: none; border: 0; border-left: 1px solid var(--line);
+                      padding: 2px 8px 2px 10px; margin-left: 2px; cursor: pointer; white-space: nowrap; }
+  #freshSlot button:hover { color: var(--brand); }
+  .fsep:first-child { display: none; }
   .thread { display: flex; flex-direction: column; gap: 10px; padding-bottom: 6px; }
   .msg { display: flex; }
   .msg.user { justify-content: flex-end; }
@@ -75,6 +85,8 @@
   @keyframes blink { 0%, 80%, 100% { opacity: .25; } 40% { opacity: 1; } }
   details.fold { text-align: center; }
   details.fold.hidden { display: none; }
+  .clearrow { text-align: center; font-size: 12px; color: var(--muted); margin: 10px 0 4px; }
+  .clearrow a { color: var(--muted); text-decoration: underline; cursor: pointer; }
   details.fold summary { cursor: pointer; color: var(--muted); font-size: 13px; padding: 4px 0 8px; list-style: none; }
   details.fold summary::-webkit-details-marker { display: none; }
   details.fold[open] summary { margin-bottom: 6px; }
@@ -104,7 +116,7 @@
   .chip svg { color: var(--brand); flex: none; }
   .chip:hover { border-color: var(--brand); color: var(--brand); background: var(--brand-soft); }
   .chip:disabled { opacity: .5; cursor: default; }
-  .meta { color: var(--muted); font-size: 12px; margin-left: auto; }
+  #meta:empty + .fsep { display: none; }
   .auto { text-align: left; border: 1px solid var(--line); background: var(--bg); border-radius: 12px; padding: 12px 14px; margin-bottom: 10px; }
   .auto b { color: var(--heading); font-size: 15px; }
   .kind { font-size: 12px; font-weight: 400; color: var(--muted); border: 1px solid var(--line); border-radius: 999px; padding: 1px 8px; margin-left: 4px; white-space: nowrap; }
@@ -157,7 +169,7 @@
   .links { margin-top: 12px; font-size: 14px; }
   .links button { background: none; border: 0; color: var(--muted); font: inherit; cursor: pointer; text-decoration: underline; }
 
-  footer { text-align: center; font-size: 12px; color: var(--muted); padding: 8px 16px 12px; flex: none; }
+  footer { text-align: center; font-size: 11.5px; color: var(--muted); padding: 10px 16px 12px; flex: none; opacity: .85; }
   footer a { color: var(--muted); cursor: pointer; }
 
   .sheet-bg { position: fixed; inset: 0; background: rgba(0,0,0,.55); display: flex; align-items: flex-end; justify-content: center; z-index: 10; }
@@ -194,9 +206,10 @@
   .plan .tag2 { font-size: 13px; color: var(--muted); }
   .manage { margin-top: 16px; display: flex; flex-wrap: wrap; gap: 10px; }
   .manage .btn2 { cursor: pointer; }
-  .dash { display: flex; align-items: center; gap: 8px; font-size: 12px; color: var(--muted); }
-  .dash select { font: inherit; font-weight: 600; color: var(--brand); background: var(--surface); border: 1px solid var(--line);
-                 border-radius: 999px; padding: 5px 10px; max-width: 240px; cursor: pointer; }
+  .dash { display: inline-flex; align-items: center; gap: 6px; font-size: 13px; color: var(--brand); border: 1px solid var(--line);
+          border-radius: 999px; padding: 2px 6px 2px 12px; background: var(--surface); }
+  .dash select { font: inherit; font-weight: 600; color: var(--brand); background: transparent; border: 0; outline: 0;
+                 padding: 4px 2px; width: 150px; max-width: 40vw; text-overflow: ellipsis; cursor: pointer; }
   .sheet .row { display: flex; gap: 10px; }
   .sheet .row > * { flex: 1; }
   .sheet .row .btn2 { justify-content: center; cursor: pointer; padding: 12px; }
@@ -281,11 +294,21 @@
         <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h14M13 6l6 6-6 6"/></svg>
       </button>
     </form>
-    <div class="crow"><div class="dash hidden" id="dashRow"><label for="dash">Dashboard</label><select id="dash"></select></div>
-      <div class="meta" id="meta"></div></div>
+    <div class="crow">
+      <div class="dash hidden" id="dashRow" title="Welches Dashboard soll ich bearbeiten?">
+        <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="7" height="9" rx="1.5"/><rect x="14" y="3" width="7" height="5" rx="1.5"/><rect x="14" y="12" width="7" height="9" rx="1.5"/><rect x="3" y="16" width="7" height="5" rx="1.5"/></svg>
+        <select id="dash" aria-label="Dashboard, das bearbeitet wird"></select>
+        <span id="freshSlot"></span>
+      </div>
+      <div class="tools">
+        <button type="button" class="tool" id="histLink"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 12a9 9 0 1 0 3-6.7"/><path d="M3 4v5h5"/><path d="M12 8v4l3 2"/></svg>Verlauf</button>
+        <button type="button" class="tool hidden" id="autosLink"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M13 2L4 14h7l-1 8 9-12h-7z"/></svg>Automationen</button>
+        <button type="button" class="tool" id="versionsLink"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3l9 5-9 5-9-5z"/><path d="M3 13l9 5 9-5"/></svg>Versionen</button>
+      </div>
+    </div>
   </div>
 
-  <footer><a id="terms" href="https://haglotech.com/policies/terms-of-service" target="_blank" rel="noopener">AGB</a> · <a id="privacy" href="https://haglotech.com/policies/privacy-policy" target="_blank" rel="noopener">Datenschutz</a> · <a id="histLink" role="button" tabindex="0">Verlauf</a> · <a id="freshLink" role="button" tabindex="0">Verlauf leeren</a> · <a id="autosLink" role="button" tabindex="0" class="hidden">Automationen</a><span id="autosSep" class="hidden"> · </span><a id="versionsLink" role="button" tabindex="0">Versionen</a> · <a id="planLink" role="button" tabindex="0">Plan &amp; Abo</a> · Haglo</footer>
+  <footer><span id="meta"></span><span class="fsep"> · </span><a id="terms" href="https://haglotech.com/policies/terms-of-service" target="_blank" rel="noopener">AGB</a> · <a id="privacy" href="https://haglotech.com/policies/privacy-policy" target="_blank" rel="noopener">Datenschutz</a> · <a id="planLink" role="button" tabindex="0">Plan &amp; Abo</a></footer>
 
   <div class="sheet-bg hidden" id="consent">
     <div class="sheet">
@@ -553,7 +576,9 @@ async function loadHistory(open) {
   const live = cur; if (live) live.remove();
   const wasOpen = open || ($("foldOld") && $("foldOld").open);
   $("result").innerHTML = (old.length ? `<details class="fold" id="foldOld"${wasOpen ? " open" : ""}><summary>Frühere Änderungen anzeigen (${old.length})</summary>
-      <div class="thread">${old.map(historyMsg).join("")}</div></details>` : "") + fresh.map(historyMsg).join("");
+      <div class="thread">${old.map(historyMsg).join("")}</div>
+      <p class="clearrow"><a data-clear role="button" tabindex="0">Verlauf leeren</a></p></details>` : "") + fresh.map(historyMsg).join("")
+    + (!items.length && !live ? `<p class="clearrow">Noch kein Verlauf. Hier steht, was Haglo Assist für dich gemacht hat.</p>` : "");
   if (live) $("result").append(live);
   hasThread(); scrollDown();
 }
@@ -564,7 +589,8 @@ async function loadOld() {
     const old = (await api("api/history")).history.filter((h) => h.ts < sessionStart - 2);
     const f = $("foldOld");
     if (!f || !old.length) return;
-    f.innerHTML = `<summary>Frühere Änderungen anzeigen (${old.length})</summary><div class="thread">${old.map(historyMsg).join("")}</div>`;
+    f.innerHTML = `<summary>Frühere Änderungen anzeigen (${old.length})</summary><div class="thread">${old.map(historyMsg).join("")}</div>
+      <p class="clearrow"><a data-clear role="button" tabindex="0">Verlauf leeren</a></p>`;
     f.classList.remove("hidden");
   } catch (e) {}
 }
@@ -577,7 +603,8 @@ $("result").addEventListener("click", async (e) => {
   catch (err) { b.disabled = false; b.textContent = "Rückgängig"; alert(err.message); }
 });
 $("histLink").addEventListener("click", () => { started = true; loadHistory(true); });
-$("freshLink").addEventListener("click", async () => {
+document.addEventListener("click", async (e) => {
+  if (!e.target.closest("[data-clear]")) return;
   if (!confirm("Den Gesprächsverlauf leeren? Deine Dashboards, Automationen und Versionen bleiben erhalten.")) return;
   try { await api("api/history/clear", {}); cur = null; started = false; $("result").innerHTML = ""; hasThread(); } catch (e) { alert(e.message); }
 });
@@ -603,7 +630,7 @@ async function init() {
     if (trial) setTrial(trial);
     if (features.automations) {
       $("tagline").textContent = "Sag, was du brauchst. Ich baue Dashboards und Automationen und schalte deine Geräte.";
-      $("autosLink").classList.remove("hidden"); $("autosSep").classList.remove("hidden");
+      $("autosLink").classList.remove("hidden");
     }
     $("wish").value = mem.get("draft") || "";
     await loadHistory();
@@ -624,9 +651,10 @@ async function init() {
 
 function addFreshLink() {
   const b = document.createElement("button");
-  b.type = "button"; b.textContent = "Neu bauen";
+  b.type = "button"; b.textContent = "neu aufbauen";
+  b.title = "Der nächste Wunsch ersetzt das Haglo Dashboard komplett, statt es anzupassen. Der bisherige Stand wird gesichert.";
   b.onclick = () => { setDashboardMode(false); b.remove(); $("wish").focus(); };
-  $("meta").append(" · ", b);
+  $("freshSlot").replaceChildren(b);
 }
 
 $("wish").addEventListener("input", () => mem.set("draft", $("wish").value));
