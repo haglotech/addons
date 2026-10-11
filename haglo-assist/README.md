@@ -29,3 +29,6 @@ Dashboards und eigene Automationen werden nur übertragen, wenn du dem in der Ap
 [Datenschutz](https://haglotech.com/policies/privacy-policy) ·
 [AGB](https://haglotech.com/policies/terms-of-service) ·
 [Beratung buchen](https://haglotech.com/pages/termin)
+
+Lizenz: Apache-2.0. Mitgelieferte Open-Source-Bausteine und ihre Lizenzen:
+[THIRD-PARTY-LICENSES.txt](app/static/vendor/THIRD-PARTY-LICENSES.txt), Schrift Work Sans: [OFL](app/static/fonts/OFL-LICENSE.txt).

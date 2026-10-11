@@ -1,12 +1,13 @@
 # Änderungen
 
-## 0.17.0
+## 0.18.0
 
-- Haglo Assist arbeitet jetzt direkt an deiner Startseite („Übersicht“) statt an einem Extra-Dashboard.
-  Ist sie noch automatisch erzeugt, baut Haglo Assist sie neu. „Rückgängig“ bringt die automatische
-  Ansicht zurück.
-- Die Dashboard-Auswahl hat eindeutige Namen: Startseite, deine weiteren Dashboards und das separate
-  Haglo Dashboard zum Ausprobieren. Deine Wahl bleibt gespeichert.
+- Keine Dashboard-Auswahl mehr: Haglo Assist arbeitet einfach an deiner Startseite. Meinst du ein
+  anderes Dashboard, nenn es im Satz beim Namen, zum Beispiel „im Dashboard Technik …“.
+- Ist die Startseite noch automatisch erzeugt, baut Haglo Assist sie neu. „Rückgängig“ bringt die
+  automatische Ansicht zurück. Hast du sie selbst gestaltet, fragt die App einmal nach.
+- Im Gespräch steht die Uhrzeit jetzt unter der Nachricht
+- Antworten werden formatiert angezeigt: fett, Listen, Tabellen, Code und Diagramme
 
 ## 0.16.2
 

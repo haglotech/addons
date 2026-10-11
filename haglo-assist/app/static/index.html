@@ -63,6 +63,7 @@
   .fsep:first-child { display: none; }
   .thread { display: flex; flex-direction: column; gap: 10px; padding-bottom: 6px; }
   .msg { display: flex; }
+  .msg.bot { flex-direction: column; align-items: flex-start; }
   .msg.user { justify-content: flex-end; }
   .bub { max-width: 92%; border-radius: 18px; padding: 14px 16px; font-size: 15px; }
   .msg.user .bub { background: var(--brand); color: var(--brand-ink); border-bottom-right-radius: 5px; padding: 10px 14px; max-width: 80%; }
@@ -78,7 +79,24 @@
   .bub .undo:hover { color: var(--text); }
   .bub .gone { font-size: 13px; color: var(--muted); }
   .msg.was .bub { opacity: .6; }
-  .when2 { font-size: 11px; color: var(--muted); margin: 0 6px; align-self: flex-end; white-space: nowrap; }
+  .mdx { color: var(--text); }
+  .msg.bot .bub h2 + .mdx { color: var(--muted); }
+  .mdx p { margin: 0 0 8px; color: inherit; }
+  .mdx h4 { margin: 10px 0 6px; font-size: 15px; font-weight: 600; color: var(--heading); }
+  .mdx ul, .mdx ol { margin: 0 0 8px; padding-left: 20px; }
+  .mdx li { margin: 2px 0; }
+  .mdx code { background: var(--bg); border: 1px solid var(--line); border-radius: 5px; padding: 1px 5px; font-size: 13px; }
+  .mdx pre { background: var(--bg); border: 1px solid var(--line); border-radius: 10px; padding: 10px 12px; overflow-x: auto; font-size: 13px; margin: 0 0 8px; }
+  .mdx pre code { border: 0; padding: 0; background: none; }
+  .mdx a { color: var(--brand); }
+  .mdx .tw { overflow-x: auto; margin: 0 0 8px; }
+  .mdx table { border-collapse: collapse; font-size: 14px; }
+  .mdx th, .mdx td { border: 1px solid var(--line); padding: 5px 10px; text-align: left; }
+  .mdx th { background: var(--bg); font-weight: 600; }
+  .mdx .mm { background: var(--bg); border: 1px solid var(--line); border-radius: 10px; padding: 10px; margin: 0 0 8px; overflow-x: auto; text-align: center; }
+  .mdx .mm svg { max-width: 100%; height: auto; }
+  .mdx > :last-child { margin-bottom: 0; }
+  .when2 { font-size: 11px; color: var(--muted); margin: 4px 0 0 10px; white-space: nowrap; }
   .typing { display: flex; align-items: center; gap: 5px; color: var(--muted); }
   .typing i { width: 7px; height: 7px; border-radius: 50%; background: var(--brand); animation: blink 1.2s infinite ease-in-out; }
   .typing i:nth-child(2) { animation-delay: .2s; } .typing i:nth-child(3) { animation-delay: .4s; margin-right: 6px; }
@@ -289,17 +307,12 @@
       <button class="chip" data-w="Erstelle eine Sicherheits-Seite: Türen, Fenster, Bewegungsmelder, Rauchmelder und Kameras."><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3l8 3v6c0 5-3.500 8-8 9-4.500-1-8-4-8-9V6z"/></svg>Sicherheit</button>
     </div>
     <form class="search" id="form">
-      <input id="wish" autocomplete="off" placeholder="z. B. Alle Räume mit Licht">
+      <input id="wish" autocomplete="off" placeholder="Was soll ich bauen, ändern oder schalten?">
       <button class="send" id="send" aria-label="Los">
         <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h14M13 6l6 6-6 6"/></svg>
       </button>
     </form>
     <div class="crow">
-      <div class="dash hidden" id="dashRow" title="Welches Dashboard soll ich bearbeiten?">
-        <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="7" height="9" rx="1.5"/><rect x="14" y="3" width="7" height="5" rx="1.5"/><rect x="14" y="12" width="7" height="9" rx="1.5"/><rect x="3" y="16" width="7" height="5" rx="1.5"/></svg>
-        <select id="dash" aria-label="Dashboard, das bearbeitet wird"></select>
-        <span id="freshSlot"></span>
-      </div>
       <div class="tools">
         <button type="button" class="tool" id="histLink"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 12a9 9 0 1 0 3-6.7"/><path d="M3 4v5h5"/><path d="M12 8v4l3 2"/></svg>Verlauf</button>
         <button type="button" class="tool hidden" id="autosLink"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M13 2L4 14h7l-1 8 9-12h-7z"/></svg>Automationen</button>
@@ -308,7 +321,7 @@
     </div>
   </div>
 
-  <footer><span id="meta"></span><span class="fsep"> · </span><a id="terms" href="https://haglotech.com/policies/terms-of-service" target="_blank" rel="noopener">AGB</a> · <a id="privacy" href="https://haglotech.com/policies/privacy-policy" target="_blank" rel="noopener">Datenschutz</a> · <a id="planLink" role="button" tabindex="0">Plan &amp; Abo</a></footer>
+  <footer><span id="meta"></span><span class="fsep"> · </span><a id="terms" href="https://haglotech.com/policies/terms-of-service" target="_blank" rel="noopener">AGB</a> · <a id="privacy" href="https://haglotech.com/policies/privacy-policy" target="_blank" rel="noopener">Datenschutz</a> · <a href="static/vendor/THIRD-PARTY-LICENSES.txt" target="_blank" rel="noopener">Lizenzen</a> · <a id="planLink" role="button" tabindex="0">Plan &amp; Abo</a></footer>
 
   <div class="sheet-bg hidden" id="consent">
     <div class="sheet">
@@ -324,19 +337,6 @@
       <label><input type="checkbox" id="agree">
         <span>Ich akzeptiere die <a id="termsLink" target="_blank" rel="noopener">AGB</a> und habe die <a id="privacyLink" target="_blank" rel="noopener">Datenschutzerklärung</a> gelesen.</span></label>
       <button class="primary" id="accept" disabled>Zustimmen &amp; loslegen</button>
-    </div>
-  </div>
-
-  <div class="sheet-bg hidden" id="allow">
-    <div class="sheet">
-      <h3 id="allowTitle">Dieses Dashboard bearbeiten?</h3>
-      <ul>
-        <li>Zur Bearbeitung wird der Aufbau dieses Dashboards übertragen: Karten, Namen und eingetragene Texte – an den Haglo-Server und unseren KI-Dienstleister Anthropic (USA)</li>
-        <li>Messwerte, Verläufe und Zustände verlassen dein Gerät nicht</li>
-        <li>Haglo Assist ändert nur, was du verlangst. Alles andere bleibt, wie es ist</li>
-        <li>Vor jeder Änderung wird eine Version lokal gesichert, die du unter „Versionen“ wiederherstellen kannst</li>
-      </ul>
-      <div class="row"><button class="btn2" id="allowNo">Abbrechen</button><button class="primary" id="allowYes">Ja, bearbeiten</button></div>
     </div>
   </div>
 
@@ -395,9 +395,8 @@
 const $ = (id) => document.getElementById(id);
 let trial = null, pending = null, busy = false;
 const OWN = "haglo-ki";
-// Woran gearbeitet wird: "" ist die Startseite („Übersicht“), OWN das separate Haglo Dashboard
-let dashList = [], dash = "", rebuild = false;
-const current = () => dashList.find((x) => x.id === dash);
+// Es gibt keine Dashboard-Auswahl: Haglo Assist arbeitet an der Startseite. Wer ein anderes
+// Dashboard meint, nennt es im Wunsch beim Namen („im Dashboard Technik …“).
 let features = {};
 // Getipptes und offene Rückfragen überstehen das Verlassen der Seite (nur in diesem Browser-Tab gespeichert)
 const mem = {
@@ -475,71 +474,6 @@ function resetText(ts) {
     : `am ${d.toLocaleDateString("de-DE", { weekday: "short" })}, ${time} Uhr`;
 }
 
-// Platzhalter und „neu aufbauen“ passend zum gewählten Dashboard
-function setDashboardMode() {
-  const d = current(), edit = d && !d.auto && !rebuild;
-  $("wish").placeholder = edit ? `Was soll ich an ${d.start ? "deiner Startseite" : `„${d.title}“`} ändern, anlegen oder schalten?`
-    : "z. B. Alle Räume mit Licht – oder: Mach das Flurlicht aus";
-  $("freshSlot").replaceChildren();
-  if (d && !d.auto && !rebuild) {
-    const b = document.createElement("button");
-    b.type = "button"; b.textContent = "neu aufbauen";
-    b.title = "Der nächste Wunsch baut dieses Dashboard von Grund auf neu, statt es anzupassen. Der bisherige Stand wird gesichert.";
-    b.onclick = () => {
-      if (!d.own && !confirm(`„${d.label}“ mit dem nächsten Wunsch komplett neu aufbauen? Der bisherige Stand wird gesichert und lässt sich wiederherstellen.`)) return;
-      rebuild = true; setDashboardMode(); $("wish").focus();
-    };
-    $("freshSlot").append(b);
-  } else if (rebuild) {
-    const t = document.createElement("button");
-    t.type = "button"; t.textContent = "wird neu aufgebaut ✕"; t.title = "Abbrechen: doch nur anpassen";
-    t.onclick = () => { rebuild = false; setDashboardMode(); };
-    $("freshSlot").append(t);
-  }
-}
-
-// ---------------------------------------------------------------- Dashboard-Auswahl
-async function loadDashboards() {
-  try {
-    dashList = (await api("api/dashboards")).dashboards;
-    if (!current()) dash = (dashList.find((d) => d.start) || dashList[0] || { id: "" }).id;
-    const opt = (d) => `<option value="${esc(d.id)}"${d.editable ? "" : " disabled"}>${esc(d.label)}${d.editable ? (d.auto && !d.own ? " – noch automatisch" : "") : " – nicht änderbar (YAML)"}</option>`;
-    const start = dashList.filter((d) => d.start), own = dashList.filter((d) => d.own), rest = dashList.filter((d) => !d.start && !d.own);
-    $("dash").innerHTML = start.map(opt).join("")
-      + (rest.length ? `<optgroup label="Weitere Dashboards">${rest.map(opt).join("")}</optgroup>` : "")
-      + `<optgroup label="Zum Ausprobieren">${own.map(opt).join("")}</optgroup>`;
-    $("dash").value = dash;
-    $("dashRow").classList.remove("hidden");
-    setDashboardMode();
-  } catch (e) { /* ohne Liste bleibt es bei der Startseite */ }
-}
-
-function selectDashboard(id) {
-  dash = id; $("dash").value = id; dialog = []; asking = null; rebuild = false;
-  dismiss();
-  setDashboardMode();
-  api("api/prefs", { dashboard: id }).catch(() => {});
-}
-
-$("dash").addEventListener("change", () => {
-  const d = dashList.find((x) => x.id === $("dash").value);
-  if (!d || d.allowed) return selectDashboard(d ? d.id : "");
-  // Erst fragen: Für ein eigenes Dashboard wird dessen Aufbau übertragen.
-  $("allowTitle").textContent = `„${d.label}“ mit Haglo Assist bearbeiten?`;
-  $("allow").dataset.id = d.id;
-  $("allow").classList.remove("hidden");
-});
-$("allowNo").addEventListener("click", () => { $("allow").classList.add("hidden"); $("dash").value = dash; });
-$("allowYes").addEventListener("click", async () => {
-  const id = $("allow").dataset.id;
-  try {
-    await api("api/dashboards/allow", { id });
-    const d = dashList.find((x) => x.id === id); if (d) d.allowed = true;
-    selectDashboard(id);
-  } catch (e) { alert(e.message); $("dash").value = dash; }
-  $("allow").classList.add("hidden");
-});
-
 // ---------------------------------------------------------------- Gesprächsfaden
 // Ein einziger Faden: links die Antworten von Haglo Assist, rechts deine Wünsche. Alles, was erledigt
 // ist, kommt aus dem lokalen Verlauf der App und lässt sich dort einzeln rückgängig machen. `cur` ist
@@ -550,6 +484,11 @@ let cur = null;
 let started = false;
 const sessionStart = Date.now() / 1000;
 const KIND = { dashboard: "Dashboard geändert", automation: "Angelegt", control: "Erledigt", restore: "Wiederhergestellt", automation_deleted: "Gelöscht" };
+// „23:08“ für heute, sonst mit Datum
+function stamp(ts) {
+  const d = new Date(ts * 1000), time = d.toLocaleTimeString("de-DE", { hour: "2-digit", minute: "2-digit" });
+  return d.toDateString() === new Date().toDateString() ? time : `${d.toLocaleDateString("de-DE", { day: "2-digit", month: "2-digit" })}, ${time}`;
+}
 
 function scrollDown() { const m = $("main"); requestAnimationFrame(() => { m.scrollTop = m.scrollHeight; }); }
 function hasThread() { document.body.classList.toggle("has-thread", $("result").children.length > 0); }
@@ -579,15 +518,72 @@ function dismiss() { if (cur) { cur.remove(); cur = null; } hasThread(); }
 
 function typing(text) { showResult(`<div class="typing"><i></i><i></i><i></i><span id="loadText">${esc(text)}</span></div>`); }
 
+// ---------------------------------------------------------------- Markdown und Diagramme
+// Klein und sicher: Erst wird alles maskiert, dann werden nur wenige Formate wieder zugelassen.
+function md(src) {
+  const blocks = [];
+  let t = String(src ?? "").replace(/\r/g, "");
+  t = t.replace(/```([a-zA-Z]*)[ \t]*\n([\s\S]*?)```/g, (_, lang, code) => {
+    blocks.push(lang.toLowerCase() === "mermaid" ? `<div class="mm" data-code="${esc(code)}"><pre>${esc(code)}</pre></div>` : `<pre><code>${esc(code)}</code></pre>`);
+    return `\n\u0000${blocks.length - 1}\u0000\n`;
+  });
+  t = esc(t);
+  const inline = (x) => x.replace(/`([^`]+)`/g, "<code>$1</code>").replace(/\*\*([^*]+)\*\*/g, "<b>$1</b>")
+    .replace(/(^|[\s(])\*([^*\n]+)\*(?=[\s).,!?]|$)/g, "$1<i>$2</i>")
+    .replace(/\[([^\]]+)\]\((https?:\/\/[^\s)]+|\/[^\s)]*)\)/g, '<a href="$2" target="_blank" rel="noopener">$1</a>');
+  const out = []; let list = null, rows = null;
+  const flush = () => {
+    if (list) { out.push(`<${list.t}>${list.i.map((i) => `<li>${i}</li>`).join("")}</${list.t}>`); list = null; }
+    if (rows) {
+      const cells = (r) => r.trim().replace(/^\||\|$/g, "").split("|").map((c) => inline(c.trim()));
+      const body = rows.filter((r) => !/^\s*\|?[\s:|-]+\|?\s*$/.test(r));
+      out.push(`<div class="tw"><table>${body.map((r, i) => `<tr>${cells(r).map((c) => (i === 0 && body.length < rows.length ? `<th>${c}</th>` : `<td>${c}</td>`)).join("")}</tr>`).join("")}</table></div>`);
+      rows = null;
+    }
+  };
+  for (const line of t.split("\n")) {
+    let m;
+    if ((m = line.match(/^\u0000(\d+)\u0000$/))) { flush(); out.push(blocks[+m[1]]); }
+    else if ((m = line.match(/^#{1,4}\s+(.*)/))) { flush(); out.push(`<h4>${inline(m[1])}</h4>`); }
+    else if ((m = line.match(/^\s*[-*•]\s+(.*)/))) { if (!list || list.t !== "ul") { flush(); list = { t: "ul", i: [] }; } list.i.push(inline(m[1])); }
+    else if ((m = line.match(/^\s*\d+[.)]\s+(.*)/))) { if (!list || list.t !== "ol") { flush(); list = { t: "ol", i: [] }; } list.i.push(inline(m[1])); }
+    else if (/^\s*\|.*\|\s*$/.test(line)) { if (!rows) { flush(); rows = []; } rows.push(line); }
+    else if (!line.trim()) flush();
+    else { flush(); out.push(`<p>${inline(line)}</p>`); }
+  }
+  flush();
+  return `<div class="mdx">${out.join("")}</div>`;
+}
+
+// Diagramme zeichnen. Die Bibliothek liegt in der App und wird erst geladen, wenn ein Diagramm vorkommt.
+let mermaidReady = null, mermaidCount = 0;
+document.addEventListener("toggle", (e) => { if (e.target.id === "foldOld" && e.target.open) renderDiagrams(e.target); }, true);
+async function renderDiagrams(root) {
+  const items = [...root.querySelectorAll(".mm:not(.done)")].filter((el) => el.offsetParent);   // eingeklappte erst beim Aufklappen
+  if (!items.length) return;
+  mermaidReady = mermaidReady || new Promise((ok, fail) => {
+    const sc = document.createElement("script");
+    sc.src = "static/vendor/mermaid.min.js"; sc.onload = ok; sc.onerror = fail; document.head.append(sc);
+  }).then(() => window.mermaid.initialize({ startOnLoad: false, securityLevel: "strict", fontFamily: "Work Sans, system-ui, sans-serif",
+    theme: matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "default" }));
+  try { await mermaidReady; } catch (e) { return; }      // ohne Bibliothek bleibt der Text stehen
+  for (const el of items) {
+    el.classList.add("done");
+    try { el.innerHTML = (await window.mermaid.render("mm" + (++mermaidCount), el.dataset.code)).svg; }
+    catch (e) { document.querySelectorAll("#dmm" + mermaidCount).forEach((x) => x.remove()); }
+  }
+  scrollDown();
+}
+
 function historyMsg(h) {
-  const title = KIND[h.kind], undone = h.undone ? `<div class="gone">↩ Rückgängig gemacht</div>` : "";
-  const body = h.kind === "answer" ? `<p style="color:var(--text)">${esc(h.text)}</p>`
-    : `${title ? `<h2>${h.undone ? "" : "✓ "}${esc(title)}</h2>` : ""}${h.text ? `<p>${esc(h.text)}</p>` : ""}`;
+  const title = h.kind === "dashboard" && h.target ? (h.target === "Startseite" ? "Startseite geändert" : `„${h.target}“ geändert`) : KIND[h.kind], undone = h.undone ? `<div class="gone">↩ Rückgängig gemacht</div>` : "";
+  const body = h.kind === "answer" ? md(h.text)
+    : `${title ? `<h2>${h.undone ? "" : "✓ "}${esc(title)}</h2>` : ""}${h.text ? md(h.text) : ""}`;
   const open = h.url && !h.undone ? `<a class="btn2" href="${esc(h.url)}" target="_top">Öffnen</a>` : "";
   const undo = h.can_undo ? `<div class="links"><button class="undo" data-undo="${esc(h.id)}">Rückgängig</button></div>` : "";
   return (h.wish ? `<div class="msg user"><div class="bub">${esc(h.wish)}</div></div>` : "")
     + `<div class="msg bot${h.undone ? " was" : ""}"><div class="bub">${body}${open ? `<div class="actions">${open}</div>` : ""}${undo}${undone}</div>
-       <span class="when2">${when(h.ts)}</span></div>`;
+       <span class="when2">${stamp(h.ts)}</span></div>`;
 }
 
 // Baut den Faden aus dem Verlauf neu auf. Was gerade offen ist (cur), bleibt am Ende stehen.
@@ -603,7 +599,7 @@ async function loadHistory(open) {
       <p class="clearrow"><a data-clear role="button" tabindex="0">Verlauf leeren</a></p></details>` : "") + fresh.map(historyMsg).join("")
     + (!items.length && !live ? `<p class="clearrow">Noch kein Verlauf. Hier steht, was Haglo Assist für dich gemacht hat.</p>` : "");
   if (live) $("result").append(live);
-  hasThread(); scrollDown();
+  hasThread(); scrollDown(); renderDiagrams($("result"));
 }
 
 // Füllt nur den eingeklappten Teil, ohne die gerade entstehenden Nachrichten anzufassen
@@ -661,11 +657,9 @@ async function init() {
     else if (trial && !trial.accepted && (s.haglo_marker || s.preinstalled)) showWelcome(s.haglo_marker);
     else if (mem.get("question")) { const m = mem.get("question"); dialog = m.dialog || []; showQuestion(m.wish, m.label, m.q); }
     else if (mem.get("automations")) { const m = mem.get("automations"); showAutomations(m.wish, m.erklaerung, m.items); }
-    dash = typeof s.dashboard === "string" ? s.dashboard : "";
     let m = `${s.entities} ${s.entities === 1 ? "Gerät" : "Geräte"} in ${s.areas.length} ${s.areas.length === 1 ? "Raum" : "Räumen"} erkannt`;
     if (!s.api_key) m += " · ⚠ API-Schlüssel fehlt";
     $("meta").textContent = m;
-    loadDashboards();
   } catch (e) {
     $("meta").textContent = "Geräte konnten nicht gelesen werden: " + e.message;
   }
@@ -705,13 +699,13 @@ async function generate(wish, label, keepDialog, allowStates) {
   let i = 0; typing(steps[0]);
   const t = setInterval(() => { i = Math.min(i + 1, steps.length - 1); if ($("loadText")) $("loadText").textContent = steps[i]; }, 7000);
   try {
-    const r = await api("api/generate", { wish, refine: !rebuild, dialog, dashboard: dash, allow_states: !!allowStates });
+    const r = await api("api/generate", { wish, dialog, allow_states: !!allowStates });
     if (r.question) { showQuestion(wish, label, r.question); return; }
     dialog = []; mem.set("draft", null);
     if (r.objects) { showAutomations(wish, r.erklaerung, r.objects); return; }
     if (r.need_consent) { showStateConsent(wish, label, r.need_consent); return; }
+    if (r.need_dashboard_consent) { showDashboardConsent(wish, label, r.need_dashboard_consent); return; }
     if (r.confirm_actions) { showConfirmActions(wish, r.erklaerung, r.confirm_actions); return; }
-    if (r.done === undefined && r.answer === undefined) { rebuild = false; loadDashboards(); }   // Dashboard wurde gebaut oder geändert
     dismiss(); await loadHistory();      // das Ergebnis steht jetzt als Eintrag im Verlauf, mit „Rückgängig“
   } catch (e) {
     if (e.code === "consent_required") { dismiss(); pending = [wish, label]; $("consent").classList.remove("hidden"); }
@@ -952,6 +946,22 @@ function showConfirmActions(wish, erklaerung, actions) {
   };
 }
 
+// Ein vom Kunden selbst gestaltetes Dashboard: einmal fragen, bevor sein Aufbau übertragen wird
+function showDashboardConsent(wish, label, d) {
+  const name = d.label === "Startseite" ? "Deine Startseite" : `„${esc(d.label)}“`;
+  showResult(`<div class="ask-q"><p class="step">Einmalige Rückfrage</p><h2>${name} bearbeiten?</h2>
+    <p style="color:var(--text)">Du hast dieses Dashboard selbst gestaltet. Damit ich es ändern kann, wird sein Aufbau übertragen –
+      Karten, Namen und eingetragene Texte gehen an den Haglo-Server und unseren KI-Dienstleister Anthropic (USA). Messwerte und Verläufe nicht.</p>
+    <p>Ich ändere nur, was du verlangst. Vor jeder Änderung wird der bisherige Stand gesichert und lässt sich mit „Rückgängig“ zurückholen.</p>
+    <div class="actions"><button class="primary" id="dcYes">Ja, bearbeiten</button><button class="btn2" id="dcNo">Abbrechen</button></div></div>`);
+  $("dcNo").onclick = () => dismiss();
+  $("dcYes").onclick = async () => {
+    $("dcYes").disabled = true;
+    try { await api("api/dashboards/allow", { id: d.id }); generate(wish, label, true); }
+    catch (e) { showResult(`<p class="err">${esc(e.message)}</p>`); }
+  };
+}
+
 // Aktuelle Zustände verlassen das Gerät nur mit Zustimmung
 function showStateConsent(wish, label, items) {
   showResult(`<div class="ask-q"><p class="step">Deine Zustimmung ist nötig</p><h2>Aktuelle Werte übertragen?</h2>
@@ -1021,7 +1031,6 @@ $("versions").addEventListener("click", async (e) => {
   try {
     await api("api/restore", { id: b.dataset.restore }); loadHistory();
     $("versions").classList.add("hidden");
-    loadDashboards();
   } catch (err) { $("vHint").textContent = err.message; $("vHint").classList.add("err"); b.disabled = false; }
 });
 

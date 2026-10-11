@@ -36,7 +36,7 @@ SKIP_DOMAINS = {
     "zone", "persistent_notification", "assist_satellite", "ai_task",
 }
 
-ADDON_VERSION = "0.17.0"
+ADDON_VERSION = "0.18.0"
 MAX_VERSIONS = 30                      # so viele Dashboard-Versionen bleiben lokal gespeichert
 BAR_ENTITY = "input_text.haglo_assist"           # Eingabeleiste im Dashboard
 BAR_STATUS = "input_text.haglo_assist_status"    # Rückmeldung darunter
@@ -817,6 +817,32 @@ async def list_dashboards(ha: HAClient) -> list[dict]:
     return out
 
 
+REBUILD_WORDS = re.compile(r"komplett neu|von grund auf|ganz neu|neu aufbauen|neu bauen|von vorne|von vorn\b", re.I)
+
+
+async def pick_dashboard(ha: HAClient, wish: str) -> tuple[str, str]:
+    """Woran gearbeitet wird, ohne dass der Nutzer etwas auswählen muss: immer die Startseite –
+    außer er nennt im Wunsch ausdrücklich ein anderes Dashboard beim Namen
+    („im Dashboard Technik …“, „auf dem Haglo Dashboard …“). Gibt (url_path, Anzeigename) zurück."""
+    text = wish.lower()
+    try:
+        listed = list(await ha.call("lovelace/dashboards/list"))
+    except Exception:
+        listed = []
+    names = [(d.get("url_path") or "", d.get("title") or "") for d in listed
+             if d.get("url_path") not in ("lovelace", "", None) and d.get("mode", "storage") == "storage"]
+    if not any(p == DASHBOARD_PATH for p, _ in names):
+        names.append((DASHBOARD_PATH, DASHBOARD_TITLE))
+    for path, title in sorted(names, key=lambda n: -len(n[1])):
+        t = re.escape(title.lower().replace(" dashboard", "").strip())
+        if not t or t in ("übersicht", "startseite"):
+            continue
+        # nur wenn klar ein Dashboard gemeint ist – „zeig eine Karte“ meint nicht das Dashboard „Karte“
+        if re.search(rf"dashboard\s+[„\"']?{t}\b|\b{t}[\s-]+dashboard|\b(im|in|auf|ins|zum)\s+(dem\s+|der\s+|das\s+)?[„\"']?{t}[“\"']?\s+(dashboard|reiter|seite)", text):
+            return path, title
+    return "", "Startseite"
+
+
 def count_all_cards(node) -> int:
     """Zählt alle Karten, egal wie tief verschachtelt (auch in Stacks und Abschnitten)."""
     if isinstance(node, list):
@@ -981,7 +1007,7 @@ def add_history(kind: str, wish: str, text: str, **extra) -> str:
     {"type": "version", "id": <Datei>} oder {"type": "objects", "items": [{"id", "backup"}]}."""
     items = load_history()
     hid = f"{int(time.time() * 1000)}"
-    items.append({"id": hid, "ts": int(time.time()), "kind": kind, "wish": wish[:300], "text": text[:500],
+    items.append({"id": hid, "ts": int(time.time()), "kind": kind, "wish": wish[:300], "text": text[:6000],
                   **{k: v for k, v in extra.items() if v is not None}})
     save_history(items)
     return hid
@@ -1153,17 +1179,21 @@ def state_text(st: dict) -> str:
 
 # ---------------------------------------------------------------- Dashboard bauen
 async def build_dashboard(app, wish: str, refine: bool, dialog: list, can_ask: bool,
-                          dashboard: str = DASHBOARD_PATH, can_automate: bool = False, allow_states: bool = False) -> dict:
+                          dashboard: str | None = DASHBOARD_PATH, can_automate: bool = False, allow_states: bool = False) -> dict:
     """Holt das Dashboard vom Backend und speichert es. Gibt entweder eine Rückfrage
     ({"question": …}) oder das Ergebnis zurück. Wirft BackendError bei Backend-Fehlern.
 
     dashboard ist der url_path; "" ist die Standard-Übersicht. Fremde, vom Kunden selbst
     gebaute Dashboards werden nur gezielt geändert und nur nach ausdrücklicher Freigabe."""
     session = app["session"]
-    own = dashboard == DASHBOARD_PATH
     by_id: dict = {}
-    path = dashboard or None
     async with HAClient(session) as ha:
+        label = DASHBOARD_TITLE
+        if dashboard is None:       # keine Vorgabe: Startseite, außer der Wunsch nennt ein anderes Dashboard
+            dashboard, label = await pick_dashboard(ha, wish)
+            refine = not REBUILD_WORDS.search(wish)
+        own = dashboard == DASHBOARD_PATH
+        path = dashboard or None
         entities = [e for e in await collect_entities(ha) if e["id"] not in (BAR_ENTITY, BAR_STATUS)]
         if not entities:
             raise RuntimeError("Keine Geräte gefunden.")
@@ -1172,8 +1202,10 @@ async def build_dashboard(app, wish: str, refine: bool, dialog: list, can_ask: b
         # Neu bauen, wenn es nichts Eigenes gibt (automatisch erzeugt) oder der Nutzer es ausdrücklich will.
         # Sonst: gezielt ändern. Dashboards, die der Kunde selbst gebaut hat, werden dabei besonders geschont.
         rebuild = auto or not refine
-        if not own and not rebuild and dashboard not in allowed_dashboards():
-            raise RuntimeError("Bitte bestätige zuerst, dass Haglo Assist dieses Dashboard bearbeiten darf.")
+        if not own and not auto and dashboard not in allowed_dashboards():
+            # Der Kunde hat dieses Dashboard selbst gestaltet: erst fragen, bevor sein Aufbau übertragen
+            # oder es ersetzt wird. Die Oberfläche zeigt dazu eine Karte.
+            return {"need_dashboard_consent": {"id": dashboard, "label": label}}
         built_by_haglo = own or dashboard in load_prefs().get("built", [])
         extra = {}
         if can_automate:
@@ -1249,7 +1281,7 @@ async def build_dashboard(app, wish: str, refine: bool, dialog: list, can_ask: b
             write_prefs(prefs)
             ALLOWED_FILE.parent.mkdir(parents=True, exist_ok=True)
             ALLOWED_FILE.write_text(json.dumps(sorted(allowed_dashboards() | {dashboard})))
-    add_history("dashboard", wish, result.get("erklaerung", ""), url=f"/{dashboard or 'lovelace'}",
+    add_history("dashboard", wish, result.get("erklaerung", ""), url=f"/{dashboard or 'lovelace'}", target=label,
                 undo={"type": "version", "id": backup} if backup else None)
     return {"erklaerung": result.get("erklaerung", ""), "config": config, "removed": sorted(set(removed)),
             "backup": backup, "usage": result.get("usage", {}), "status": result["status"],
@@ -1340,7 +1372,7 @@ async def generate(request):
         return web.json_response({"ok": False, "error": "consent_required", "trial": trial}, status=403)
     if trial["expired"]:
         return web.json_response({"ok": False, "error": "trial_expired", "trial": trial}, status=402)
-    dashboard = body.get("dashboard") if isinstance(body.get("dashboard"), str) else DASHBOARD_PATH
+    dashboard = body.get("dashboard") if isinstance(body.get("dashboard"), str) else None
     # Merken, dass gerade gebaut wird: Wer die Seite verlässt und zurückkommt, sieht das weiterhin.
     request.app["job"] = {"wish": wish, "since": int(time.time())}
     try:
@@ -1352,7 +1384,7 @@ async def generate(request):
         return web.json_response({"ok": False, "error": str(e)}, status=500)
     finally:
         request.app["job"] = None
-    for key in ("objects", "confirm_actions", "need_consent", "done", "answer"):
+    for key in ("objects", "confirm_actions", "need_consent", "need_dashboard_consent", "done", "answer"):
         if key in result:
             return web.json_response({"ok": True, key: result[key], "erklaerung": result.get("erklaerung", ""),
                                       "trial": trial_info(result["status"])})
