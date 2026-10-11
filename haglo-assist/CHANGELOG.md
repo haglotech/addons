@@ -1,5 +1,9 @@
 # Änderungen
 
+## 0.12.3
+
+- Neues Symbol in der Seitenleiste
+
 ## 0.12.1
 
 - Der Hinweis zum inklusiven Plan lässt sich mit × dauerhaft ausblenden
