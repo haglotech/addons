@@ -1,5 +1,9 @@
 # Änderungen
 
+## 0.12.6
+
+- Beim ersten Start erscheint Haglo Assist von selbst in der Seitenleiste, automatische Updates sind an
+
 ## 0.12.5
 
 - „Kostenlos starten“ oben rechts ist jetzt ein Knopf und öffnet direkt die Zustimmung

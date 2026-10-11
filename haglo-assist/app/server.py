@@ -36,7 +36,7 @@ SKIP_DOMAINS = {
     "zone", "persistent_notification", "assist_satellite", "ai_task",
 }
 
-ADDON_VERSION = "0.12.5"
+ADDON_VERSION = "0.12.6"
 MAX_VERSIONS = 30                      # so viele Dashboard-Versionen bleiben lokal gespeichert
 BAR_ENTITY = "input_text.haglo_assist"           # Eingabeleiste im Dashboard
 BAR_STATUS = "input_text.haglo_assist_status"    # Rückmeldung darunter
@@ -141,6 +141,27 @@ async def supervisor_get(session, path: str) -> dict:
         if r.status != 200:
             raise RuntimeError(f"HTTP {r.status}")
         return (await r.json()).get("data") or {}
+
+
+async def first_start_setup(session) -> str:
+    """Beim allerersten Start: in der Seitenleiste anzeigen und automatische Updates einschalten.
+    So ist Haglo Assist auf vorinstallierten Geräten ohne Zutun des Kunden sichtbar. Danach
+    bleibt die Einstellung dem Nutzer überlassen."""
+    prefs = load_prefs()
+    if prefs.get("first_start_done"):
+        return "schon erledigt"
+    try:
+        async with session.post("http://supervisor/addons/self/options", headers={"Authorization": f"Bearer {TOKEN}"},
+                                json={"ingress_panel": True, "auto_update": True},
+                                timeout=aiohttp.ClientTimeout(total=20)) as r:
+            if r.status != 200:
+                return f"HTTP {r.status}"
+    except Exception as e:
+        return f"{type(e).__name__}"
+    prefs["first_start_done"] = True
+    PREFS_FILE.parent.mkdir(parents=True, exist_ok=True)
+    PREFS_FILE.write_text(json.dumps(prefs))
+    return "ok"
 
 
 async def read_hardware(session) -> dict:
@@ -260,6 +281,13 @@ async def selftest(app) -> None:
         files[-1].unlink()
         return "ok"
 
+    async def panel():
+        prefs = load_prefs(); prefs.pop("first_start_done", None); PREFS_FILE.write_text(json.dumps(prefs))
+        res = await first_start_setup(app["session"])
+        info = await supervisor_get(app["session"], "/addons/self/info")
+        return f"{res} panel={info.get('ingress_panel')} auto_update={info.get('auto_update')}"
+
+    await step("seitenleiste", panel())
     await step("hw", hw())
     await step("dashboards", dashes())
     await step("version", version_roundtrip())
@@ -946,6 +974,7 @@ async def on_startup(app):
     app["session"] = aiohttp.ClientSession()
     app["bar_lock"] = asyncio.Lock()
     app["bar_enabled"] = bool(load_options().get("dashboard_bar"))
+    print("Erster Start:", await first_start_setup(app["session"]))
     try:
         await ensure_registered(app["session"])
         await identify(app, (await backend(app["session"], "GET", "/v1/status"))["status"])
