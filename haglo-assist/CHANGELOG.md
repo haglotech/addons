@@ -1,5 +1,10 @@
 # Änderungen
 
+## 0.16.1
+
+- Beim Öffnen ist die Oberfläche immer leer und aufgeräumt. Der Gesprächsfaden erscheint mit deiner
+  ersten Nachricht, Früheres steht eingeklappt darüber oder unter „Verlauf“
+
 ## 0.16.0
 
 - Neue Oberfläche als ein Gesprächsfaden: deine Wünsche und die Antworten untereinander, die Eingabe

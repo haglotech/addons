@@ -74,6 +74,7 @@
   .typing i:nth-child(2) { animation-delay: .2s; } .typing i:nth-child(3) { animation-delay: .4s; margin-right: 6px; }
   @keyframes blink { 0%, 80%, 100% { opacity: .25; } 40% { opacity: 1; } }
   details.fold { text-align: center; }
+  details.fold.hidden { display: none; }
   details.fold summary { cursor: pointer; color: var(--muted); font-size: 13px; padding: 4px 0 8px; list-style: none; }
   details.fold summary::-webkit-details-marker { display: none; }
   details.fold[open] summary { margin-bottom: 6px; }
@@ -284,7 +285,7 @@
       <div class="meta" id="meta"></div></div>
   </div>
 
-  <footer><a id="terms" href="https://haglotech.com/policies/terms-of-service" target="_blank" rel="noopener">AGB</a> · <a id="privacy" href="https://haglotech.com/policies/privacy-policy" target="_blank" rel="noopener">Datenschutz</a> · <a id="freshLink" role="button" tabindex="0">Neu beginnen</a> · <a id="autosLink" role="button" tabindex="0" class="hidden">Automationen</a><span id="autosSep" class="hidden"> · </span><a id="versionsLink" role="button" tabindex="0">Versionen</a> · <a id="planLink" role="button" tabindex="0">Plan &amp; Abo</a> · Haglo</footer>
+  <footer><a id="terms" href="https://haglotech.com/policies/terms-of-service" target="_blank" rel="noopener">AGB</a> · <a id="privacy" href="https://haglotech.com/policies/privacy-policy" target="_blank" rel="noopener">Datenschutz</a> · <a id="histLink" role="button" tabindex="0">Verlauf</a> · <a id="freshLink" role="button" tabindex="0">Verlauf leeren</a> · <a id="autosLink" role="button" tabindex="0" class="hidden">Automationen</a><span id="autosSep" class="hidden"> · </span><a id="versionsLink" role="button" tabindex="0">Versionen</a> · <a id="planLink" role="button" tabindex="0">Plan &amp; Abo</a> · Haglo</footer>
 
   <div class="sheet-bg hidden" id="consent">
     <div class="sheet">
@@ -498,13 +499,17 @@ $("allowYes").addEventListener("click", async () => {
 // ist, kommt aus dem lokalen Verlauf der App und lässt sich dort einzeln rückgängig machen. `cur` ist
 // die Antwort, an der gerade gearbeitet wird (Tippen, Rückfrage, Vorschlag).
 let cur = null;
-const FOLD_AFTER = 3 * 3600;   // Älteres klappt sich ein, damit der Faden frisch beginnt
+// Beim Öffnen ist die Oberfläche immer leer und aufgeräumt. Der Faden erscheint erst mit der ersten
+// Nachricht; was vor diesem Besuch war, steht dann eingeklappt darüber.
+let started = false;
+const sessionStart = Date.now() / 1000;
 const KIND = { dashboard: "Dashboard geändert", automation: "Angelegt", control: "Erledigt", restore: "Wiederhergestellt", automation_deleted: "Gelöscht" };
 
 function scrollDown() { const m = $("main"); requestAnimationFrame(() => { m.scrollTop = m.scrollHeight; }); }
 function hasThread() { document.body.classList.toggle("has-thread", $("result").children.length > 0); }
 
 function addUser(text) {
+  if (!started) { started = true; $("result").innerHTML = '<details class="fold hidden" id="foldOld"></details>'; loadOld(); }
   freeze();
   const d = document.createElement("div");
   d.className = "msg user"; d.innerHTML = `<div class="bub">${esc(text)}</div>`;
@@ -540,16 +545,28 @@ function historyMsg(h) {
 }
 
 // Baut den Faden aus dem Verlauf neu auf. Was gerade offen ist (cur), bleibt am Ende stehen.
-async function loadHistory() {
+async function loadHistory(open) {
+  if (!started) { hasThread(); return; }        // frisch geöffnet: nichts anzeigen
   let items = [];
   try { items = (await api("api/history")).history; } catch (e) { return; }
-  const now = Date.now() / 1000;
-  const old = items.filter((h) => now - h.ts > FOLD_AFTER), fresh = items.filter((h) => now - h.ts <= FOLD_AFTER);
+  const old = items.filter((h) => h.ts < sessionStart - 2), fresh = items.filter((h) => h.ts >= sessionStart - 2);
   const live = cur; if (live) live.remove();
-  $("result").innerHTML = (old.length ? `<details class="fold"><summary>Frühere Änderungen anzeigen (${old.length})</summary>
+  const wasOpen = open || ($("foldOld") && $("foldOld").open);
+  $("result").innerHTML = (old.length ? `<details class="fold" id="foldOld"${wasOpen ? " open" : ""}><summary>Frühere Änderungen anzeigen (${old.length})</summary>
       <div class="thread">${old.map(historyMsg).join("")}</div></details>` : "") + fresh.map(historyMsg).join("");
   if (live) $("result").append(live);
   hasThread(); scrollDown();
+}
+
+// Füllt nur den eingeklappten Teil, ohne die gerade entstehenden Nachrichten anzufassen
+async function loadOld() {
+  try {
+    const old = (await api("api/history")).history.filter((h) => h.ts < sessionStart - 2);
+    const f = $("foldOld");
+    if (!f || !old.length) return;
+    f.innerHTML = `<summary>Frühere Änderungen anzeigen (${old.length})</summary><div class="thread">${old.map(historyMsg).join("")}</div>`;
+    f.classList.remove("hidden");
+  } catch (e) {}
 }
 
 $("result").addEventListener("click", async (e) => {
@@ -559,9 +576,10 @@ $("result").addEventListener("click", async (e) => {
   try { await api("api/history/undo", { id: b.dataset.undo }); await loadHistory(); }
   catch (err) { b.disabled = false; b.textContent = "Rückgängig"; alert(err.message); }
 });
+$("histLink").addEventListener("click", () => { started = true; loadHistory(true); });
 $("freshLink").addEventListener("click", async () => {
-  if (!confirm("Den Gesprächsverlauf leeren und neu beginnen? Deine Dashboards, Automationen und Versionen bleiben erhalten.")) return;
-  try { await api("api/history/clear", {}); cur = null; await loadHistory(); } catch (e) { alert(e.message); }
+  if (!confirm("Den Gesprächsverlauf leeren? Deine Dashboards, Automationen und Versionen bleiben erhalten.")) return;
+  try { await api("api/history/clear", {}); cur = null; started = false; $("result").innerHTML = ""; hasThread(); } catch (e) { alert(e.message); }
 });
 
 // Läuft noch eine Anfrage (z. B. Seite währenddessen verlassen), bis zum Ergebnis warten
