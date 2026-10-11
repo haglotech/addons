@@ -36,7 +36,7 @@ SKIP_DOMAINS = {
     "zone", "persistent_notification", "assist_satellite", "ai_task",
 }
 
-ADDON_VERSION = "0.11.1"
+ADDON_VERSION = "0.11.2"
 MAX_VERSIONS = 30                      # so viele Dashboard-Versionen bleiben lokal gespeichert
 BAR_ENTITY = "input_text.haglo_assist"           # Eingabeleiste im Dashboard
 BAR_STATUS = "input_text.haglo_assist_status"    # Rückmeldung darunter
@@ -290,6 +290,7 @@ def trial_info(status: dict | None) -> dict:
         "haglo_device": status.get("haglo_device", False),
         "level": status.get("level"),
         "included_plan": status.get("included_plan"),
+        "included_until": status.get("included_until"),
         "window_hours": status.get("window_hours"),
         "window": status.get("window"),
         "week": status.get("week"),
