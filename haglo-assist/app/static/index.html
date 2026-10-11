@@ -64,6 +64,10 @@
   .chip:hover { border-color: var(--brand); color: var(--brand); background: var(--brand-soft); }
   .chip:disabled { opacity: .5; cursor: default; }
   .meta { text-align: center; color: var(--muted); font-size: 13px; margin-top: 16px; min-height: 20px; }
+  .devbar { position: fixed; left: 12px; bottom: 12px; z-index: 5; display: flex; align-items: center; gap: 8px; font-size: 12px;
+            background: var(--surface); border: 1px dashed var(--line); border-radius: 12px; padding: 7px 10px; color: var(--muted); }
+  .devbar select, .devbar button { font: inherit; color: var(--text); background: var(--bg); border: 1px solid var(--line);
+            border-radius: 8px; padding: 4px 8px; cursor: pointer; }
   .owner { margin: 14px auto 0; max-width: 520px; font-size: 13px; color: var(--text); position: relative;
            background: var(--brand-soft); border-radius: 12px; padding: 9px 38px 9px 14px; text-align: center; }
   .owner b { color: var(--brand); }
@@ -216,6 +220,13 @@
     <div class="result hidden" id="result"></div>
   </main>
 
+  <div class="devbar hidden" id="devbar"><span>Entwickler</span>
+    <select id="devPlan" aria-label="Plan zum Testen">
+      <option value="">Automatisch</option><option value="free">Free (fremde Hardware)</option>
+      <option value="lite">Lite inklusive (Haglo-Gerät)</option><option value="pro">Pro</option><option value="max">Max</option>
+    </select>
+    <button id="devReset">Limits zurücksetzen</button></div>
+
   <footer><a id="terms" href="https://haglotech.com/policies/terms-of-service" target="_blank" rel="noopener">AGB</a> · <a id="privacy" href="https://haglotech.com/policies/privacy-policy" target="_blank" rel="noopener">Datenschutz</a> · <a id="versionsLink" role="button" tabindex="0">Versionen</a> · <a id="planLink" role="button" tabindex="0">Plan &amp; Abo</a> · Haglo</footer>
 
   <div class="sheet-bg hidden" id="consent">
@@ -313,6 +324,9 @@ function setTrial(t) {
   const days = `${t.days_left} ${t.days_left === 1 ? "Tag" : "Tage"}`;
   const pct = t.window ? Math.max(t.window.used_pct, t.week.used_pct >= 100 ? 100 : 0) : 0;
   const used = `${pct} % genutzt`;
+  // Entwickler-Hubs: Plan selbst wählen, um die Kundensicht zu testen
+  $("devbar").classList.toggle("hidden", !t.dev);
+  if (t.dev) $("devPlan").value = t.plan_override || "";
   // Wer bei Haglo gekauft hat, sieht, dass Lite deshalb inklusive ist – und bis wann mindestens
   const gift = t.accepted && t.included_plan && t.level === t.included_plan && !(t.subscription && t.subscription.active);
   const until = t.included_until ? new Date(t.included_until * 1000).toLocaleDateString("de-DE") : "";
@@ -579,6 +593,13 @@ async function toStripe(path, body) {
     planHint(e.message, true);
   }
 }
+
+async function devSet(body) {
+  try { await api("api/dev", body); if (!trial.expired) { $("result").classList.add("hidden"); setInputs(true); } renderPlans(); }
+  catch (e) { alert(e.message); }
+}
+$("devPlan").addEventListener("change", () => devSet({ plan: $("devPlan").value || null }));
+$("devReset").addEventListener("click", () => devSet({ plan: $("devPlan").value || null, reset_limits: true }));
 
 $("owner").addEventListener("click", async (e) => {
   if (e.target.closest("#ownerClose")) {       // dauerhaft ausblenden, gespeichert auf dem Gerät

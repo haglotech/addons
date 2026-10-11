@@ -36,7 +36,7 @@ SKIP_DOMAINS = {
     "zone", "persistent_notification", "assist_satellite", "ai_task",
 }
 
-ADDON_VERSION = "0.12.1"
+ADDON_VERSION = "0.12.2"
 MAX_VERSIONS = 30                      # so viele Dashboard-Versionen bleiben lokal gespeichert
 BAR_ENTITY = "input_text.haglo_assist"           # Eingabeleiste im Dashboard
 BAR_STATUS = "input_text.haglo_assist_status"    # Rückmeldung darunter
@@ -291,6 +291,8 @@ def trial_info(status: dict | None) -> dict:
         "level": status.get("level"),
         "included_plan": status.get("included_plan"),
         "included_until": status.get("included_until"),
+        "dev": status.get("dev", False),
+        "plan_override": status.get("plan_override"),
         "window_hours": status.get("window_hours"),
         "window": status.get("window"),
         "week": status.get("week"),
@@ -780,6 +782,20 @@ async def generate(request):
         "usage": result["usage"],
         "trial": trial_info(result["status"]),
     })
+
+
+@routes.post("/api/dev")
+async def dev_settings(request):
+    """Nur für Entwickler-Hubs (legt das Backend fest): Plan umschalten, Limits zurücksetzen."""
+    try:
+        body = await request.json()
+    except Exception:
+        body = {}
+    try:
+        data = await backend(request.app["session"], "POST", "/v1/dev/settings", body)
+    except BackendError as e:
+        return backend_failure(e)
+    return web.json_response({"ok": True, "trial": trial_info(data["status"])})
 
 
 @routes.post("/api/prefs")
