@@ -36,7 +36,7 @@ SKIP_DOMAINS = {
     "zone", "persistent_notification", "assist_satellite", "ai_task",
 }
 
-ADDON_VERSION = "0.12.6"
+ADDON_VERSION = "0.13.0"
 MAX_VERSIONS = 30                      # so viele Dashboard-Versionen bleiben lokal gespeichert
 BAR_ENTITY = "input_text.haglo_assist"           # Eingabeleiste im Dashboard
 BAR_STATUS = "input_text.haglo_assist_status"    # Rückmeldung darunter
@@ -53,9 +53,15 @@ FALLBACK_URLS = {
 
 def load_options() -> dict:
     try:
-        return json.loads(OPTIONS_FILE.read_text())
+        opts = json.loads(OPTIONS_FILE.read_text())
     except Exception:
-        return {"backend_url": os.environ.get("HAGLO_BACKEND_URL", DEFAULT_BACKEND_URL)}
+        opts = {"backend_url": os.environ.get("HAGLO_BACKEND_URL", DEFAULT_BACKEND_URL)}
+    try:
+        # Nur in der Entwickler-Variante vorhanden: schaltet Funktionen zum Ausprobieren ein
+        opts.update(json.loads(Path(__file__).with_name("dev_features.json").read_text()))
+    except Exception:
+        pass
+    return opts
 
 
 def backend_url() -> str:
@@ -287,6 +293,49 @@ async def selftest(app) -> None:
         info = await supervisor_get(app["session"], "/addons/self/info")
         return f"{res} panel={info.get('ingress_panel')} auto_update={info.get('auto_update')}"
 
+    async def automation_api():
+        base, head = "http://supervisor/core/api", {"Authorization": f"Bearer {TOKEN}"}
+        aid = "haglo_selbsttest"
+        cfg = {"alias": "Haglo Selbsttest (wird sofort gelöscht)", "description": "Test", "mode": "single",
+               "triggers": [{"trigger": "time", "at": "03:33:00"}],
+               "conditions": [{"condition": "template", "value_template": "{{ false }}"}],
+               "actions": [{"action": "persistent_notification.create", "data": {"message": "Test"}}]}
+        out = []
+        async with app["session"].post(f"{base}/config/automation/config/{aid}", headers=head, json=cfg) as r:
+            out.append(f"anlegen={r.status} {(await r.text())[:60]}")
+        async with app["session"].get(f"{base}/config/automation/config/{aid}", headers=head) as r:
+            got = await r.json() if r.status == 200 else {}
+            out.append(f"lesen={r.status} keys={sorted(got)[:7]}")
+        await asyncio.sleep(2)
+        async with app["session"].get(f"{base}/states", headers=head) as r:
+            states = await r.json()
+            mine = [x for x in states if x["entity_id"].startswith("automation.") and x.get("attributes", {}).get("id") == aid]
+            out.append(f"entity={mine[0]['entity_id'] if mine else None} automationen_gesamt={sum(1 for x in states if x['entity_id'].startswith('automation.'))}")
+        async with app["session"].delete(f"{base}/config/automation/config/{aid}", headers=head) as r:
+            out.append(f"loeschen={r.status}")
+        return " ".join(out)
+
+    async def automation_flow():
+        """Ganzer Weg: KI schlägt vor -> anlegen -> auflisten -> löschen."""
+        r = await build_dashboard(app, job["auto"], refine=False, dialog=[], can_ask=False, can_automate=True)
+        if "automations" not in r:
+            return f"kein Vorschlag (stattdessen {sorted(r)[:3]})"
+        base = "http://127.0.0.1:8099"
+        async with app["session"].post(f"{base}/api/automations/apply", json={"automations": r["automations"], "wish": "Selbsttest"}) as x:
+            made = await x.json()
+        if not made.get("ok"):
+            return f"vorschlag ok, anlegen FEHLER: {str(made.get('error'))[:90]}"
+        async with app["session"].get(f"{base}/api/automations") as x:
+            listed = (await x.json()).get("automations", [])
+        for c in made["created"]:
+            async with app["session"].post(f"{base}/api/automations/delete", json={"id": c["id"]}) as x:
+                gone = (await x.json()).get("ok")
+        return f"vorschlag ok ({len(r['automations'])}), angelegt={len(made['created'])}, in liste={len(listed)}, an={listed[0]['on'] if listed else None}, geloescht={gone}, verlauf={len(load_history())}"
+
+    if job.get("auto"):
+        await step("automation-ablauf", automation_flow())
+    else:
+        await step("automation", automation_api())
     await step("seitenleiste", panel())
     await step("hw", hw())
     await step("dashboards", dashes())
@@ -658,9 +707,90 @@ async def bar_listener(app):
             await asyncio.sleep(20)
 
 
+# ---------------------------------------------------------------- Verlauf (nur lokal)
+HISTORY_FILE = Path("/data/history.json")
+MAX_HISTORY = 30
+
+
+def load_history() -> list:
+    try:
+        return json.loads(HISTORY_FILE.read_text())
+    except Exception:
+        return []
+
+
+def add_history(kind: str, wish: str, text: str, **extra) -> None:
+    """Merkt sich, was gemacht wurde – damit beim Zurückkommen nichts weg ist. Bleibt auf dem Gerät."""
+    items = load_history()
+    items.append({"ts": int(time.time()), "kind": kind, "wish": wish[:300], "text": text[:500], **extra})
+    HISTORY_FILE.parent.mkdir(parents=True, exist_ok=True)
+    HISTORY_FILE.write_text(json.dumps(items[-MAX_HISTORY:], ensure_ascii=False))
+
+
+# ---------------------------------------------------------------- Automationen
+CORE_API = "http://supervisor/core/api"
+AUTOMATIONS_FILE = Path("/data/automations.json")   # von Haglo Assist angelegte Automationen: {id: {alias, created}}
+
+
+def automations_enabled() -> bool:
+    return bool(load_options().get("automations"))
+
+
+def load_automations() -> dict:
+    try:
+        return json.loads(AUTOMATIONS_FILE.read_text())
+    except Exception:
+        return {}
+
+
+def save_automations(reg: dict) -> None:
+    AUTOMATIONS_FILE.parent.mkdir(parents=True, exist_ok=True)
+    AUTOMATIONS_FILE.write_text(json.dumps(reg, ensure_ascii=False))
+
+
+async def core(session, method: str, path: str, body=None):
+    """Aufruf der Home-Assistant-API. Gibt (Status, Antwort) zurück."""
+    async with session.request(method, CORE_API + path, json=body, headers={"Authorization": f"Bearer {TOKEN}"},
+                               timeout=aiohttp.ClientTimeout(total=30)) as r:
+        try:
+            data = await r.json()
+        except Exception:
+            data = {}
+        return r.status, data
+
+
+async def own_automations(session) -> list[dict]:
+    """Aktuelle Konfiguration der von Haglo Assist angelegten Automationen (für Änderungen)."""
+    reg, out, changed = load_automations(), [], False
+    for aid in list(reg):
+        status, cfg = await core(session, "GET", f"/config/automation/config/{aid}")
+        if status == 200 and isinstance(cfg, dict):
+            out.append({k: cfg[k] for k in ("id", "alias", "description", "mode", "triggers", "conditions", "actions") if k in cfg})
+        elif status == 404:
+            del reg[aid]            # in Home Assistant gelöscht
+            changed = True
+    if changed:
+        save_automations(reg)
+    return out
+
+
+def entity_refs(node, found: set) -> set:
+    """Alle entity_ids, die in einer Automation vorkommen."""
+    if isinstance(node, list):
+        for n in node:
+            entity_refs(n, found)
+    elif isinstance(node, dict):
+        for key, value in node.items():
+            if key == "entity_id":
+                found.update([value] if isinstance(value, str) else [v for v in value if isinstance(v, str)] if isinstance(value, list) else [])
+            else:
+                entity_refs(value, found)
+    return found
+
+
 # ---------------------------------------------------------------- Dashboard bauen
 async def build_dashboard(app, wish: str, refine: bool, dialog: list, can_ask: bool,
-                          dashboard: str = DASHBOARD_PATH) -> dict:
+                          dashboard: str = DASHBOARD_PATH, can_automate: bool = False) -> dict:
     """Holt das Dashboard vom Backend und speichert es. Gibt entweder eine Rückfrage
     ({"question": …}) oder das Ergebnis zurück. Wirft BackendError bei Backend-Fehlern.
 
@@ -685,7 +815,12 @@ async def build_dashboard(app, wish: str, refine: bool, dialog: list, can_ask: b
             "wish": wish, "entities": entities,
             "previous": (strip_bar(before) if own else before) if (refine or not own) else None,
             "refine": refine or not own, "foreign": not own, "dialog": dialog, "can_ask": can_ask,
+            "can_automate": can_automate, "automations": await own_automations(session) if can_automate else [],
         }, timeout=300)
+        if result.get("type") == "automation":
+            # Vorschlag anzeigen; angelegt wird erst, wenn der Nutzer bestätigt.
+            return {"automations": result["automationen"], "erklaerung": result.get("erklaerung", ""),
+                    "status": result["status"]}
         if result.get("type") == "question":
             # Die KI braucht noch eine Angabe: Rückfrage anzeigen, nichts speichern.
             return {"question": {"frage": result["frage"], "optionen": result["optionen"],
@@ -712,6 +847,7 @@ async def build_dashboard(app, wish: str, refine: bool, dialog: list, can_ask: b
 
         backup = write_backup(before, f"vor: {wish}", dashboard)
         await ha.call("lovelace/config/save", url_path=path, config=config)
+    add_history("dashboard", wish, result.get("erklaerung", ""), url=f"/{dashboard or 'lovelace'}")
     return {"erklaerung": result.get("erklaerung", ""), "config": config, "removed": sorted(set(removed)),
             "backup": backup, "usage": result.get("usage", {}), "status": result["status"],
             "dashboard_url": f"/{dashboard or 'lovelace'}"}
@@ -748,6 +884,8 @@ async def status(request):
         "api_key": True,  # Der Schlüssel liegt im Backend; Feld bleibt für die Oberfläche.
         "backups": len(version_files()),
         "prefs": load_prefs(),
+        "features": {"automations": automations_enabled()},
+        "busy": request.app.get("job"),
         "trial": trial,
     })
 
@@ -789,12 +927,20 @@ async def generate(request):
     if trial["expired"]:
         return web.json_response({"ok": False, "error": "trial_expired", "trial": trial}, status=402)
     dashboard = body.get("dashboard") if isinstance(body.get("dashboard"), str) else DASHBOARD_PATH
+    # Merken, dass gerade gebaut wird: Wer die Seite verlässt und zurückkommt, sieht das weiterhin.
+    request.app["job"] = {"wish": wish, "since": int(time.time())}
     try:
-        result = await build_dashboard(request.app, wish, refine, dialog, can_ask=True, dashboard=dashboard)
+        result = await build_dashboard(request.app, wish, refine, dialog, can_ask=True, dashboard=dashboard,
+                                       can_automate=automations_enabled() and dashboard == DASHBOARD_PATH)
     except BackendError as e:
         return backend_failure(e)
     except Exception as e:
         return web.json_response({"ok": False, "error": str(e)}, status=500)
+    finally:
+        request.app["job"] = None
+    if "automations" in result:
+        return web.json_response({"ok": True, "automations": result["automations"], "erklaerung": result["erklaerung"],
+                                  "trial": trial_info(result["status"])})
     if "question" in result:
         return web.json_response({"ok": True, "question": result["question"], "trial": trial_info(result["status"])})
 
@@ -810,6 +956,90 @@ async def generate(request):
         "usage": result["usage"],
         "trial": trial_info(result["status"]),
     })
+
+
+@routes.get("/api/history")
+async def history(_):
+    """Was zuletzt gemacht wurde (lokal gespeichert), neueste zuerst."""
+    return web.json_response({"ok": True, "history": list(reversed(load_history()))})
+
+
+@routes.get("/api/automations")
+async def list_automations(request):
+    """Von Haglo Assist angelegte Automationen."""
+    session = request.app["session"]
+    try:
+        configs = {a["id"]: a for a in await own_automations(session)}
+        _, states = await core(session, "GET", "/states")
+    except Exception as e:
+        return web.json_response({"ok": False, "error": str(e)}, status=500)
+    state = {s["attributes"].get("id"): s for s in states if isinstance(s, dict) and s.get("entity_id", "").startswith("automation.")}
+    reg = load_automations()
+    out = [{"id": aid, "alias": configs[aid].get("alias", ""), "wann": reg[aid].get("wann", ""), "was": reg[aid].get("was", ""),
+            "on": (state.get(aid) or {}).get("state") == "on", "created": reg[aid].get("created")}
+           for aid in reg if aid in configs]
+    return web.json_response({"ok": True, "automations": sorted(out, key=lambda a: -(a["created"] or 0))})
+
+
+@routes.post("/api/automations/apply")
+async def apply_automations(request):
+    """Legt vom Nutzer bestätigte Automationen in Home Assistant an (oder ersetzt eigene)."""
+    if not automations_enabled():
+        return web.json_response({"ok": False, "error": "Automationen sind in der Konfiguration der App ausgeschaltet."}, status=403)
+    session = request.app["session"]
+    try:
+        body = await request.json()
+    except Exception:
+        body = {}
+    items = [a for a in body.get("automations") or [] if isinstance(a, dict)][:5]
+    if not items:
+        return web.json_response({"ok": False, "error": "Keine Automation übergeben."}, status=400)
+    try:
+        _, states = await core(session, "GET", "/states")
+        valid = {s["entity_id"] for s in states if isinstance(s, dict) and "entity_id" in s}
+    except Exception as e:
+        return web.json_response({"ok": False, "error": str(e)}, status=500)
+    reg, done = load_automations(), []
+    for i, a in enumerate(items):
+        unknown = sorted(entity_refs([a.get("triggers"), a.get("conditions"), a.get("actions")], set()) - valid)
+        if unknown:
+            return web.json_response({"ok": False, "error": f"Diese Geräte gibt es nicht: {', '.join(unknown[:3])}. Nichts wurde angelegt."}, status=400)
+    for i, a in enumerate(items):
+        aid = a["id"] if a.get("id") in reg else f"haglo_{int(time.time())}_{i}"
+        cfg = {"alias": str(a.get("alias") or "Haglo Automation")[:120],
+               "description": (str(a.get("description") or "") + " (angelegt mit Haglo Assist)").strip()[:300],
+               "mode": a.get("mode") or "single", "triggers": a.get("triggers") or [],
+               "conditions": a.get("conditions") or [], "actions": a.get("actions") or []}
+        status, data = await core(session, "POST", f"/config/automation/config/{aid}", cfg)
+        if status != 200:
+            msg = (data.get("message") if isinstance(data, dict) else "") or f"Fehler {status}"
+            return web.json_response({"ok": False, "error": f"Home Assistant hat „{cfg['alias']}“ abgelehnt: {msg[:200]}",
+                                      "created": done}, status=400)
+        reg[aid] = {"alias": cfg["alias"], "wann": str(a.get("wann") or "")[:300], "was": str(a.get("was") or "")[:300],
+                    "created": reg.get(aid, {}).get("created") or int(time.time())}
+        save_automations(reg)
+        done.append({"id": aid, "alias": cfg["alias"]})
+    add_history("automation", str(body.get("wish") or ""), ", ".join(d["alias"] for d in done), ids=[d["id"] for d in done])
+    return web.json_response({"ok": True, "created": done})
+
+
+@routes.post("/api/automations/delete")
+async def delete_automation(request):
+    """Löscht eine von Haglo Assist angelegte Automation. Fremde Automationen werden nie angefasst."""
+    try:
+        aid = str((await request.json()).get("id", ""))
+    except Exception:
+        aid = ""
+    reg = load_automations()
+    if aid not in reg:
+        return web.json_response({"ok": False, "error": "Diese Automation wurde nicht von Haglo Assist angelegt."}, status=404)
+    status, _ = await core(request.app["session"], "DELETE", f"/config/automation/config/{aid}")
+    if status not in (200, 404):
+        return web.json_response({"ok": False, "error": f"Löschen fehlgeschlagen ({status})."}, status=500)
+    alias = reg.pop(aid).get("alias", "")
+    save_automations(reg)
+    add_history("automation_deleted", "", alias)
+    return web.json_response({"ok": True})
 
 
 @routes.post("/api/dev")
@@ -899,6 +1129,7 @@ async def restore_version(app, path: Path, keep: bool) -> None:
         if dashboard == DASHBOARD_PATH:
             await ensure_dashboard(ha)
         await ha.call("lovelace/config/save", url_path=dashboard or None, config=version["config"])
+    add_history("restore", "", "Frühere Version wiederhergestellt", url=f"/{dashboard or 'lovelace'}")
 
 
 @routes.post("/api/restore")

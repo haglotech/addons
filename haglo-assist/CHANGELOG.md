@@ -1,5 +1,14 @@
 # Änderungen
 
+## 0.13.0
+
+- Verlauf: Unter „Zuletzt“ steht, was Haglo Assist für dich gemacht hat. Getipptes und offene
+  Rückfragen bleiben erhalten, wenn du die Seite verlässt und zurückkommst. Der Verlauf liegt nur
+  auf deinem Gerät.
+- Läuft noch eine Anfrage, während du weg warst, zeigt die App das an und wartet auf das Ergebnis.
+- Zum Ausprobieren: Automationen in normaler Sprache anlegen (Option „automations“ in der
+  Konfiguration). Jede Automation wird erst als Vorschlag gezeigt und nach deiner Bestätigung angelegt.
+
 ## 0.12.6
 
 - Beim ersten Start erscheint Haglo Assist von selbst in der Seitenleiste, automatische Updates sind an

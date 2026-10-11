@@ -68,6 +68,18 @@
   .chip:hover { border-color: var(--brand); color: var(--brand); background: var(--brand-soft); }
   .chip:disabled { opacity: .5; cursor: default; }
   .meta { text-align: center; color: var(--muted); font-size: 13px; margin-top: 16px; min-height: 20px; }
+  .auto { text-align: left; border: 1px solid var(--line); background: var(--bg); border-radius: 12px; padding: 12px 14px; margin-bottom: 10px; }
+  .auto b { color: var(--heading); font-size: 15px; }
+  .auto dl { margin: 6px 0 0; display: grid; grid-template-columns: auto 1fr; gap: 3px 10px; font-size: 14px; color: var(--text); }
+  .auto dt { color: var(--muted); }
+  .auto dd { margin: 0; }
+  .hist { margin-top: 26px; text-align: left; }
+  .hist h4 { margin: 0 0 8px; font-size: 13px; font-weight: 600; color: var(--muted); text-transform: uppercase; letter-spacing: .06em; }
+  .hrow { display: flex; gap: 12px; align-items: baseline; padding: 9px 0; border-top: 1px solid var(--line); font-size: 14px; }
+  .hrow .t { color: var(--muted); font-size: 12px; white-space: nowrap; flex: none; width: 92px; }
+  .hrow .w { flex: 1; min-width: 0; }
+  .hrow .w small { display: block; color: var(--muted); font-size: 13px; }
+  .hrow a { color: var(--brand); white-space: nowrap; font-size: 13px; }
   .devbar { position: fixed; left: 12px; bottom: 12px; z-index: 5; display: flex; align-items: center; gap: 8px; font-size: 12px;
             background: var(--surface); border: 1px dashed var(--line); border-radius: 12px; padding: 7px 10px; color: var(--muted); }
   .devbar select, .devbar button { font: inherit; color: var(--text); background: var(--bg); border: 1px solid var(--line);
@@ -198,7 +210,7 @@
     <div class="brand">
       <div class="logo" role="img" aria-label="HAGLO Assist"></div>
       <div class="sub" aria-hidden="true">ASSIST</div>
-      <div class="tag">Sag, was du sehen willst. Ich baue dein Dashboard.</div>
+      <div class="tag" id="tagline">Sag, was du sehen willst. Ich baue dein Dashboard.</div>
     </div>
 
     <form class="search" id="form">
@@ -222,6 +234,7 @@
 
     <div class="loading hidden" id="loading"><div class="bar"><i></i></div><span id="loadText"></span></div>
     <div class="result hidden" id="result"></div>
+    <div class="hist hidden" id="hist"></div>
   </main>
 
   <div class="devbar hidden" id="devbar"><span>Entwickler</span>
@@ -231,7 +244,7 @@
     </select>
     <button id="devReset">Limits zurücksetzen</button></div>
 
-  <footer><a id="terms" href="https://haglotech.com/policies/terms-of-service" target="_blank" rel="noopener">AGB</a> · <a id="privacy" href="https://haglotech.com/policies/privacy-policy" target="_blank" rel="noopener">Datenschutz</a> · <a id="versionsLink" role="button" tabindex="0">Versionen</a> · <a id="planLink" role="button" tabindex="0">Plan &amp; Abo</a> · Haglo</footer>
+  <footer><a id="terms" href="https://haglotech.com/policies/terms-of-service" target="_blank" rel="noopener">AGB</a> · <a id="privacy" href="https://haglotech.com/policies/privacy-policy" target="_blank" rel="noopener">Datenschutz</a> · <a id="autosLink" role="button" tabindex="0" class="hidden">Automationen</a><span id="autosSep" class="hidden"> · </span><a id="versionsLink" role="button" tabindex="0">Versionen</a> · <a id="planLink" role="button" tabindex="0">Plan &amp; Abo</a> · Haglo</footer>
 
   <div class="sheet-bg hidden" id="consent">
     <div class="sheet">
@@ -260,6 +273,16 @@
         <li>Vor jeder Änderung wird eine Version lokal gesichert, die du unter „Versionen“ wiederherstellen kannst</li>
       </ul>
       <div class="row"><button class="btn2" id="allowNo">Abbrechen</button><button class="primary" id="allowYes">Ja, bearbeiten</button></div>
+    </div>
+  </div>
+
+  <div class="sheet-bg hidden" id="autos">
+    <div class="sheet wide">
+      <button class="close" id="autosClose" aria-label="Schließen">×</button>
+      <h3>Automationen</h3>
+      <p class="now">Diese Automationen hat Haglo Assist für dich angelegt. Deine eigenen Automationen werden nie angefasst.</p>
+      <div class="vlist" id="alist"></div>
+      <p class="hint" id="aHint"></p>
     </div>
   </div>
 
@@ -305,6 +328,12 @@ const $ = (id) => document.getElementById(id);
 let trial = null, hasDashboard = false, pending = null, busy = false;
 const OWN = "haglo-ki";
 let dashList = [], dash = OWN;  // gewähltes Dashboard; OWN ist das eigene „Haglo Dashboard“
+let features = {};
+// Getipptes und offene Rückfragen überstehen das Verlassen der Seite (nur in diesem Browser-Tab gespeichert)
+const mem = {
+  get(k) { try { return JSON.parse(sessionStorage.getItem("haglo." + k)); } catch (e) { return null; } },
+  set(k, v) { try { v == null ? sessionStorage.removeItem("haglo." + k) : sessionStorage.setItem("haglo." + k, JSON.stringify(v)); } catch (e) {} },
+};
 let wasExpired = false, resetTimer = null;
 let ownerHidden = true;  // Kauf-Hinweis: bleibt verborgen, bis der Status sagt, dass er nicht weggeklickt wurde
 let dialog = [], asking = null;  // Rückfragen der KI: bisherige Antworten und die offene Frage
@@ -408,9 +437,45 @@ $("allowYes").addEventListener("click", async () => {
   $("allow").classList.add("hidden");
 });
 
+async function loadHistory() {
+  try {
+    const items = (await api("api/history")).history.slice(0, 6);
+    const label = { dashboard: "Dashboard", automation: "Automation", restore: "Version", automation_deleted: "Automation gelöscht" };
+    $("hist").innerHTML = items.length ? "<h4>Zuletzt</h4>" + items.map((h) => `<div class="hrow"><span class="t">${when(h.ts)}</span>
+      <span class="w">${esc(h.wish || label[h.kind] || "")}<small>${esc(label[h.kind] || "")}${h.text ? " · " + esc(h.text) : ""}</small></span>
+      ${h.url ? `<a href="${esc(h.url)}" target="_top">Öffnen</a>` : ""}</div>`).join("") : "";
+    $("hist").classList.toggle("hidden", !items.length);
+  } catch (e) {}
+}
+
+// Läuft noch eine Anfrage (z. B. Seite währenddessen verlassen), bis zum Ergebnis warten
+async function waitForJob(job) {
+  busy = true; setInputs(false);
+  $("loading").classList.remove("hidden");
+  $("loadText").textContent = `Ich arbeite noch an: „${job.wish}“ …`;
+  for (let i = 0; i < 120; i++) {
+    await new Promise((r) => setTimeout(r, 3000));
+    try { const s = await api("api/status"); if (!s.busy) break; } catch (e) {}
+  }
+  $("loading").classList.add("hidden"); busy = false;
+  if (!(trial && trial.expired)) setInputs(true);
+  showResult(`<h2>✓ Fertig</h2><p>Deine letzte Anfrage ist abgeschlossen. Das Ergebnis steht unten unter „Zuletzt“.</p>`);
+  loadHistory();
+}
+
 async function init() {
   try {
     const s = await api("api/status");
+    features = s.features || {};
+    if (features.automations) {
+      $("tagline").textContent = "Sag, was du brauchst. Ich baue Dashboards und Automationen.";
+      $("autosLink").classList.remove("hidden"); $("autosSep").classList.remove("hidden");
+    }
+    $("wish").value = mem.get("draft") || "";
+    loadHistory();
+    if (s.busy) waitForJob(s.busy);
+    else if (mem.get("question")) { const m = mem.get("question"); dialog = m.dialog || []; showQuestion(m.wish, m.label, m.q); }
+    else if (mem.get("automations")) { const m = mem.get("automations"); showAutomations(m.wish, m.erklaerung, m.items); }
     setDashboardMode(s.has_dashboard);
     let m = `${s.entities} ${s.entities === 1 ? "Gerät" : "Geräte"} in ${s.areas.length} ${s.areas.length === 1 ? "Raum" : "Räumen"} erkannt`;
     if (!s.api_key) m += " · ⚠ API-Schlüssel fehlt";
@@ -429,6 +494,7 @@ function addFreshLink() {
   $("meta").append(" · ", b);
 }
 
+$("wish").addEventListener("input", () => mem.set("draft", $("wish").value));
 $("form").addEventListener("submit", (e) => { e.preventDefault(); run($("wish").value.trim()); });
 document.querySelectorAll(".chip").forEach((c) => c.addEventListener("click", () => run(c.dataset.w, c.textContent)));
 
@@ -453,7 +519,7 @@ $("accept").addEventListener("click", async () => {
 const steps = ["Ich schaue mir deine Geräte an …", "Ich sortiere nach Räumen …", "Ich baue die Kacheln …", "Fast fertig …"];
 async function generate(wish, label, keepDialog) {
   if (!keepDialog) dialog = [];
-  asking = null;
+  asking = null; mem.set("question", null); mem.set("automations", null);
   busy = true; setInputs(false);
   if (label) $("wish").value = "";
   $("result").classList.add("hidden");
@@ -464,7 +530,8 @@ async function generate(wish, label, keepDialog) {
     const foreign = dash !== OWN;
     const r = await api("api/generate", { wish, refine: foreign || hasDashboard, dialog, dashboard: dash });
     if (r.question) { showQuestion(wish, label, r.question); return; }
-    dialog = [];
+    dialog = []; mem.set("draft", null);
+    if (r.automations) { $("wish").value = ""; showAutomations(wish, r.erklaerung, r.automations); return; }
     const first = !hasDashboard && !foreign;
     if (!foreign) setDashboardMode(true);
     if (first) addFreshLink();
@@ -476,6 +543,7 @@ async function generate(wish, label, keepDialog) {
       <a class="btn2" href="${trial.booking_url}" target="_blank" rel="noopener">Profi-Einrichtung buchen</a></div>
       ${r.backup ? '<div class="links"><button id="undo">Rückgängig</button></div>' : ""}`);
     if ($("undo")) $("undo").onclick = undo;
+    loadHistory();
   } catch (e) {
     if (e.code === "consent_required") { pending = [wish, label]; $("consent").classList.remove("hidden"); }
     else if (e.code !== "trial_expired") showResult(`<p class="err">Das hat nicht geklappt: ${esc(e.message)}</p>
@@ -489,6 +557,7 @@ async function generate(wish, label, keepDialog) {
 // ---------------------------------------------------------------- Rückfragen
 function showQuestion(wish, label, q) {
   asking = { wish, label, q };
+  mem.set("question", { wish, label, q, dialog });
   const multi = q.mehrfach;
   showResult(`<div class="ask-q">
     <p class="step">Kurze Rückfrage${dialog.length ? ` ${dialog.length + 1}` : ""} – damit es gleich passt</p>
@@ -647,6 +716,64 @@ document.addEventListener("visibilitychange", async () => {
   try { await api("api/status"); renderPlans(); } catch (e) {}
 });
 
+// ---------------------------------------------------------------- Automationen
+const autoCard = (a) => `<div class="auto"><b>${esc(a.alias)}</b><dl>
+  ${a.wann ? `<dt>Wann</dt><dd>${esc(a.wann)}</dd>` : ""}${a.was ? `<dt>Was</dt><dd>${esc(a.was)}</dd>` : ""}</dl></div>`;
+
+// Vorschlag zeigen – angelegt wird erst nach Bestätigung
+function showAutomations(wish, erklaerung, items) {
+  mem.set("automations", { wish, erklaerung, items });
+  showResult(`<div class="ask-q"><p class="step">Vorschlag – noch nicht aktiv</p>
+    <h2>${items.length === 1 ? "Diese Automation anlegen?" : "Diese Automationen anlegen?"}</h2>
+    ${items.map(autoCard).join("")}
+    <div class="actions" style="justify-content:flex-start"><button class="primary" id="autoYes">Anlegen</button>
+      <button class="btn2" id="autoNo">Verwerfen</button></div>
+    <p class="hint">Du kannst sie später unter „Automationen“ wieder löschen. Deine eigenen Automationen bleiben unberührt.</p></div>`);
+  $("autoNo").onclick = () => { mem.set("automations", null); $("result").classList.add("hidden"); };
+  $("autoYes").onclick = async () => {
+    $("autoYes").disabled = true;
+    try {
+      const r = await api("api/automations/apply", { automations: items, wish });
+      mem.set("automations", null);
+      showResult(`<h2>✓ ${r.created.length === 1 ? "Die Automation ist aktiv" : "Die Automationen sind aktiv"}</h2>
+        <p>${esc(r.created.map((c) => c.alias).join(", "))}</p>
+        <div class="actions"><a class="btn2" href="/config/automation/edit/${esc(r.created[0].id)}" target="_top">In Home Assistant ansehen</a></div>
+        <div class="links"><button id="autoUndo">Rückgängig</button></div>`);
+      $("autoUndo").onclick = async () => {
+        try { for (const c of r.created) await api("api/automations/delete", { id: c.id }); showResult("<p>Die Automation wurde wieder gelöscht.</p>"); loadHistory(); }
+        catch (e) { showResult(`<p class="err">${esc(e.message)}</p>`); }
+      };
+      loadHistory();
+    } catch (e) {
+      showResult(`<p class="err">Das hat nicht geklappt: ${esc(e.message)}</p>`);
+    }
+  };
+}
+
+async function openAutos() {
+  $("autos").classList.remove("hidden");
+  $("aHint").textContent = ""; $("aHint").classList.remove("err");
+  try {
+    const r = await api("api/automations");
+    $("alist").innerHTML = r.automations.length ? r.automations.map((a) => `<div class="ver">
+        <div class="info"><div class="when">${esc(a.alias)}${a.on ? "" : " (ausgeschaltet)"}</div>
+        <div class="what">${esc([a.wann, a.was].filter(Boolean).join(" → "))}</div></div>
+        <button class="btn2" data-del="${esc(a.id)}">Löschen</button></div>`).join("")
+      : `<p class="now">Noch keine. Schreib zum Beispiel: „Wenn sich im Flur etwas bewegt, mach das Licht an.“</p>`;
+  } catch (e) { $("aHint").textContent = e.message; $("aHint").classList.add("err"); }
+}
+$("autosLink").addEventListener("click", openAutos);
+$("autosLink").addEventListener("keydown", (e) => { if (e.key === "Enter") openAutos(); });
+$("autosClose").addEventListener("click", () => $("autos").classList.add("hidden"));
+$("autos").addEventListener("click", async (e) => {
+  if (e.target === $("autos")) return $("autos").classList.add("hidden");
+  const b = e.target.closest("[data-del]");
+  if (!b) return;
+  b.disabled = true;
+  try { await api("api/automations/delete", { id: b.dataset.del }); openAutos(); loadHistory(); }
+  catch (err) { $("aHint").textContent = err.message; $("aHint").classList.add("err"); b.disabled = false; }
+});
+
 // ---------------------------------------------------------------- Versionen
 const when = (ts) => new Date(ts * 1000).toLocaleString("de-DE", { day: "2-digit", month: "2-digit", year: "numeric", hour: "2-digit", minute: "2-digit" });
 
@@ -673,7 +800,7 @@ $("versions").addEventListener("click", async (e) => {
   if (!b) return;
   b.disabled = true;
   try {
-    await api("api/restore", { id: b.dataset.restore });
+    await api("api/restore", { id: b.dataset.restore }); loadHistory();
     $("versions").classList.add("hidden");
     setDashboardMode(true);
     showResult(`<h2>Version wiederhergestellt</h2><p>Der Stand davor wurde ebenfalls gesichert – du kannst jederzeit wieder zurück.</p>
