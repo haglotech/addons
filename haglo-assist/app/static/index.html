@@ -64,9 +64,13 @@
   .chip:hover { border-color: var(--brand); color: var(--brand); background: var(--brand-soft); }
   .chip:disabled { opacity: .5; cursor: default; }
   .meta { text-align: center; color: var(--muted); font-size: 13px; margin-top: 16px; min-height: 20px; }
-  .owner { margin: 14px auto 0; max-width: 520px; text-align: center; font-size: 13px; color: var(--text);
-           background: var(--brand-soft); border-radius: 12px; padding: 9px 14px; cursor: pointer; }
+  .owner { margin: 14px auto 0; max-width: 520px; font-size: 13px; color: var(--text); position: relative;
+           background: var(--brand-soft); border-radius: 12px; padding: 9px 38px 9px 14px; text-align: center; }
   .owner b { color: var(--brand); }
+  .owner .txt { cursor: pointer; }
+  .owner .x { position: absolute; top: 4px; right: 4px; width: 28px; height: 28px; border: 0; border-radius: 50%; background: transparent;
+              color: var(--muted); font-size: 18px; line-height: 1; cursor: pointer; }
+  .owner .x:hover { background: var(--bg); color: var(--text); }
   .meta button, .meta a { background: none; border: 0; color: var(--brand); font: inherit; cursor: pointer; padding: 0; text-decoration: underline; }
 
   .loading { margin-top: 28px; text-align: center; color: var(--muted); }
@@ -287,11 +291,13 @@ let trial = null, hasDashboard = false, pending = null, busy = false;
 const OWN = "haglo-ki";
 let dashList = [], dash = OWN;  // gewähltes Dashboard; OWN ist das eigene „Haglo Dashboard“
 let wasExpired = false, resetTimer = null;
+let ownerHidden = true;  // Kauf-Hinweis: bleibt verborgen, bis der Status sagt, dass er nicht weggeklickt wurde
 let dialog = [], asking = null;  // Rückfragen der KI: bisherige Antworten und die offene Frage
 
 async function api(path, body) {
   const r = await fetch(path, body ? { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) } : {});
   const data = await r.json().catch(() => ({ ok: false, error: "Ungültige Antwort" }));
+  if (data.prefs) ownerHidden = !!data.prefs.owner_hint_dismissed;
   if (data.trial) setTrial(data.trial);
   if (!data.ok) { const e = new Error(data.error || "Unbekannter Fehler"); e.code = data.error; throw e; }
   return data;
@@ -310,8 +316,9 @@ function setTrial(t) {
   // Wer bei Haglo gekauft hat, sieht, dass Lite deshalb inklusive ist – und bis wann mindestens
   const gift = t.accepted && t.included_plan && t.level === t.included_plan && !(t.subscription && t.subscription.active);
   const until = t.included_until ? new Date(t.included_until * 1000).toLocaleDateString("de-DE") : "";
-  $("owner").classList.toggle("hidden", !gift);
-  if (gift) $("owner").innerHTML = `Danke für deinen Kauf bei Haglo: <b>${esc(t.plan_name)} ist bei deinem Gerät inklusive</b>${until ? `, mindestens bis ${until}` : ""}.`;
+  $("owner").classList.toggle("hidden", !gift || ownerHidden);
+  if (gift) $("owner").innerHTML = `<span class="txt" data-plans-open>Danke für deinen Kauf bei Haglo: <b>${esc(t.plan_name)} ist bei deinem Gerät inklusive</b>${until ? `, mindestens bis ${until}` : ""}.</span>
+    <button class="x" id="ownerClose" aria-label="Hinweis schließen" title="Nicht mehr anzeigen">×</button>`;
   if (!t.accepted) { p.textContent = "Kostenlos starten"; }
   else if (t.expired) { p.textContent = `${t.plan_name || ""} · Limit erreicht`; p.classList.add("end"); showExpired(); }
   else if (!t.plan) { p.textContent = "Haglo Assist"; }
@@ -573,7 +580,13 @@ async function toStripe(path, body) {
   }
 }
 
-for (const id of ["pill", "planLink", "owner"]) {
+$("owner").addEventListener("click", async (e) => {
+  if (e.target.closest("#ownerClose")) {       // dauerhaft ausblenden, gespeichert auf dem Gerät
+    ownerHidden = true; $("owner").classList.add("hidden");
+    try { await api("api/prefs", { owner_hint_dismissed: true }); } catch (err) {}
+  } else if (e.target.closest("[data-plans-open]")) openPlans();
+});
+for (const id of ["pill", "planLink"]) {
   $(id).addEventListener("click", openPlans);
   $(id).addEventListener("keydown", (e) => { if (e.key === "Enter") openPlans(); });
 }

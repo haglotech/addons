@@ -36,7 +36,7 @@ SKIP_DOMAINS = {
     "zone", "persistent_notification", "assist_satellite", "ai_task",
 }
 
-ADDON_VERSION = "0.12.0"
+ADDON_VERSION = "0.12.1"
 MAX_VERSIONS = 30                      # so viele Dashboard-Versionen bleiben lokal gespeichert
 BAR_ENTITY = "input_text.haglo_assist"           # Eingabeleiste im Dashboard
 BAR_STATUS = "input_text.haglo_assist_status"    # Rückmeldung darunter
@@ -452,6 +452,17 @@ async def current_config(ha: HAClient, path: str | None = DASHBOARD_PATH):
 ALLOWED_FILE = Path("/data/allowed_dashboards.json")
 
 
+PREFS_FILE = Path("/data/prefs.json")
+
+
+def load_prefs() -> dict:
+    """Kleine Einstellungen der Oberfläche, lokal auf dem Gerät (z. B. weggeklickte Hinweise)."""
+    try:
+        return json.loads(PREFS_FILE.read_text())
+    except Exception:
+        return {}
+
+
 def allowed_dashboards() -> set[str]:
     """Dashboards, deren Bearbeitung (und Übertragung) der Nutzer ausdrücklich bestätigt hat."""
     try:
@@ -706,6 +717,7 @@ async def status(request):
         "has_dashboard": cfg is not None,
         "api_key": True,  # Der Schlüssel liegt im Backend; Feld bleibt für die Oberfläche.
         "backups": len(version_files()),
+        "prefs": load_prefs(),
         "trial": trial,
     })
 
@@ -768,6 +780,21 @@ async def generate(request):
         "usage": result["usage"],
         "trial": trial_info(result["status"]),
     })
+
+
+@routes.post("/api/prefs")
+async def save_prefs(request):
+    """Merkt sich weggeklickte Hinweise dauerhaft – für alle Browser und Geräte dieses Hubs."""
+    try:
+        body = await request.json()
+    except Exception:
+        body = {}
+    prefs = load_prefs()
+    if body.get("owner_hint_dismissed") is True:
+        prefs["owner_hint_dismissed"] = True
+    PREFS_FILE.parent.mkdir(parents=True, exist_ok=True)
+    PREFS_FILE.write_text(json.dumps(prefs))
+    return web.json_response({"ok": True, "prefs": prefs})
 
 
 @routes.get("/api/dashboards")

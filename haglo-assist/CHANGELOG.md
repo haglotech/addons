@@ -1,5 +1,9 @@
 # Änderungen
 
+## 0.12.1
+
+- Der Hinweis zum inklusiven Plan lässt sich mit × dauerhaft ausblenden
+
 ## 0.12.0
 
 - Ruhigerer, neutraler Hintergrund – Grün nur noch als Akzent
