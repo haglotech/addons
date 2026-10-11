@@ -113,6 +113,23 @@
   .plan .tag2 { font-size: 13px; color: var(--muted); }
   .manage { margin-top: 16px; display: flex; flex-wrap: wrap; gap: 10px; }
   .manage .btn2 { cursor: pointer; }
+  .ask-q { text-align: left; }
+  .ask-q .step { font-size: 13px; color: var(--muted); margin: 0 0 4px; }
+  .ask-q h2 { margin-bottom: 14px; }
+  .opts { display: flex; flex-direction: column; gap: 8px; }
+  .opt { text-align: left; border: 1px solid var(--line); background: var(--bg); color: var(--text); border-radius: 12px;
+         padding: 12px 14px; font: inherit; font-size: 15px; cursor: pointer; display: flex; align-items: center; gap: 10px;
+         transition: border-color .15s, background .15s; }
+  .opt:hover { border-color: var(--brand); }
+  .opt.on { border-color: var(--brand); background: var(--brand-soft); }
+  .opt .box { width: 18px; height: 18px; border: 2px solid var(--line); border-radius: 5px; flex: none; }
+  .opt.on .box { border-color: var(--brand); background: var(--brand); }
+  .own { display: flex; gap: 8px; margin-top: 10px; }
+  .own input { flex: 1; min-width: 0; font: inherit; font-size: 15px; color: var(--text); background: var(--bg);
+               border: 1px solid var(--line); border-radius: 12px; padding: 11px 14px; outline: 0; }
+  .own input:focus { border-color: var(--brand); }
+  .own .primary { padding: 11px 18px; }
+  .ask-q .links { text-align: center; }
   .hint { font-size: 13px; color: var(--muted); margin: 12px 0 0; }
   .hint.err { color: var(--err); }
   details.ask { margin-top: 18px; border-top: 1px solid var(--line); padding-top: 14px; }
@@ -141,7 +158,7 @@
 </head>
 <body>
   <div class="top"><a id="pill" class="pill hidden" role="button" tabindex="0"></a>
-    <a class="btn2" id="booking" target="_blank" rel="noopener"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><rect x="3" y="5" width="18" height="16" rx="2"/><path d="M3 10h18M8 3v4M16 3v4"/></svg><span>Beratung<span class="long"> buchen</span></span></a></div>
+    <a class="btn2" id="booking" href="https://haglotech.com/pages/termin" target="_blank" rel="noopener"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><rect x="3" y="5" width="18" height="16" rx="2"/><path d="M3 10h18M8 3v4M16 3v4"/></svg><span>Beratung<span class="long"> buchen</span></span></a></div>
 
   <main>
     <div class="brand">
@@ -170,7 +187,7 @@
     <div class="result hidden" id="result"></div>
   </main>
 
-  <footer><a id="terms" target="_blank" rel="noopener">AGB</a> · <a id="privacy" target="_blank" rel="noopener">Datenschutz</a> · <a id="planLink" role="button" tabindex="0">Plan &amp; Abo</a> · Haglo</footer>
+  <footer><a id="terms" href="https://haglotech.com/policies/terms-of-service" target="_blank" rel="noopener">AGB</a> · <a id="privacy" href="https://haglotech.com/policies/privacy-policy" target="_blank" rel="noopener">Datenschutz</a> · <a id="planLink" role="button" tabindex="0">Plan &amp; Abo</a> · Haglo</footer>
 
   <div class="sheet-bg hidden" id="consent">
     <div class="sheet">
@@ -214,6 +231,7 @@
 <script>
 const $ = (id) => document.getElementById(id);
 let trial = null, hasDashboard = false, pending = null, busy = false;
+let dialog = [], asking = null;  // Rückfragen der KI: bisherige Antworten und die offene Frage
 
 async function api(path, body) {
   const r = await fetch(path, body ? { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) } : {});
@@ -291,7 +309,9 @@ $("accept").addEventListener("click", async () => {
 });
 
 const steps = ["Ich schaue mir deine Geräte an …", "Ich sortiere nach Räumen …", "Ich baue die Kacheln …", "Fast fertig …"];
-async function generate(wish, label) {
+async function generate(wish, label, keepDialog) {
+  if (!keepDialog) dialog = [];
+  asking = null;
   busy = true; setInputs(false);
   if (label) $("wish").value = "";
   $("result").classList.add("hidden");
@@ -299,7 +319,9 @@ async function generate(wish, label) {
   let i = 0; $("loadText").textContent = steps[0];
   const t = setInterval(() => { i = Math.min(i + 1, steps.length - 1); $("loadText").textContent = steps[i]; }, 7000);
   try {
-    const r = await api("api/generate", { wish, refine: hasDashboard });
+    const r = await api("api/generate", { wish, refine: hasDashboard, dialog });
+    if (r.question) { showQuestion(wish, label, r.question); return; }
+    dialog = [];
     const first = !hasDashboard;
     setDashboardMode(true);
     if (first) addFreshLink();
@@ -320,6 +342,41 @@ async function generate(wish, label) {
     busy = false; if (!(trial && trial.expired)) setInputs(true);
   }
 }
+
+// ---------------------------------------------------------------- Rückfragen
+function showQuestion(wish, label, q) {
+  asking = { wish, label, q };
+  const multi = q.mehrfach;
+  showResult(`<div class="ask-q">
+    <p class="step">Kurze Rückfrage${dialog.length ? ` ${dialog.length + 1}` : ""} – damit es gleich passt</p>
+    <h2>${esc(q.frage)}</h2>
+    <div class="opts">${q.optionen.map((o, i) => `<button class="opt" data-opt="${i}">${multi ? '<span class="box"></span>' : ""}<span>${esc(o)}</span></button>`).join("")}</div>
+    <form class="own" id="ownForm"><input id="ownText" maxlength="300" autocomplete="off" placeholder="${multi ? "Oder etwas ergänzen …" : "Oder eigene Antwort …"}">
+      <button class="primary">${multi ? "Weiter" : "Senden"}</button></form>
+    <div class="links"><button id="skipQ">Entscheide du – einfach bauen</button></div></div>`);
+  $("ownForm").addEventListener("submit", (e) => {
+    e.preventDefault();
+    const picked = [...document.querySelectorAll(".opt.on span:last-child")].map((s) => s.textContent);
+    const own = $("ownText").value.trim();
+    const all = own ? [...picked, own] : picked;
+    if (all.length) answer(all.join(", "));
+  });
+  $("skipQ").onclick = () => answer("Entscheide du selbst und baue jetzt.");
+}
+
+function answer(text) {
+  if (!asking || busy) return;
+  const { wish, label, q } = asking;
+  dialog.push({ frage: q.frage, antwort: text.slice(0, 500) });
+  generate(wish, label, true);
+}
+
+$("result").addEventListener("click", (e) => {
+  const opt = e.target.closest("[data-opt]");
+  if (!opt || !asking) return;
+  if (asking.q.mehrfach) opt.classList.toggle("on");
+  else answer(asking.q.optionen[+opt.dataset.opt]);
+});
 
 function showExpired() {
   setInputs(false);

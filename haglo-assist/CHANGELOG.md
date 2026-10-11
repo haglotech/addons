@@ -1,5 +1,11 @@
 # Änderungen
 
+## 0.8.0
+
+- Rückfragen mit Auswahl: Ist ein Wunsch noch unklar, fragt Haglo Assist kurz nach, statt zu raten.
+  Rückfragen zählen nicht als Änderung.
+- „Beratung buchen“, AGB und Datenschutz funktionieren auch, wenn der Server gerade nicht erreichbar ist
+
 ## 0.7.0
 
 - „Plan & Abo“ direkt in der App: Pläne ansehen, monatlich oder jährlich wählen

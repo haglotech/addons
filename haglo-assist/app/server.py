@@ -34,7 +34,7 @@ SKIP_DOMAINS = {
     "zone", "persistent_notification", "assist_satellite", "ai_task",
 }
 
-ADDON_VERSION = "0.7.0"
+ADDON_VERSION = "0.8.0"
 DEFAULT_BACKEND_URL = "https://api.haglotech.com"
 HUB_FILE = Path("/data/hub.json")
 TERMS_VERSION = "2026-10"
@@ -356,6 +356,7 @@ async def generate(request):
     body = await request.json()
     wish = (body.get("wish") or "").strip()
     refine = bool(body.get("refine"))
+    dialog = body.get("dialog") if isinstance(body.get("dialog"), list) else []
     if not wish:
         return web.json_response({"ok": False, "error": "Bitte einen Wunsch eingeben."}, status=400)
     try:
@@ -375,7 +376,16 @@ async def generate(request):
             previous = await current_config(ha) if refine else None
             result = await backend(session, "POST", "/v1/generate", {
                 "wish": wish, "entities": entities, "previous": previous, "refine": refine,
+                "dialog": dialog, "can_ask": True,
             }, timeout=300)
+            if result.get("type") == "question":
+                # Die KI braucht noch eine Angabe: Rückfrage anzeigen, nichts speichern.
+                return web.json_response({
+                    "ok": True,
+                    "question": {"frage": result["frage"], "optionen": result["optionen"],
+                                 "mehrfach": bool(result.get("mehrfach"))},
+                    "trial": trial_info(result["status"]),
+                })
 
             removed: list[str] = []
             config = clean_config(result["config"], {e["id"] for e in entities}, removed)
