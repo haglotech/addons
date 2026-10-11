@@ -1,5 +1,9 @@
 # Änderungen
 
+## 0.12.5
+
+- „Kostenlos starten“ oben rechts ist jetzt ein Knopf und öffnet direkt die Zustimmung
+
 ## 0.12.4
 
 - Neues Symbol in der Seitenleiste

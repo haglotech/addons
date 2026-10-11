@@ -29,7 +29,11 @@
   .top { display: flex; flex-wrap: wrap; justify-content: flex-end; align-items: center; gap: 10px; padding: 14px 16px; min-height: 64px; }
   .pill { font-size: 13px; font-weight: 600; padding: 6px 12px; border-radius: 999px;
           background: var(--brand-soft); color: var(--brand); white-space: nowrap; text-decoration: none; }
+  a.pill { cursor: pointer; }
   a.pill:hover { filter: brightness(.96); }
+  /* Vor der Zustimmung ist die Anzeige der Knopf zum Loslegen */
+  a.pill.cta { background: var(--brand); color: var(--brand-ink); padding: 9px 16px; font-size: 14px; border-radius: 10px; }
+  a.pill.cta:hover { background: var(--brand-hover); filter: none; }
   .pill.warn { background: var(--warn-soft); color: var(--warn); }
   .pill.end { background: var(--err-soft); color: var(--err); }
   .btn2 { display: inline-flex; align-items: center; gap: 6px; border: 1px solid var(--brand); color: var(--brand);
@@ -320,7 +324,7 @@ function setTrial(t) {
   for (const id of ["privacy", "privacyLink"]) $(id).href = t.privacy_url;
   $("booking").href = t.booking_url;
   const p = $("pill");
-  p.classList.remove("hidden", "warn", "end");
+  p.classList.remove("hidden", "warn", "end", "cta");
   const days = `${t.days_left} ${t.days_left === 1 ? "Tag" : "Tage"}`;
   const pct = t.window ? Math.max(t.window.used_pct, t.week.used_pct >= 100 ? 100 : 0) : 0;
   const used = `${pct} % genutzt`;
@@ -333,7 +337,7 @@ function setTrial(t) {
   $("owner").classList.toggle("hidden", !gift || ownerHidden);
   if (gift) $("owner").innerHTML = `<span class="txt" data-plans-open>Danke für deinen Kauf bei Haglo: <b>${esc(t.plan_name)} ist bei deinem Gerät inklusive</b>${until ? `, mindestens bis ${until}` : ""}.</span>
     <button class="x" id="ownerClose" aria-label="Hinweis schließen" title="Nicht mehr anzeigen">×</button>`;
-  if (!t.accepted) { p.textContent = "Kostenlos starten"; }
+  if (!t.accepted) { p.textContent = "Kostenlos starten"; p.classList.add("cta"); }
   else if (t.expired) { p.textContent = `${t.plan_name || ""} · Limit erreicht`; p.classList.add("end"); showExpired(); }
   else if (!t.plan) { p.textContent = "Haglo Assist"; }
   else if (t.plan === "trial") {
@@ -607,10 +611,13 @@ $("owner").addEventListener("click", async (e) => {
     try { await api("api/prefs", { owner_hint_dismissed: true }); } catch (err) {}
   } else if (e.target.closest("[data-plans-open]")) openPlans();
 });
-for (const id of ["pill", "planLink"]) {
-  $(id).addEventListener("click", openPlans);
-  $(id).addEventListener("keydown", (e) => { if (e.key === "Enter") openPlans(); });
-}
+// Vor der Zustimmung öffnet die Anzeige oben rechts das Zustimmungsfenster, danach die Planübersicht
+const pillAction = () => (trial && !trial.accepted ? $("consent").classList.remove("hidden") : openPlans());
+$("pill").addEventListener("click", pillAction);
+$("pill").addEventListener("keydown", (e) => { if (e.key === "Enter") pillAction(); });
+$("planLink").addEventListener("click", openPlans);
+$("planLink").addEventListener("keydown", (e) => { if (e.key === "Enter") openPlans(); });
+$("consent").addEventListener("click", (e) => { if (e.target === $("consent")) $("consent").classList.add("hidden"); });
 $("plansClose").addEventListener("click", () => $("plans").classList.add("hidden"));
 $("plans").addEventListener("click", (e) => {
   if (e.target === $("plans")) return $("plans").classList.add("hidden");
