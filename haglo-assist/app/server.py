@@ -36,7 +36,7 @@ SKIP_DOMAINS = {
     "zone", "persistent_notification", "assist_satellite", "ai_task",
 }
 
-ADDON_VERSION = "0.9.0"
+ADDON_VERSION = "0.10.0"
 MAX_VERSIONS = 30                      # so viele Dashboard-Versionen bleiben lokal gespeichert
 BAR_ENTITY = "input_text.haglo_assist"           # Eingabeleiste im Dashboard
 BAR_STATUS = "input_text.haglo_assist_status"    # Rückmeldung darunter
@@ -135,26 +135,46 @@ async def backend(session, method: str, path: str, body: dict | None = None, tim
         return await _backend_request(session, method, path, body, headers, timeout)
 
 
+async def supervisor_get(session, path: str) -> dict:
+    async with session.get(f"http://supervisor{path}", headers={"Authorization": f"Bearer {TOKEN}"},
+                           timeout=aiohttp.ClientTimeout(total=15)) as r:
+        if r.status != 200:
+            raise RuntimeError(f"HTTP {r.status}")
+        return (await r.json()).get("data") or {}
+
+
 async def read_hardware(session) -> dict:
     """Seriennummer und MAC-Adressen des Geräts. Damit erkennt das Backend von Haglo
-    ausgelieferte Geräte (sie bekommen die Testphase)."""
-    serial = ""
-    for name in ("product_serial", "board_serial"):
+    ausgelieferte Geräte (sie bekommen die Testphase). `note` nennt nur, was nicht lesbar war."""
+    serial, notes = "", []
+    for name in ("product_serial", "board_serial", "chassis_serial"):
         try:
             serial = Path(f"/sys/class/dmi/id/{name}").read_text().strip()
-        except OSError:
+        except OSError as e:
+            notes.append(f"{name}: {type(e).__name__}")
             continue
         if serial:
             break
-    macs = []
+    macs: set[str] = set()
     try:
-        async with session.get("http://supervisor/network/info", headers={"Authorization": f"Bearer {TOKEN}"},
-                               timeout=aiohttp.ClientTimeout(total=15)) as r:
-            data = (await r.json()).get("data") or {}
-        macs = [i["mac"] for i in data.get("interfaces", []) if i.get("mac")]
+        for i in (await supervisor_get(session, "/network/info")).get("interfaces", []):
+            if i.get("mac"):
+                macs.add(i["mac"])
     except Exception as e:
-        print(f"MAC-Adressen konnten nicht gelesen werden: {e}")
-    return {"serial": serial, "macs": macs}
+        notes.append(f"network/info: {e}")
+    if not macs:
+        # Zweiter Weg: dieselbe Auskunft über die Home-Assistant-Verbindung der App
+        try:
+            async with HAClient(session) as ha:
+                info = await ha.call("supervisor/api", endpoint="/network/info", method="get")
+            for i in (info or {}).get("interfaces", []):
+                if i.get("mac"):
+                    macs.add(i["mac"])
+        except Exception as e:
+            notes.append(f"ws network/info: {e}")
+    if not serial and not macs:
+        print("Hardware nicht lesbar:", "; ".join(notes))
+    return {"serial": serial, "macs": sorted(macs), "note": "; ".join(notes)[:500] if not (serial and macs) else ""}
 
 
 async def identify(app, status: dict) -> dict:
@@ -165,6 +185,96 @@ async def identify(app, status: dict) -> dict:
     data = await backend(app["session"], "POST", "/v1/hubs/identify", await read_hardware(app["session"]))
     app["identified"] = True
     return data["status"]
+
+
+async def selftest(app) -> None:
+    """Nur in der Entwickler-Variante: prüft die Home-Assistant-Zugriffe auf dem echten Gerät.
+    Läuft, wenn neben server.py eine Datei selftest.flag liegt ({"id": …, "wish": …}), je id einmal.
+    Gemeldet werden nur Prüfergebnisse (ok/Fehlertext), keine Inhalte."""
+    flag = Path(__file__).with_name("selftest.flag")
+    done_file = Path("/data/selftest_done.json")
+    try:
+        job = json.loads(flag.read_text())
+        done = json.loads(done_file.read_text()) if done_file.exists() else []
+    except Exception:
+        return
+    if job.get("id") in done:
+        return
+    done_file.write_text(json.dumps(done + [job.get("id")]))
+    out = [f"selftest {job.get('id')}"]
+
+    async def step(name, coro):
+        try:
+            out.append(f"{name}: {await coro}")
+        except Exception as e:
+            out.append(f"{name}: FEHLER {type(e).__name__} {str(e)[:60]}")
+
+    async def hw():
+        h = await read_hardware(app["session"])
+        extra = ""
+        if not h["macs"]:
+            try:
+                async with HAClient(app["session"]) as ha:
+                    info = await ha.call("supervisor/api", endpoint="/network/info", method="get")
+                extra = f" ws-keys={sorted((info or {}).keys())[:6]} if0={sorted(((info or {}).get('interfaces') or [{}])[0].keys())[:12]}"
+            except Exception as e:
+                extra = f" ws={type(e).__name__}:{str(e)[:80]}"
+        def dmi(name):
+            try:
+                return Path(f"/sys/class/dmi/id/{name}").read_text().strip()[:30] or "(leer)"
+            except OSError as e:
+                return type(e).__name__
+        model = f" dmi={dmi('sys_vendor')}/{dmi('product_name')} sn-laenge={len(h['serial'])} uuid={'ja' if len(dmi('product_uuid')) > 20 else dmi('product_uuid')}"
+        return f"serial={'ja' if h['serial'] else 'leer'} macs={len(h['macs'])}{model}"
+
+    async def dashes():
+        async with HAClient(app["session"]) as ha:
+            items = await list_dashboards(ha)
+            main = await current_config(ha, None)
+            kind = "auto" if main is None or "strategy" in main else f"gespeichert/{count_all_cards(main)} Karten"
+            return f"{len(items)} ({sum(1 for d in items if not d['editable'])} yaml), uebersicht={kind}"
+
+    async def version_roundtrip():
+        async with HAClient(app["session"]) as ha:
+            cfg = await current_config(ha)
+        if cfg is None:
+            return "kein Haglo Dashboard"
+        name = write_backup(cfg, "selftest")
+        same = read_backup(BACKUP_DIR / name)["config"] == cfg
+        (BACKUP_DIR / name).unlink()
+        return "ok" if same else "ungleich"
+
+    async def helpers():
+        async with HAClient(app["session"]) as ha:
+            return f"{len(await ha.call('input_text/list'))} input_text"
+
+    async def build():
+        r = await build_dashboard(app, job["wish"], refine=False, dialog=[], can_ask=False)
+        return f"ok {len(r['config'].get('views', []))} Seiten {count_cards(r['config'])} Kacheln, entfernt={len(r['removed'])}, backup={bool(r['backup'])}"
+
+    async def undo_build():
+        files = version_files()
+        if not files:
+            return "kein Backup"
+        await restore_version(app, files[-1], keep=False)
+        files[-1].unlink()
+        return "ok"
+
+    await step("hw", hw())
+    await step("dashboards", dashes())
+    await step("version", version_roundtrip())
+    await step("helper", helpers())
+    if job.get("wish"):
+        await step("bauen", build())
+        if job.get("undo"):
+            await step("rueckgaengig", undo_build())
+    try:
+        hwdata = await read_hardware(app["session"])
+        hwdata["note"] = " | ".join(out)[:500]
+        await backend(app["session"], "POST", "/v1/hubs/identify", hwdata)
+    except Exception as e:
+        print(f"Selbsttest: Meldung fehlgeschlagen: {e}")
+    print(" | ".join(out))
 
 
 def trial_info(status: dict | None) -> dict:
@@ -178,6 +288,12 @@ def trial_info(status: dict | None) -> dict:
         "expired": status["expired"],
         "plan": status["plan"],
         "haglo_device": status.get("haglo_device", False),
+        "level": status.get("level"),
+        "included_plan": status.get("included_plan"),
+        "window_hours": status.get("window_hours"),
+        "window": status.get("window"),
+        "week": status.get("week"),
+        "reset_at": status.get("reset_at"),
         "plan_name": status["plan_name"],
         "limit": status["limit"],
         "subscription": status["subscription"],
@@ -321,24 +437,63 @@ async def ensure_dashboard(ha: HAClient):
     )
 
 
-async def current_config(ha: HAClient):
+async def current_config(ha: HAClient, path: str | None = DASHBOARD_PATH):
+    """Konfiguration eines Dashboards; path=None ist die Standard-Übersicht."""
     try:
-        return await ha.call("lovelace/config", url_path=DASHBOARD_PATH)
+        return await ha.call("lovelace/config", url_path=path)
     except HAError as e:
         if e.code == "config_not_found":
             return None
         raise
 
 
+# ---------------------------------------------------------------- Eigene Dashboards des Kunden
+ALLOWED_FILE = Path("/data/allowed_dashboards.json")
+
+
+def allowed_dashboards() -> set[str]:
+    """Dashboards, deren Bearbeitung (und Übertragung) der Nutzer ausdrücklich bestätigt hat."""
+    try:
+        return set(json.loads(ALLOWED_FILE.read_text()))
+    except Exception:
+        return set()
+
+
+async def list_dashboards(ha: HAClient) -> list[dict]:
+    """Alle Dashboards. id ist der url_path; "" steht für die Standard-Übersicht."""
+    allowed = allowed_dashboards()
+    out = [{"id": DASHBOARD_PATH, "title": DASHBOARD_TITLE, "own": True, "editable": True, "allowed": True}]
+    if not load_options().get("own_dashboards"):
+        return out  # Bearbeiten eigener Dashboards ist noch eine Option zum Ausprobieren
+    items = [{"url_path": "", "title": "Übersicht", "mode": "storage"}] + list(await ha.call("lovelace/dashboards/list"))
+    for d in items:
+        path = d.get("url_path") or ""
+        if path == DASHBOARD_PATH:
+            continue
+        out.append({"id": path, "title": d.get("title") or path, "own": False,
+                    "editable": d.get("mode", "storage") == "storage", "allowed": path in allowed})
+    return out
+
+
+def count_all_cards(node) -> int:
+    """Zählt alle Karten, egal wie tief verschachtelt (auch in Stacks und Abschnitten)."""
+    if isinstance(node, list):
+        return sum(count_all_cards(n) for n in node)
+    if not isinstance(node, dict):
+        return 0
+    own = 1 if isinstance(node.get("type"), str) and "views" not in node and "sections" not in node else 0
+    return own + sum(count_all_cards(v) for k, v in node.items() if k in ("views", "sections", "cards", "card", "badges"))
+
+
 # ---------------------------------------------------------------- Versionen (nur lokal)
-def write_backup(config, label: str = "") -> str | None:
+def write_backup(config, label: str = "", dashboard: str = DASHBOARD_PATH) -> str | None:
     """Sichert den bisherigen Stand des Dashboards lokal auf dem Gerät, bevor er überschrieben wird."""
     if config is None:
         return None
     BACKUP_DIR.mkdir(parents=True, exist_ok=True)
     name = time.strftime("%Y%m%d-%H%M%S") + ".json"
     (BACKUP_DIR / name).write_text(json.dumps(
-        {"haglo_version": 1, "saved_at": int(time.time()), "label": label[:200], "config": config},
+        {"haglo_version": 1, "saved_at": int(time.time()), "label": label[:200], "dashboard": dashboard, "config": config},
         ensure_ascii=False, indent=2))
     for old in sorted(BACKUP_DIR.glob("*.json"))[:-MAX_VERSIONS]:
         old.unlink(missing_ok=True)
@@ -349,8 +504,9 @@ def read_backup(path: Path) -> dict:
     """Liest eine Version; ältere Sicherungen enthalten nur die Dashboard-Konfiguration."""
     data = json.loads(path.read_text())
     if isinstance(data, dict) and data.get("haglo_version") and isinstance(data.get("config"), dict):
+        data.setdefault("dashboard", DASHBOARD_PATH)
         return data
-    return {"saved_at": int(path.stat().st_mtime), "label": "", "config": data}
+    return {"saved_at": int(path.stat().st_mtime), "label": "", "dashboard": DASHBOARD_PATH, "config": data}
 
 
 def version_files() -> list[Path]:
@@ -461,18 +617,32 @@ async def bar_listener(app):
 
 
 # ---------------------------------------------------------------- Dashboard bauen
-async def build_dashboard(app, wish: str, refine: bool, dialog: list, can_ask: bool) -> dict:
+async def build_dashboard(app, wish: str, refine: bool, dialog: list, can_ask: bool,
+                          dashboard: str = DASHBOARD_PATH) -> dict:
     """Holt das Dashboard vom Backend und speichert es. Gibt entweder eine Rückfrage
-    ({"question": …}) oder das Ergebnis zurück. Wirft BackendError bei Backend-Fehlern."""
+    ({"question": …}) oder das Ergebnis zurück. Wirft BackendError bei Backend-Fehlern.
+
+    dashboard ist der url_path; "" ist die Standard-Übersicht. Fremde, vom Kunden selbst
+    gebaute Dashboards werden nur gezielt geändert und nur nach ausdrücklicher Freigabe."""
     session = app["session"]
+    own = dashboard == DASHBOARD_PATH
+    if not own and not load_options().get("own_dashboards"):
+        raise RuntimeError("Das Bearbeiten eigener Dashboards ist in der Konfiguration der App ausgeschaltet.")
+    if not own and dashboard not in allowed_dashboards():
+        raise RuntimeError("Bitte bestätige zuerst, dass Haglo Assist dieses Dashboard bearbeiten darf.")
+    path = dashboard or None
     async with HAClient(session) as ha:
         entities = [e for e in await collect_entities(ha) if e["id"] not in (BAR_ENTITY, BAR_STATUS)]
         if not entities:
             raise RuntimeError("Keine Geräte gefunden.")
-        before = await current_config(ha)
+        before = await current_config(ha, path)
+        if not own and (before is None or "strategy" in before or not before.get("views")):
+            raise RuntimeError("Dieses Dashboard wird von Home Assistant automatisch erzeugt. Öffne es, wähle "
+                               "„Dashboard bearbeiten“ und „Kontrolle übernehmen“ – danach kann Haglo Assist es ändern.")
         result = await backend(session, "POST", "/v1/generate", {
-            "wish": wish, "entities": entities, "previous": strip_bar(before) if refine else None,
-            "refine": refine, "dialog": dialog, "can_ask": can_ask,
+            "wish": wish, "entities": entities,
+            "previous": (strip_bar(before) if own else before) if (refine or not own) else None,
+            "refine": refine or not own, "foreign": not own, "dialog": dialog, "can_ask": can_ask,
         }, timeout=300)
         if result.get("type") == "question":
             # Die KI braucht noch eine Angabe: Rückfrage anzeigen, nichts speichern.
@@ -480,16 +650,29 @@ async def build_dashboard(app, wish: str, refine: bool, dialog: list, can_ask: b
                                  "mehrfach": bool(result.get("mehrfach"))}, "status": result["status"]}
 
         removed: list[str] = []
-        config = clean_config(result["config"], {e["id"] for e in entities}, removed)
-        config.setdefault("title", DASHBOARD_TITLE)
-        if app.get("bar_enabled"):
-            config = add_bar(config)
+        if own:
+            valid = {e["id"] for e in entities}
+        else:
+            # Im Dashboard des Kunden dürfen auch versteckte oder Diagnose-Geräte stehen bleiben.
+            valid = {s["entity_id"] for s in await ha.call("get_states")}
+        config = clean_config(result["config"], valid, removed)
+        if own:
+            config.setdefault("title", DASHBOARD_TITLE)
+            if app.get("bar_enabled"):
+                config = add_bar(config)
+            await ensure_dashboard(ha)
+        else:
+            # Sicherheitsnetz: Bei einem fremden Dashboard darf nicht plötzlich die Hälfte fehlen.
+            had, has = count_all_cards(before), count_all_cards(config)
+            if not config.get("views") or (had > 6 and has < had * 0.6):
+                raise RuntimeError("Die Änderung hätte große Teile deines Dashboards entfernt. Es wurde nichts "
+                                   "gespeichert. Bitte beschreibe genauer, was sich ändern soll.")
 
-        await ensure_dashboard(ha)
-        backup = write_backup(before, f"vor: {wish}")
-        await ha.call("lovelace/config/save", url_path=DASHBOARD_PATH, config=config)
+        backup = write_backup(before, f"vor: {wish}", dashboard)
+        await ha.call("lovelace/config/save", url_path=path, config=config)
     return {"erklaerung": result.get("erklaerung", ""), "config": config, "removed": sorted(set(removed)),
-            "backup": backup, "usage": result.get("usage", {}), "status": result["status"]}
+            "backup": backup, "usage": result.get("usage", {}), "status": result["status"],
+            "dashboard_url": f"/{dashboard or 'lovelace'}"}
 
 
 # ---------------------------------------------------------------- HTTP-Routen
@@ -562,8 +745,9 @@ async def generate(request):
         return web.json_response({"ok": False, "error": "consent_required", "trial": trial}, status=403)
     if trial["expired"]:
         return web.json_response({"ok": False, "error": "trial_expired", "trial": trial}, status=402)
+    dashboard = body.get("dashboard") if isinstance(body.get("dashboard"), str) else DASHBOARD_PATH
     try:
-        result = await build_dashboard(request.app, wish, refine, dialog, can_ask=True)
+        result = await build_dashboard(request.app, wish, refine, dialog, can_ask=True, dashboard=dashboard)
     except BackendError as e:
         return backend_failure(e)
     except Exception as e:
@@ -579,15 +763,46 @@ async def generate(request):
         "cards": count_cards(config),
         "removed": result["removed"],
         "backup": result["backup"],
-        "dashboard_url": f"/{DASHBOARD_PATH}",
+        "dashboard_url": result["dashboard_url"],
         "usage": result["usage"],
         "trial": trial_info(result["status"]),
     })
 
 
+@routes.get("/api/dashboards")
+async def dashboards(request):
+    """Alle Dashboards zur Auswahl in der Oberfläche."""
+    try:
+        async with HAClient(request.app["session"]) as ha:
+            return web.json_response({"ok": True, "dashboards": await list_dashboards(ha)})
+    except Exception as e:
+        return web.json_response({"ok": False, "error": str(e)}, status=500)
+
+
+@routes.post("/api/dashboards/allow")
+async def allow_dashboard(request):
+    """Der Nutzer bestätigt, dass Haglo Assist ein eigenes Dashboard bearbeiten darf."""
+    try:
+        name = (await request.json()).get("id")
+    except Exception:
+        name = None
+    if not isinstance(name, str) or len(name) > 100:
+        return web.json_response({"ok": False, "error": "Ungültiges Dashboard."}, status=400)
+    allowed = allowed_dashboards() | {name}
+    ALLOWED_FILE.parent.mkdir(parents=True, exist_ok=True)
+    ALLOWED_FILE.write_text(json.dumps(sorted(allowed)))
+    return web.json_response({"ok": True})
+
+
 @routes.get("/api/versions")
-async def versions(_):
+async def versions(request):
     """Lokal gespeicherte Dashboard-Versionen, neueste zuerst."""
+    titles = {}
+    try:
+        async with HAClient(request.app["session"]) as ha:
+            titles = {d["id"]: d["title"] for d in await list_dashboards(ha)}
+    except Exception:
+        pass
     out = []
     for f in reversed(version_files()):
         try:
@@ -595,6 +810,7 @@ async def versions(_):
         except Exception:
             continue
         out.append({"id": f.name, "saved_at": v["saved_at"], "label": v.get("label", ""),
+                    "dashboard": titles.get(v["dashboard"], v["dashboard"] or "Übersicht"),
                     "views": [x.get("title", "") for x in v["config"].get("views", [])],
                     "cards": count_cards(v["config"])})
     return web.json_response({"ok": True, "versions": out, "max": MAX_VERSIONS})
@@ -603,12 +819,14 @@ async def versions(_):
 async def restore_version(app, path: Path, keep: bool) -> None:
     """Spielt eine Version zurück. Mit keep=True wird vorher der aktuelle Stand gesichert,
     damit auch das Wiederherstellen rückgängig gemacht werden kann."""
-    config = read_backup(path)["config"]
+    version = read_backup(path)
+    dashboard = version["dashboard"]
     async with HAClient(app["session"]) as ha:
         if keep:
-            write_backup(await current_config(ha), "vor Wiederherstellung")
-        await ensure_dashboard(ha)
-        await ha.call("lovelace/config/save", url_path=DASHBOARD_PATH, config=config)
+            write_backup(await current_config(ha, dashboard or None), "vor Wiederherstellung", dashboard)
+        if dashboard == DASHBOARD_PATH:
+            await ensure_dashboard(ha)
+        await ha.call("lovelace/config/save", url_path=dashboard or None, config=version["config"])
 
 
 @routes.post("/api/restore")
@@ -691,6 +909,7 @@ async def on_startup(app):
         print(f"Registrierung beim Haglo-Server noch nicht möglich: {e}")
     if app["bar_enabled"]:
         app["bar_task"] = asyncio.create_task(bar_listener(app))
+    asyncio.create_task(selftest(app))
 
 
 async def on_cleanup(app):

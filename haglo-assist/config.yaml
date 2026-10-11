@@ -1,5 +1,5 @@
 name: Haglo Assist
-version: "0.9.0"
+version: "0.10.0"
 slug: haglo-assist
 description: KI-Assistent von Haglo – erstellt dein Dashboard auf Deutsch
 url: https://haglotech.com
@@ -17,6 +17,8 @@ hassio_api: true
 options:
   backend_url: https://api.haglotech.com
   dashboard_bar: false
+  own_dashboards: false
 schema:
   backend_url: url
   dashboard_bar: bool
+  own_dashboards: bool
