@@ -1,5 +1,16 @@
 # Änderungen
 
+## 0.14.0
+
+- Geräte schalten: „Mach im Wohnzimmer das Licht aus“ wird sofort ausgeführt. Bei Schlössern, Toren
+  und Alarmanlagen fragt Haglo Assist vorher nach.
+- Fragen beantworten: „Wie warm ist es im Bad?“ Dafür werden aktuelle Werte nur nach deiner
+  Zustimmung übertragen, und nur die der betroffenen Geräte.
+- Automationen, Skripte, Szenen und Helfer in normaler Sprache anlegen und ändern. Alles wird erst
+  als Vorschlag gezeigt und nach deiner Bestätigung angelegt.
+- Eigene Dashboards bearbeiten: Auswahl direkt unter dem Eingabefeld.
+- Eigene Automationen ändern, wenn du es unter „Automationen“ erlaubst. Die bisherige Fassung wird gesichert.
+
 ## 0.13.0
 
 - Verlauf: Unter „Zuletzt“ steht, was Haglo Assist für dich gemacht hat. Getipptes und offene

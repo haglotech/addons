@@ -70,6 +70,10 @@
   .meta { text-align: center; color: var(--muted); font-size: 13px; margin-top: 16px; min-height: 20px; }
   .auto { text-align: left; border: 1px solid var(--line); background: var(--bg); border-radius: 12px; padding: 12px 14px; margin-bottom: 10px; }
   .auto b { color: var(--heading); font-size: 15px; }
+  .kind { font-size: 12px; font-weight: 400; color: var(--muted); border: 1px solid var(--line); border-radius: 999px; padding: 1px 8px; margin-left: 4px; white-space: nowrap; }
+  .opts2 { margin-top: 18px; border-top: 1px solid var(--line); padding-top: 14px; display: flex; flex-direction: column; gap: 12px; }
+  .opts2 label { display: flex; gap: 10px; align-items: flex-start; font-size: 13px; color: var(--muted); cursor: pointer; margin: 0; }
+  .opts2 b { color: var(--text); font-size: 14px; }
   .auto dl { margin: 6px 0 0; display: grid; grid-template-columns: auto 1fr; gap: 3px 10px; font-size: 14px; color: var(--text); }
   .auto dt { color: var(--muted); }
   .auto dd { margin: 0; }
@@ -279,10 +283,14 @@
   <div class="sheet-bg hidden" id="autos">
     <div class="sheet wide">
       <button class="close" id="autosClose" aria-label="Schließen">×</button>
-      <h3>Automationen</h3>
-      <p class="now">Diese Automationen hat Haglo Assist für dich angelegt. Deine eigenen Automationen werden nie angefasst.</p>
+      <h3>Automationen, Skripte, Szenen</h3>
+      <p class="now">Das hat Haglo Assist für dich angelegt. Löschen kannst du hier nur, was von Haglo Assist stammt.</p>
       <div class="vlist" id="alist"></div>
       <p class="hint" id="aHint"></p>
+      <div class="opts2">
+        <label><input type="checkbox" id="optForeign"><span><b>Auch meine eigenen Automationen ändern</b><br>Dafür werden deine bestehenden Automationen an den Haglo-Server und Anthropic übertragen. Vor jeder Änderung wird die bisherige Fassung gesichert.</span></label>
+        <label><input type="checkbox" id="optStates"><span><b>Aktuelle Werte für Fragen immer übertragen</b><br>Für Fragen wie „Wie warm ist es im Bad?“ werden die Werte der betroffenen Geräte übertragen, ohne jedes Mal zu fragen.</span></label>
+      </div>
     </div>
   </div>
 
@@ -398,6 +406,7 @@ function setDashboardMode(exists) {
   hasDashboard = exists;
   const d = dashList.find((x) => x.id === dash);
   $("wish").placeholder = dash !== OWN ? `Was soll ich an „${d ? d.title : "deinem Dashboard"}“ ändern?`
+    : features.control ? (exists ? "Was soll ich ändern, anlegen oder schalten?" : "z. B. Alle Räume mit Licht – oder: Mach das Flurlicht aus")
     : exists ? "Was soll ich ändern?" : "z. B. Alle Räume mit Licht";
 }
 
@@ -440,7 +449,7 @@ $("allowYes").addEventListener("click", async () => {
 async function loadHistory() {
   try {
     const items = (await api("api/history")).history.slice(0, 6);
-    const label = { dashboard: "Dashboard", automation: "Automation", restore: "Version", automation_deleted: "Automation gelöscht" };
+    const label = { dashboard: "Dashboard", automation: "Angelegt", restore: "Wiederhergestellt", automation_deleted: "Gelöscht", control: "Geschaltet", answer: "Antwort" };
     $("hist").innerHTML = items.length ? "<h4>Zuletzt</h4>" + items.map((h) => `<div class="hrow"><span class="t">${when(h.ts)}</span>
       <span class="w">${esc(h.wish || label[h.kind] || "")}<small>${esc(label[h.kind] || "")}${h.text ? " · " + esc(h.text) : ""}</small></span>
       ${h.url ? `<a href="${esc(h.url)}" target="_top">Öffnen</a>` : ""}</div>`).join("") : "";
@@ -468,7 +477,7 @@ async function init() {
     const s = await api("api/status");
     features = s.features || {};
     if (features.automations) {
-      $("tagline").textContent = "Sag, was du brauchst. Ich baue Dashboards und Automationen.";
+      $("tagline").textContent = "Sag, was du brauchst. Ich baue Dashboards und Automationen und schalte deine Geräte.";
       $("autosLink").classList.remove("hidden"); $("autosSep").classList.remove("hidden");
     }
     $("wish").value = mem.get("draft") || "";
@@ -517,7 +526,7 @@ $("accept").addEventListener("click", async () => {
 });
 
 const steps = ["Ich schaue mir deine Geräte an …", "Ich sortiere nach Räumen …", "Ich baue die Kacheln …", "Fast fertig …"];
-async function generate(wish, label, keepDialog) {
+async function generate(wish, label, keepDialog, allowStates) {
   if (!keepDialog) dialog = [];
   asking = null; mem.set("question", null); mem.set("automations", null);
   busy = true; setInputs(false);
@@ -528,10 +537,18 @@ async function generate(wish, label, keepDialog) {
   const t = setInterval(() => { i = Math.min(i + 1, steps.length - 1); $("loadText").textContent = steps[i]; }, 7000);
   try {
     const foreign = dash !== OWN;
-    const r = await api("api/generate", { wish, refine: foreign || hasDashboard, dialog, dashboard: dash });
+    const r = await api("api/generate", { wish, refine: foreign || hasDashboard, dialog, dashboard: dash, allow_states: !!allowStates });
     if (r.question) { showQuestion(wish, label, r.question); return; }
     dialog = []; mem.set("draft", null);
-    if (r.automations) { $("wish").value = ""; showAutomations(wish, r.erklaerung, r.automations); return; }
+    if (r.objects) { $("wish").value = ""; showAutomations(wish, r.erklaerung, r.objects); return; }
+    if (r.need_consent) { showStateConsent(wish, label, r.need_consent); return; }
+    if (r.confirm_actions) { $("wish").value = ""; showConfirmActions(wish, r.erklaerung, r.confirm_actions); return; }
+    if (r.done !== undefined || r.answer !== undefined) {
+      $("wish").value = "";
+      showResult(r.answer !== undefined ? `<p style="color:var(--text);font-size:16px;margin:0">${esc(r.answer)}</p>`
+        : `<h2>✓ Erledigt</h2><p style="margin:0">${esc(r.done)}</p>`);
+      loadHistory(); return;
+    }
     const first = !hasDashboard && !foreign;
     if (!foreign) setDashboardMode(true);
     if (first) addFreshLink();
@@ -716,32 +733,38 @@ document.addEventListener("visibilitychange", async () => {
   try { await api("api/status"); renderPlans(); } catch (e) {}
 });
 
-// ---------------------------------------------------------------- Automationen
-const autoCard = (a) => `<div class="auto"><b>${esc(a.alias)}</b><dl>
+// ---------------------------------------------------------------- Automationen, Skripte, Szenen, Helfer
+const ART = { automation: "Automation", skript: "Skript", szene: "Szene", helfer: "Helfer" };
+const autoCard = (a) => `<div class="auto"><b>${esc(a.alias)}</b> <span class="kind">${ART[a.art] || "Automation"}${a.id ? " · wird geändert" : ""}</span><dl>
   ${a.wann ? `<dt>Wann</dt><dd>${esc(a.wann)}</dd>` : ""}${a.was ? `<dt>Was</dt><dd>${esc(a.was)}</dd>` : ""}</dl></div>`;
 
 // Vorschlag zeigen – angelegt wird erst nach Bestätigung
 function showAutomations(wish, erklaerung, items) {
   mem.set("automations", { wish, erklaerung, items });
+  const one = items.length === 1, change = items.some((a) => a.id);
   showResult(`<div class="ask-q"><p class="step">Vorschlag – noch nicht aktiv</p>
-    <h2>${items.length === 1 ? "Diese Automation anlegen?" : "Diese Automationen anlegen?"}</h2>
+    <h2>${one ? `${ART[items[0].art] || "Automation"} ${items[0].id ? "ändern" : "anlegen"}?` : "Das anlegen?"}</h2>
     ${items.map(autoCard).join("")}
-    <div class="actions" style="justify-content:flex-start"><button class="primary" id="autoYes">Anlegen</button>
+    <div class="actions" style="justify-content:flex-start"><button class="primary" id="autoYes">${change && one ? "Ändern" : "Anlegen"}</button>
       <button class="btn2" id="autoNo">Verwerfen</button></div>
-    <p class="hint">Du kannst sie später unter „Automationen“ wieder löschen. Deine eigenen Automationen bleiben unberührt.</p></div>`);
+    <p class="hint">Du findest alles später unter „Automationen“ und kannst es dort wieder löschen.</p></div>`);
   $("autoNo").onclick = () => { mem.set("automations", null); $("result").classList.add("hidden"); };
   $("autoYes").onclick = async () => {
     $("autoYes").disabled = true;
     try {
       const r = await api("api/automations/apply", { automations: items, wish });
       mem.set("automations", null);
-      showResult(`<h2>✓ ${r.created.length === 1 ? "Die Automation ist aktiv" : "Die Automationen sind aktiv"}</h2>
+      const first = r.created[0], link = { automation: "/config/automation/edit/" + first.id, skript: "/config/script/edit/" + first.id,
+        szene: "/config/scene/edit/" + first.id, helfer: "/config/helpers" }[first.art];
+      showResult(`<h2>✓ ${r.created.length === 1 ? "Fertig und aktiv" : "Alles ist angelegt"}</h2>
         <p>${esc(r.created.map((c) => c.alias).join(", "))}</p>
-        <div class="actions"><a class="btn2" href="/config/automation/edit/${esc(r.created[0].id)}" target="_top">In Home Assistant ansehen</a></div>
+        <div class="actions"><a class="btn2" href="${esc(link)}" target="_top">In Home Assistant ansehen</a></div>
         <div class="links"><button id="autoUndo">Rückgängig</button></div>`);
       $("autoUndo").onclick = async () => {
-        try { for (const c of r.created) await api("api/automations/delete", { id: c.id }); showResult("<p>Die Automation wurde wieder gelöscht.</p>"); loadHistory(); }
-        catch (e) { showResult(`<p class="err">${esc(e.message)}</p>`); }
+        try {
+          for (const c of r.created) await (c.backup ? api("api/automations/restore", { backup: c.backup }) : api("api/automations/delete", { id: c.id }));
+          showResult("<p>Das wurde rückgängig gemacht.</p>"); loadHistory();
+        } catch (e) { showResult(`<p class="err">${esc(e.message)}</p>`); }
       };
       loadHistory();
     } catch (e) {
@@ -750,18 +773,49 @@ function showAutomations(wish, erklaerung, items) {
   };
 }
 
+// Schlösser, Tore, Alarm: erst nach ausdrücklicher Bestätigung
+function showConfirmActions(wish, erklaerung, actions) {
+  showResult(`<div class="ask-q"><p class="step">Sicherheitsabfrage</p><h2>Wirklich ausführen?</h2>
+    <p style="color:var(--text)">${esc(erklaerung)}</p>
+    <div class="actions" style="justify-content:flex-start"><button class="primary" id="actYes">Ja, ausführen</button>
+      <button class="btn2" id="actNo">Abbrechen</button></div></div>`);
+  $("actNo").onclick = () => $("result").classList.add("hidden");
+  $("actYes").onclick = async () => {
+    $("actYes").disabled = true;
+    try { await api("api/actions/run", { actions, wish, erklaerung }); showResult(`<h2>✓ Erledigt</h2><p style="margin:0">${esc(erklaerung)}</p>`); loadHistory(); }
+    catch (e) { showResult(`<p class="err">Das hat nicht geklappt: ${esc(e.message)}</p>`); }
+  };
+}
+
+// Aktuelle Zustände verlassen das Gerät nur mit Zustimmung
+function showStateConsent(wish, label, items) {
+  showResult(`<div class="ask-q"><p class="step">Deine Zustimmung ist nötig</p><h2>Aktuelle Werte übertragen?</h2>
+    <p style="color:var(--text)">Um das zu beantworten, braucht Haglo Assist den aktuellen Zustand von:
+      <b>${esc(items.map((i) => i.name).join(", ") || "den betroffenen Geräten")}</b>.
+      Diese Werte gehen an den Haglo-Server und unseren KI-Dienstleister Anthropic (USA). Verläufe werden nie übertragen.</p>
+    <div class="actions" style="justify-content:flex-start"><button class="primary" id="stOnce">Einmal erlauben</button>
+      <button class="btn2" id="stAlways">Immer erlauben</button><button class="btn2" id="stNo">Abbrechen</button></div>
+    <p class="hint">„Immer erlauben“ kannst du unter „Automationen“ wieder abschalten.</p></div>`);
+  $("stNo").onclick = () => $("result").classList.add("hidden");
+  $("stOnce").onclick = () => generate(wish, label, false, true);
+  $("stAlways").onclick = async () => { try { await api("api/prefs", { states_allowed: true }); } catch (e) {} generate(wish, label, false, true); };
+}
+
 async function openAutos() {
   $("autos").classList.remove("hidden");
   $("aHint").textContent = ""; $("aHint").classList.remove("err");
   try {
     const r = await api("api/automations");
     $("alist").innerHTML = r.automations.length ? r.automations.map((a) => `<div class="ver">
-        <div class="info"><div class="when">${esc(a.alias)}${a.on ? "" : " (ausgeschaltet)"}</div>
+        <div class="info"><div class="when">${esc(a.alias)} <span class="kind">${ART[a.art] || ""}${a.on ? "" : " · ausgeschaltet"}</span></div>
         <div class="what">${esc([a.wann, a.was].filter(Boolean).join(" → "))}</div></div>
         <button class="btn2" data-del="${esc(a.id)}">Löschen</button></div>`).join("")
-      : `<p class="now">Noch keine. Schreib zum Beispiel: „Wenn sich im Flur etwas bewegt, mach das Licht an.“</p>`;
+      : `<p class="now">Noch nichts. Schreib zum Beispiel: „Wenn sich im Flur etwas bewegt, mach das Licht an.“</p>`;
+    $("optForeign").checked = r.foreign_automations; $("optStates").checked = r.states_allowed;
   } catch (e) { $("aHint").textContent = e.message; $("aHint").classList.add("err"); }
 }
+$("optForeign").addEventListener("change", (e) => api("api/prefs", { foreign_automations: e.target.checked }).catch(() => {}));
+$("optStates").addEventListener("change", (e) => api("api/prefs", { states_allowed: e.target.checked }).catch(() => {}));
 $("autosLink").addEventListener("click", openAutos);
 $("autosLink").addEventListener("keydown", (e) => { if (e.key === "Enter") openAutos(); });
 $("autosClose").addEventListener("click", () => $("autos").classList.add("hidden"));

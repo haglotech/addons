@@ -11,10 +11,12 @@
 Sag in einem Satz, was du sehen willst – Haglo Assist baut daraus ein
 Home-Assistant-Dashboard. Auf Deutsch, ohne YAML.
 
-- Speichert in ein **eigenes Dashboard „Haglo Dashboard“**. Deine bestehenden
-  Dashboards werden nie angefasst.
-- Legt vor jeder Änderung ein Backup an, „Rückgängig“ stellt es wieder her.
-- 30 Tage kostenlos testen. Die Testphase endet automatisch, ohne Zahlungsdaten.
+- **Dashboards:** baut ein eigenes „Haglo Dashboard“ und ändert auf Wunsch auch deine bestehenden.
+  Vor jeder Änderung wird eine Version gesichert, die du wiederherstellen kannst.
+- **Automationen, Skripte, Szenen:** „Wenn sich im Flur etwas bewegt, mach das Licht an.“ Du siehst
+  erst einen Vorschlag und bestätigst ihn.
+- **Schalten und fragen:** „Mach im Wohnzimmer das Licht aus“ oder „Wie warm ist es im Bad?“
+- Free für alle. Bei Geräten von Haglo ist Lite mindestens 12 Monate inklusive.
 
 ### Installation
 
@@ -37,6 +39,9 @@ und Einheiten an den Haglo-Server (`api.haglotech.com`) und von dort an unseren
 KI-Dienstleister Anthropic. Messwerte, Zustände und Verlaufsdaten werden nicht übertragen. Um die Testphase zu prüfen,
 werden nach deiner Zustimmung Seriennummer und Netzwerkadresse des Geräts an Haglo gesendet.
 Frühere Dashboard-Versionen bleiben nur lokal auf deinem Gerät.
+
+Aktuelle Werte einzelner Geräte (für Fragen wie „Wie warm ist es im Bad?“), der Aufbau eigener
+Dashboards und eigene Automationen werden nur übertragen, wenn du dem in der App ausdrücklich zustimmst.
 Details: [Datenschutzerklärung](https://haglotech.com/policies/privacy-policy) ·
 [AGB](https://haglotech.com/policies/terms-of-service)
 
