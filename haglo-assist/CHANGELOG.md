@@ -1,6 +1,6 @@
 # Änderungen
 
-## 0.12.3
+## 0.12.4
 
 - Neues Symbol in der Seitenleiste
 
