@@ -1,4 +1,4 @@
-# HagloTech Apps (Add-ons) für Home Assistant
+# Haglo Apps für Home Assistant
 
 ## Haglo Assist
 
