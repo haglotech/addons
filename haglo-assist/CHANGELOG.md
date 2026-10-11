@@ -1,5 +1,11 @@
 # Änderungen
 
+## 0.7.0
+
+- „Plan & Abo“ direkt in der App: Pläne ansehen, monatlich oder jährlich wählen
+- Bezahlen, Abo verwalten und Kündigen laufen vollständig über Stripe
+- Integration direkt in der App anfragen
+
 ## 0.6.1
 
 - Oberfläche überarbeitet: Schriftzug „HAGLO ASSIST“, mittige Anordnung, Vorschläge mit Symbolen

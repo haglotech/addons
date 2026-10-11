@@ -34,7 +34,7 @@ SKIP_DOMAINS = {
     "zone", "persistent_notification", "assist_satellite", "ai_task",
 }
 
-ADDON_VERSION = "0.6.1"
+ADDON_VERSION = "0.7.0"
 DEFAULT_BACKEND_URL = "https://api.haglotech.com"
 HUB_FILE = Path("/data/hub.json")
 TERMS_VERSION = "2026-10"
@@ -42,7 +42,6 @@ TERMS_VERSION = "2026-10"
 FALLBACK_URLS = {
     "terms_url": "https://haglotech.com/policies/terms-of-service",
     "privacy_url": "https://haglotech.com/policies/privacy-policy",
-    "subscribe_url": "https://haglotech.com/pages/assistent-abo",
     "booking_url": "https://haglotech.com/pages/termin",
 }
 
@@ -146,7 +145,6 @@ def trial_info(status: dict | None) -> dict:
         "subscription": status["subscription"],
         "terms_url": status["terms_url"],
         "privacy_url": status["privacy_url"],
-        "subscribe_url": status["subscribe_url"],
         "booking_url": status["booking_url"],
     }
 
