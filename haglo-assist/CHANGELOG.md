@@ -7,7 +7,7 @@
 
 ## 0.10.0
 
-- Neue Pläne: Free für alle, dazu Lite, Pro und Max. Auf Haglo-Geräten ist Lite dauerhaft inklusive.
+- Neue Pläne: Free für alle, dazu Lite, Pro und Max. Auf Haglo-Geräten ist Lite derzeit inklusive.
 - Nutzungslimits laufen jetzt in einem Zeitfenster von einigen Stunden und pro Woche und füllen sich
   von selbst wieder auf. „Plan & Abo“ zeigt den Verbrauch und wann es weitergeht.
 - Zum Ausprobieren: eigene Dashboards bearbeiten (Option „own_dashboards“ in der Konfiguration)
