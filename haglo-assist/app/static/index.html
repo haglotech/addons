@@ -261,6 +261,7 @@
         <button class="btn2" id="portal">Abo verwalten</button>
         <button class="btn2" id="cancel">Verträge hier kündigen</button>
       </div>
+      <p class="hint">Die Limits füllen sich laufend wieder auf. Große Dashboards und lange Wünsche verbrauchen mehr als kleine Änderungen.</p>
       <p class="hint" id="planHint">Bezahlung, Rechnungen und Kündigung laufen sicher über unseren Zahlungsdienst Stripe.</p>
       <details class="ask">
         <summary>Integration anfragen</summary>
@@ -299,16 +300,17 @@ function setTrial(t) {
   const p = $("pill");
   p.classList.remove("hidden", "warn", "end");
   const days = `${t.days_left} ${t.days_left === 1 ? "Tag" : "Tage"}`;
-  const n = t.requests_left, left = `${n} ${n === 1 ? "Änderung" : "Änderungen"}`;
+  const pct = t.window ? Math.max(t.window.used_pct, t.week.used_pct >= 100 ? 100 : 0) : 0;
+  const used = `${pct} % genutzt`;
   if (!t.accepted) { p.textContent = "Kostenlos starten"; }
   else if (t.expired) { p.textContent = `${t.plan_name || ""} · Limit erreicht`; p.classList.add("end"); showExpired(); }
-  else if (!t.plan) { p.textContent = `Noch ${left}`; }
+  else if (!t.plan) { p.textContent = "Haglo Assist"; }
   else if (t.plan === "trial") {
-    p.innerHTML = `Testphase · noch ${days}<span class="long"> · ${left} frei</span>`;
-    if (t.days_left <= 5 || n <= 1) p.classList.add("warn");
+    p.innerHTML = `Testphase · noch ${days}<span class="long"> · ${used}</span>`;
+    if (t.days_left <= 5 || pct >= 80) p.classList.add("warn");
   } else {
-    p.innerHTML = `${esc(t.plan_name)} · noch ${left}`;
-    if (n <= 1) p.classList.add("warn");
+    p.innerHTML = `${esc(t.plan_name)} · ${used}`;
+    if (pct >= 80) p.classList.add("warn");
   }
   if (!t.expired && wasExpired) { $("result").classList.add("hidden"); setInputs(true); }
   wasExpired = !!t.expired;
@@ -487,10 +489,10 @@ $("result").addEventListener("click", (e) => {
 function showExpired() {
   setInputs(false);
   const order = ["free", "lite", "pro", "max"], top = (trial.level || trial.plan) === "max";
-  const weekly = trial.week && trial.week.left === 0;
+  const weekly = trial.week && trial.week.blocked;
   showResult(`
     <h2>Limit erreicht</h2>
-    <p>Dein Dashboard bleibt erhalten. ${weekly ? "Dein Wochenlimit ist aufgebraucht" : "Das Limit für dieses Zeitfenster ist aufgebraucht"} –
+    <p>Dein Dashboard bleibt erhalten. ${weekly ? "Dein Wochenlimit ist aufgebraucht" : `Dein ${trial.window_hours || 5}-Stunden-Limit ist aufgebraucht`} –
       weiter geht es ${resetText(trial.reset_at)}.${top ? "" : " Mit einem größeren Plan kannst du sofort weitermachen."}</p>
     <div class="actions">${top ? "" : '<button class="primary" data-plans>Pläne ansehen</button>'}
     <a class="btn2" href="${trial.booking_url}" target="_blank" rel="noopener">Beratung buchen</a></div>`);
@@ -515,8 +517,8 @@ function planHint(text, err) {
 
 function meter(label, w) {
   if (!w) return "";
-  const pct = Math.min(100, Math.round((w.used / Math.max(1, w.limit)) * 100));
-  return `<div class="meter"><div class="mrow"><span>${label}</span><span>${w.left} von ${w.limit} frei${w.left === 0 && w.reset_at ? ` · neu ${resetText(w.reset_at)}` : ""}</span></div>
+  const pct = w.used_pct;
+  return `<div class="meter"><div class="mrow"><span>${label}</span><span>${pct} % genutzt${w.blocked && w.reset_at ? ` · wieder frei ${resetText(w.reset_at)}` : ""}</span></div>
     <div class="track"><i style="width:${pct}%" class="${pct >= 100 ? "full" : pct >= 80 ? "high" : ""}"></i></div></div>`;
 }
 
@@ -527,7 +529,7 @@ function renderPlans() {
     `Aktuell: <b>${esc(trial.plan_name)}</b>` + (trial.plan === "trial"
       ? ` – ${trial.days_left} ${trial.days_left === 1 ? "Tag" : "Tage"} lang die Limits von ${esc(catalog.plans[trial.level].name)}`
       : sub.cancel_at_period_end ? " · gekündigt zum Ende der Laufzeit" : "");
-  $("meters").innerHTML = meter(`Dieses Zeitfenster (${hours} Stunden)`, trial.window) + meter("Diese Woche", trial.week);
+  $("meters").innerHTML = meter(`${hours}-Stunden-Limit`, trial.window) + meter("Wochenlimit", trial.week);
   $("manage").classList.toggle("hidden", !sub.active);
   $("planCards").innerHTML = Object.entries(catalog.plans).map(([key, p]) => {
     const cur = (trial.level || trial.plan) === key, included = trial.included_plan === key;
@@ -542,7 +544,7 @@ function renderPlans() {
       else action = `<span class="tag2">Bald verfügbar</span>`;
     }
     return `<div class="plan${cur ? " cur" : ""}"><b>${esc(p.name)}</b><div class="price">${included ? "inklusive" : price}</div>
-      <div class="what">${p.per_window} ${p.per_window === 1 ? "Änderung" : "Änderungen"} alle ${hours} Stunden<br>${p.per_week} pro Woche</div>${action}</div>`;
+      <div class="what">${key === "free" ? "Zum Ausprobieren" : `${p.usage_factor}× mehr Nutzung als Free`}</div>${action}</div>`;
   }).join("");
 }
 

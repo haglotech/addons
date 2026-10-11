@@ -36,7 +36,7 @@ SKIP_DOMAINS = {
     "zone", "persistent_notification", "assist_satellite", "ai_task",
 }
 
-ADDON_VERSION = "0.10.0"
+ADDON_VERSION = "0.11.0"
 MAX_VERSIONS = 30                      # so viele Dashboard-Versionen bleiben lokal gespeichert
 BAR_ENTITY = "input_text.haglo_assist"           # Eingabeleiste im Dashboard
 BAR_STATUS = "input_text.haglo_assist_status"    # Rückmeldung darunter
@@ -567,7 +567,7 @@ async def set_text(ha: HAClient, entity: str, value: str):
 
 BAR_ERRORS = {
     "consent_required": "Bitte öffne zuerst Haglo Assist in der Seitenleiste und stimme den Bedingungen zu.",
-    "quota_exceeded": "Dein Kontingent ist aufgebraucht. Mehr dazu in Haglo Assist in der Seitenleiste.",
+    "quota_exceeded": "Dein Nutzungslimit ist erreicht. Mehr dazu in Haglo Assist in der Seitenleiste.",
 }
 
 

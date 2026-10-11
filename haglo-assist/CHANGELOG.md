@@ -1,5 +1,10 @@
 # Änderungen
 
+## 0.11.0
+
+- Nutzungslimits wie bei Claude: ein 5-Stunden-Limit und ein Wochenlimit, angezeigt in Prozent.
+  Kleine Änderungen verbrauchen weniger als große Dashboards.
+
 ## 0.10.0
 
 - Neue Pläne: Free für alle, dazu Lite, Pro und Max. Auf Haglo-Geräten ist Lite dauerhaft inklusive.
