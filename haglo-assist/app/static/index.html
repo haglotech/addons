@@ -342,6 +342,7 @@ const mem = {
   get(k) { try { return JSON.parse(sessionStorage.getItem("haglo." + k)); } catch (e) { return null; } },
   set(k, v) { try { v == null ? sessionStorage.removeItem("haglo." + k) : sessionStorage.setItem("haglo." + k, JSON.stringify(v)); } catch (e) {} },
 };
+let welcomed = false;   // Begrüßung für Käufer eines Haglo-Geräts
 let wasExpired = false, resetTimer = null;
 let ownerHidden = true;  // Kauf-Hinweis: bleibt verborgen, bis der Status sagt, dass er nicht weggeklickt wurde
 let dialog = [], asking = null;  // Rückfragen der KI: bisherige Antworten und die offene Frage
@@ -374,7 +375,7 @@ function setTrial(t) {
   $("owner").classList.toggle("hidden", !gift || ownerHidden);
   if (gift) $("owner").innerHTML = `<span class="txt" data-plans-open>Danke für deinen Kauf bei Haglo: <b>${esc(t.plan_name)} ist bei deinem Gerät inklusive</b>${until ? `, mindestens bis ${until}` : ""}.</span>
     <button class="x" id="ownerClose" aria-label="Hinweis schließen" title="Nicht mehr anzeigen">×</button>`;
-  if (!t.accepted) { p.textContent = "Kostenlos starten"; p.classList.add("cta"); }
+  if (!t.accepted) { p.textContent = welcomed ? "Loslegen" : "Kostenlos starten"; p.classList.add("cta"); }
   else if (t.expired) { p.textContent = `${t.plan_name || ""} · Limit erreicht`; p.classList.add("end"); showExpired(); }
   else if (!t.plan) { p.textContent = "Haglo Assist"; }
   else if (t.plan === "trial") {
@@ -483,6 +484,7 @@ async function init() {
     $("wish").value = mem.get("draft") || "";
     loadHistory();
     if (s.busy) waitForJob(s.busy);
+    else if (s.preinstalled && trial && !trial.accepted) showWelcome();
     else if (mem.get("question")) { const m = mem.get("question"); dialog = m.dialog || []; showQuestion(m.wish, m.label, m.q); }
     else if (mem.get("automations")) { const m = mem.get("automations"); showAutomations(m.wish, m.erklaerung, m.items); }
     setDashboardMode(s.has_dashboard);
@@ -520,6 +522,7 @@ $("accept").addEventListener("click", async () => {
   try {
     await api("api/consent", { version: "2026-10" });
     $("consent").classList.add("hidden");
+    if (welcomed && !pending) $("result").classList.add("hidden");
     if (pending) generate(...pending);
     pending = null;
   } catch (e) { alert(e.message); $("accept").disabled = false; }
@@ -569,6 +572,21 @@ async function generate(wish, label, keepDialog, allowStates) {
     clearInterval(t); $("loading").classList.add("hidden");
     busy = false; if (!(trial && trial.expired)) setInputs(true);
   }
+}
+
+// ---------------------------------------------------------------- Begrüßung auf Haglo-Geräten
+function showWelcome() {
+  welcomed = true; $("pill").textContent = "Loslegen";
+  showResult(`<h2>Danke für deinen Kauf bei Haglo</h2>
+    <p style="color:var(--text)">Haglo Assist ist auf deinem Gerät schon eingerichtet. <b>Lite ist mindestens 12 Monate ohne Aufpreis inklusive.</b></p>
+    <div class="auto"><dl>
+      <dt>Dashboards</dt><dd>„Zeig mir alle Räume mit Licht und Heizung.“</dd>
+      <dt>Automationen</dt><dd>„Wenn sich im Flur etwas bewegt, mach das Licht an.“</dd>
+      <dt>Schalten</dt><dd>„Mach im Wohnzimmer das Licht aus.“</dd></dl></div>
+    <div class="actions"><button class="primary" id="welcomeGo">Loslegen</button>
+      <a class="btn2" href="https://haglotech.com/pages/termin" target="_blank" rel="noopener">Lieber persönlich? Beratung buchen</a></div>
+    <p class="hint">Sobald du Geräte hinzugefügt hast, sag einfach in einem Satz, was du brauchst.</p>`);
+  $("welcomeGo").onclick = () => $("consent").classList.remove("hidden");
 }
 
 // ---------------------------------------------------------------- Rückfragen

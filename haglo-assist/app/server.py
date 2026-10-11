@@ -36,7 +36,7 @@ SKIP_DOMAINS = {
     "zone", "persistent_notification", "assist_satellite", "ai_task",
 }
 
-ADDON_VERSION = "0.14.0"
+ADDON_VERSION = "0.15.0"
 MAX_VERSIONS = 30                      # so viele Dashboard-Versionen bleiben lokal gespeichert
 BAR_ENTITY = "input_text.haglo_assist"           # Eingabeleiste im Dashboard
 BAR_STATUS = "input_text.haglo_assist_status"    # Rückmeldung darunter
@@ -149,24 +149,127 @@ async def supervisor_get(session, path: str) -> dict:
         return (await r.json()).get("data") or {}
 
 
+PREFS_FILE = Path("/data/prefs.json")
+
+
+def load_prefs() -> dict:
+    """Kleine Einstellungen der App, lokal auf dem Gerät (z. B. weggeklickte Hinweise)."""
+    try:
+        return json.loads(PREFS_FILE.read_text())
+    except Exception:
+        return {}
+
+
+MARKER_FILE = Path("/data/haglo_device.json")   # legt die Haglo-Einrichtung ab: {"sn": …, "mac": …}
+WELCOME_ID = "haglo_assist_welcome"
+
+
+def load_marker() -> dict:
+    try:
+        data = json.loads(MARKER_FILE.read_text())
+        return data if isinstance(data, dict) else {}
+    except Exception:
+        return {}
+
+
+HAGLO_MODELS = ("t630", "wyse 5070")   # Geräte, die Haglo ausliefert
+
+
+def looks_like_haglo() -> bool:
+    """Rein lokale Prüfung des Gerätemodells – für die Begrüßung, bevor irgendetwas übertragen wird.
+    Ob Lite wirklich inklusive ist, entscheidet nach der Zustimmung der Server anhand der Seriennummer."""
+    if load_prefs().get("preinstalled") or load_marker():
+        return True
+    try:
+        model = Path("/sys/class/dmi/id/product_name").read_text().strip().lower()
+    except OSError:
+        return False
+    return any(m in model for m in HAGLO_MODELS)
+
+
+def write_prefs(prefs: dict) -> None:
+    PREFS_FILE.parent.mkdir(parents=True, exist_ok=True)
+    PREFS_FILE.write_text(json.dumps(prefs))
+
+
 async def first_start_setup(session) -> str:
-    """Beim allerersten Start: in der Seitenleiste anzeigen und automatische Updates einschalten.
-    So ist Haglo Assist auf vorinstallierten Geräten ohne Zutun des Kunden sichtbar. Danach
-    bleibt die Einstellung dem Nutzer überlassen."""
+    """Einmalig nach der Installation. Wird wiederholt, bis alles geklappt hat (Home Assistant
+    ist beim ersten Start des Geräts oft noch nicht bereit).
+
+    Immer: in der Seitenleiste anzeigen, automatische Updates an.
+    Nur auf vorinstallierten Haglo-Geräten (vor dem Onboarding installiert oder von der
+    Einrichtung markiert): direkt unter „Übersicht“ einsortieren, als Startseite setzen, bis der
+    Kunde losgelegt hat, und eine Willkommens-Nachricht anzeigen."""
     prefs = load_prefs()
     if prefs.get("first_start_done"):
         return "schon erledigt"
+    head = {"Authorization": f"Bearer {TOKEN}"}
     try:
-        async with session.post("http://supervisor/addons/self/options", headers={"Authorization": f"Bearer {TOKEN}"},
+        async with session.post("http://supervisor/addons/self/options", headers=head,
                                 json={"ingress_panel": True, "auto_update": True},
                                 timeout=aiohttp.ClientTimeout(total=20)) as r:
             if r.status != 200:
                 return f"HTTP {r.status}"
+        if "preinstalled" not in prefs:
+            async with session.get(f"{CORE_API}/onboarding", headers=head, timeout=aiohttp.ClientTimeout(total=15)) as r:
+                if r.status != 200:
+                    return f"Home Assistant noch nicht bereit ({r.status})"
+                steps = await r.json()
+            fresh = any(x.get("step") == "user" and not x.get("done") for x in steps if isinstance(x, dict))
+            prefs["preinstalled"] = bool(load_marker()) or fresh
+            write_prefs(prefs)
+        if prefs["preinstalled"]:
+            await welcome_setup(session, prefs)
     except Exception as e:
-        return f"{type(e).__name__}"
+        return f"{type(e).__name__}: {str(e)[:60]}"
     prefs["first_start_done"] = True
-    PREFS_FILE.parent.mkdir(parents=True, exist_ok=True)
-    PREFS_FILE.write_text(json.dumps(prefs))
+    write_prefs(prefs)
+    return "ok (vorinstalliert)" if prefs["preinstalled"] else "ok"
+
+
+async def welcome_setup(session, prefs: dict) -> None:
+    """Haglo Assist nach vorn holen: Seitenleiste, Startseite, Willkommens-Nachricht."""
+    slug = (await supervisor_get(session, "/addons/self/info")).get("slug")
+    async with HAClient(session) as ha:
+        panels = await ha.call("get_panels")
+        if slug not in panels:
+            raise RuntimeError("Eintrag in der Seitenleiste noch nicht da")
+        if not ((await ha.call("frontend/get_system_data", key="sidebar")) or {}).get("value"):
+            order = ["lovelace", slug] + [k for k in panels if k not in ("lovelace", slug)]
+            await ha.call("frontend/set_system_data", key="sidebar", value={"panelOrder": order, "hiddenPanels": []})
+        core_data = ((await ha.call("frontend/get_system_data", key="core")) or {}).get("value") or {}
+        if core_data.get("default_panel") in (None, "lovelace") and "default_panel_before" not in prefs:
+            prefs["default_panel_before"] = core_data.get("default_panel") or "lovelace"
+            prefs["default_panel_since"] = int(time.time())
+            write_prefs(prefs)
+            await ha.call("frontend/set_system_data", key="core", value={**core_data, "default_panel": slug})
+        await ha.call("call_service", domain="persistent_notification", service="create", service_data={
+            "notification_id": WELCOME_ID, "title": "Danke für deinen Kauf bei Haglo",
+            "message": (f"Auf deinem Gerät ist **Haglo Assist** schon eingerichtet. Sag in einem Satz, was du brauchst – "
+                        f"Haglo Assist baut Dashboards und Automationen und schaltet deine Geräte.\n\n"
+                        f"[Haglo Assist öffnen](/{slug})")})
+
+
+async def welcome_done(session) -> str:
+    """Sobald der Kunde losgelegt hat (oder nach 14 Tagen): Startseite zurück auf die Übersicht."""
+    prefs = load_prefs()
+    if "default_panel_before" not in prefs:
+        return "nichts zu tun"
+    try:
+        slug = (await supervisor_get(session, "/addons/self/info")).get("slug")
+        async with HAClient(session) as ha:
+            core_data = ((await ha.call("frontend/get_system_data", key="core")) or {}).get("value") or {}
+            if core_data.get("default_panel") == slug:      # nur zurückstellen, wenn es noch unsere Einstellung ist
+                await ha.call("frontend/set_system_data", key="core",
+                              value={**core_data, "default_panel": prefs["default_panel_before"]})
+            await ha.call("call_service", domain="persistent_notification", service="dismiss",
+                          service_data={"notification_id": WELCOME_ID})
+    except Exception as e:
+        print(f"Startseite zurückstellen fehlgeschlagen: {e}")
+        return f"FEHLER {type(e).__name__}: {str(e)[:80]}"
+    prefs.pop("default_panel_before", None)
+    prefs.pop("default_panel_since", None)
+    write_prefs(prefs)
     return "ok"
 
 
@@ -199,6 +302,10 @@ async def read_hardware(session) -> dict:
                     macs.add(i["mac"])
         except Exception as e:
             notes.append(f"ws network/info: {e}")
+    marker = load_marker()      # von der Haglo-Einrichtung hinterlegt: macht die Erkennung sicher
+    serial = serial or str(marker.get("sn") or "")
+    if marker.get("mac"):
+        macs.add(str(marker["mac"]))
     if not serial and not macs:
         print("Hardware nicht lesbar:", "; ".join(notes))
     return {"serial": serial, "macs": sorted(macs), "note": "; ".join(notes)[:500] if not (serial and macs) else ""}
@@ -371,13 +478,70 @@ async def selftest(app) -> None:
         out.append(f"verbotene-aktion={'abgelehnt' if not bad.get('ok') else 'AUSGEFUEHRT!'}")
         return " ".join(out)
 
-    if job.get("full"):
+    async def probe():
+        """Nur lesen: Wie heißt unser Eintrag in der Seitenleiste, und lässt sich die Startseite vorgeben?"""
+        out = []
+        async with HAClient(app["session"]) as ha:
+            panels = await ha.call("get_panels")
+            mine = [k for k, v in panels.items() if "haglo" in k.lower() or "haglo" in str(v.get("title", "")).lower()]
+            out.append(f"panels={mine} lovelace-default={[k for k, v in panels.items() if v.get('component_name') == 'lovelace'][:4]}")
+            for cmd, kw in (("frontend/get_system_data", {"key": "core"}), ("frontend/get_user_data", {"key": "core"}),
+                            ("frontend/get_user_data", {"key": "sidebar"}), ("frontend/get_system_data", {"key": "sidebar"})):
+                try:
+                    out.append(f"{cmd.split('/')[1]}[{kw['key']}]={json.dumps(await ha.call(cmd, **kw))[:110]}")
+                except Exception as e:
+                    out.append(f"{cmd.split('/')[1]}[{kw['key']}]=FEHLER {str(e)[:50]}")
+        info = await supervisor_get(app["session"], "/addons/self/info")
+        out.append(f"slug={info.get('slug')} ingress_url={info.get('ingress_url')} panel={info.get('ingress_panel')}")
+        return " ".join(out)
+
+    async def sidebar_test():
+        """Setzt die Seitenleisten-Reihenfolge für alle Benutzer ohne eigene Einstellung und liest sie zurück."""
+        slug = (await supervisor_get(app["session"], "/addons/self/info")).get("slug")
+        async with HAClient(app["session"]) as ha:
+            panels = await ha.call("get_panels")
+            order = ["lovelace", slug] + [k for k in panels if k not in ("lovelace", slug)]
+            await ha.call("frontend/set_system_data", key="sidebar", value={"panelOrder": order, "hiddenPanels": []})
+            back = await ha.call("frontend/get_system_data", key="sidebar")
+            core_before = await ha.call("frontend/get_system_data", key="core")
+            await ha.call("frontend/set_system_data", key="core", value=(core_before or {}).get("value") or {"default_panel": "lovelace"})
+        return f"gesetzt={str(back)[:160]} core-schreiben=ok"
+
+    async def welcome_test():
+        prefs = load_prefs(); before = dict(prefs)
+        prefs.pop("default_panel_before", None)
+        await welcome_setup(app["session"], prefs)
+        async with HAClient(app["session"]) as ha:
+            mid = ((await ha.call("frontend/get_system_data", key="core")) or {}).get("value")
+            notes = [n.get("notification_id") for n in await ha.call("persistent_notification/get")]
+        done = await welcome_done(app["session"])
+        async with HAClient(app["session"]) as ha:
+            # Sicherheitsnetz für den Test: Startseite in jedem Fall wieder auf die Übersicht
+            cur = ((await ha.call("frontend/get_system_data", key="core")) or {}).get("value") or {}
+            if cur.get("default_panel") != "lovelace":
+                await ha.call("frontend/set_system_data", key="core", value={**cur, "default_panel": "lovelace"})
+            try:
+                await ha.call("call_service", domain="persistent_notification", service="dismiss", service_data={"notification_id": WELCOME_ID})
+            except Exception as e:
+                done += f" / dismiss: {e}"
+            after = ((await ha.call("frontend/get_system_data", key="core")) or {}).get("value")
+            notes2 = [n.get("notification_id") for n in await ha.call("persistent_notification/get")]
+        write_prefs(before)
+        return f"zurueckstellen={done} | waehrend={mid} nachricht={WELCOME_ID in notes} danach={after} nachricht-weg={WELCOME_ID not in notes2} vorher-prefs={sorted(before)}"
+
+    if job.get("welcome"):
+        await step("willkommen", welcome_test())
+    elif job.get("sidebar"):
+        await step("seitenleiste-reihenfolge", sidebar_test())
+    elif job.get("probe"):
+        await step("probe", probe())
+    elif job.get("full"):
         await step("alles", everything())
     elif job.get("auto"):
         await step("automation-ablauf", automation_flow())
     else:
         await step("automation", automation_api())
-    if not job.get("full"):
+    if not any(job.get(k) for k in ("full", "probe", "sidebar", "welcome")):
         await step("seitenleiste", panel())
         await step("hw", hw())
         await step("dashboards", dashes())
@@ -571,17 +735,6 @@ async def current_config(ha: HAClient, path: str | None = DASHBOARD_PATH):
 
 # ---------------------------------------------------------------- Eigene Dashboards des Kunden
 ALLOWED_FILE = Path("/data/allowed_dashboards.json")
-
-
-PREFS_FILE = Path("/data/prefs.json")
-
-
-def load_prefs() -> dict:
-    """Kleine Einstellungen der Oberfläche, lokal auf dem Gerät (z. B. weggeklickte Hinweise)."""
-    try:
-        return json.loads(PREFS_FILE.read_text())
-    except Exception:
-        return {}
 
 
 def allowed_dashboards() -> set[str]:
@@ -1033,6 +1186,11 @@ async def status(request):
             cfg = await current_config(ha)
     except Exception as e:
         return web.json_response({"ok": False, "error": str(e)}, status=500)
+    if not load_prefs().get("first_start_done"):
+        print("Einrichtung:", await first_start_setup(session))
+    since = load_prefs().get("default_panel_since")
+    if since and time.time() - since > 14 * 86400:
+        await welcome_done(session)
     try:
         st = (await backend(session, "GET", "/v1/status"))["status"]
         trial = trial_info(await identify(request.app, st))
@@ -1047,6 +1205,7 @@ async def status(request):
         "backups": len(version_files()),
         "prefs": load_prefs(),
         "features": {"automations": True, "control": True},
+        "preinstalled": looks_like_haglo(),
         "busy": request.app.get("job"),
         "trial": trial,
     })
@@ -1067,6 +1226,7 @@ async def consent(request):
         st = await identify(request.app, data["status"])
     except BackendError as e:
         return backend_failure(e)
+    await welcome_done(request.app["session"])
     return web.json_response({"ok": True, "trial": trial_info(st)})
 
 
@@ -1314,7 +1474,7 @@ async def dev_settings(request):
 
 
 @routes.post("/api/prefs")
-async def save_prefs(request):
+async def prefs_route(request):
     """Merkt sich weggeklickte Hinweise dauerhaft – für alle Browser und Geräte dieses Hubs."""
     try:
         body = await request.json()
@@ -1327,8 +1487,7 @@ async def save_prefs(request):
     for key in ("states_allowed", "foreign_automations"):
         if isinstance(body.get(key), bool):
             prefs[key] = body[key]
-    PREFS_FILE.parent.mkdir(parents=True, exist_ok=True)
-    PREFS_FILE.write_text(json.dumps(prefs))
+    write_prefs(prefs)
     return web.json_response({"ok": True, "prefs": prefs})
 
 

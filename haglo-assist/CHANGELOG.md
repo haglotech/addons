@@ -1,5 +1,11 @@
 # Änderungen
 
+## 0.15.0
+
+- Begrüßung auf Haglo-Geräten: Dank für den Kauf, kurze Einführung und der Hinweis auf das inklusive Lite
+- Auf vorinstallierten Geräten steht Haglo Assist direkt unter „Übersicht“, öffnet sich beim ersten
+  Start und meldet sich mit einer Willkommens-Nachricht
+
 ## 0.14.0
 
 - Geräte schalten: „Mach im Wohnzimmer das Licht aus“ wird sofort ausgeführt. Bei Schlössern, Toren
