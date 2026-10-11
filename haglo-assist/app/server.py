@@ -9,8 +9,10 @@ Testphase, Zustimmung, Pläne und der KI-Aufruf liegen im Backend
 (Standard https://api.haglotech.com). Im Add-on liegt kein API-Schlüssel.
 """
 
+import asyncio
 import json
 import os
+import re
 import secrets
 import time
 from pathlib import Path
@@ -34,7 +36,10 @@ SKIP_DOMAINS = {
     "zone", "persistent_notification", "assist_satellite", "ai_task",
 }
 
-ADDON_VERSION = "0.8.0"
+ADDON_VERSION = "0.9.0"
+MAX_VERSIONS = 30                      # so viele Dashboard-Versionen bleiben lokal gespeichert
+BAR_ENTITY = "input_text.haglo_assist"           # Eingabeleiste im Dashboard
+BAR_STATUS = "input_text.haglo_assist_status"    # Rückmeldung darunter
 DEFAULT_BACKEND_URL = "https://api.haglotech.com"
 HUB_FILE = Path("/data/hub.json")
 TERMS_VERSION = "2026-10"
@@ -130,6 +135,38 @@ async def backend(session, method: str, path: str, body: dict | None = None, tim
         return await _backend_request(session, method, path, body, headers, timeout)
 
 
+async def read_hardware(session) -> dict:
+    """Seriennummer und MAC-Adressen des Geräts. Damit erkennt das Backend von Haglo
+    ausgelieferte Geräte (sie bekommen die Testphase)."""
+    serial = ""
+    for name in ("product_serial", "board_serial"):
+        try:
+            serial = Path(f"/sys/class/dmi/id/{name}").read_text().strip()
+        except OSError:
+            continue
+        if serial:
+            break
+    macs = []
+    try:
+        async with session.get("http://supervisor/network/info", headers={"Authorization": f"Bearer {TOKEN}"},
+                               timeout=aiohttp.ClientTimeout(total=15)) as r:
+            data = (await r.json()).get("data") or {}
+        macs = [i["mac"] for i in data.get("interfaces", []) if i.get("mac")]
+    except Exception as e:
+        print(f"MAC-Adressen konnten nicht gelesen werden: {e}")
+    return {"serial": serial, "macs": macs}
+
+
+async def identify(app, status: dict) -> dict:
+    """Meldet Seriennummer und MAC-Adressen ans Backend – erst nachdem der Nutzer zugestimmt
+    hat, und nur einmal pro Start. Gibt den (ggf. neuen) Backend-Status zurück."""
+    if app.get("identified") or not status.get("accepted"):
+        return status
+    data = await backend(app["session"], "POST", "/v1/hubs/identify", await read_hardware(app["session"]))
+    app["identified"] = True
+    return data["status"]
+
+
 def trial_info(status: dict | None) -> dict:
     """Übersetzt den Backend-Status in das Format, das die Oberfläche erwartet."""
     if status is None:
@@ -140,6 +177,7 @@ def trial_info(status: dict | None) -> dict:
         "requests_left": status["requests_left"],
         "expired": status["expired"],
         "plan": status["plan"],
+        "haglo_device": status.get("haglo_device", False),
         "plan_name": status["plan_name"],
         "limit": status["limit"],
         "subscription": status["subscription"],
@@ -292,13 +330,166 @@ async def current_config(ha: HAClient):
         raise
 
 
-def write_backup(config) -> str | None:
+# ---------------------------------------------------------------- Versionen (nur lokal)
+def write_backup(config, label: str = "") -> str | None:
+    """Sichert den bisherigen Stand des Dashboards lokal auf dem Gerät, bevor er überschrieben wird."""
     if config is None:
         return None
     BACKUP_DIR.mkdir(parents=True, exist_ok=True)
     name = time.strftime("%Y%m%d-%H%M%S") + ".json"
-    (BACKUP_DIR / name).write_text(json.dumps(config, ensure_ascii=False, indent=2))
+    (BACKUP_DIR / name).write_text(json.dumps(
+        {"haglo_version": 1, "saved_at": int(time.time()), "label": label[:200], "config": config},
+        ensure_ascii=False, indent=2))
+    for old in sorted(BACKUP_DIR.glob("*.json"))[:-MAX_VERSIONS]:
+        old.unlink(missing_ok=True)
     return name
+
+
+def read_backup(path: Path) -> dict:
+    """Liest eine Version; ältere Sicherungen enthalten nur die Dashboard-Konfiguration."""
+    data = json.loads(path.read_text())
+    if isinstance(data, dict) and data.get("haglo_version") and isinstance(data.get("config"), dict):
+        return data
+    return {"saved_at": int(path.stat().st_mtime), "label": "", "config": data}
+
+
+def version_files() -> list[Path]:
+    return sorted(BACKUP_DIR.glob("*.json")) if BACKUP_DIR.exists() else []
+
+
+def count_cards(config: dict) -> int:
+    return sum(
+        len([c for s in v.get("sections", []) for c in s.get("cards", []) if c.get("type") != "heading"])
+        + len(v.get("cards", []))
+        for v in config.get("views", [])
+    )
+
+
+# ---------------------------------------------------------------- Eingabeleiste im Dashboard
+def is_bar(section) -> bool:
+    return isinstance(section, dict) and any(
+        isinstance(c, dict) and c.get("type") == "entities"
+        and any((e.get("entity") if isinstance(e, dict) else e) == BAR_ENTITY for e in c.get("entities", []))
+        for c in section.get("cards", []))
+
+
+def strip_bar(config: dict | None) -> dict | None:
+    """Entfernt die Eingabeleiste, bevor das Dashboard zur Bearbeitung ans Backend geht."""
+    if not config:
+        return config
+    config = json.loads(json.dumps(config))
+    for view in config.get("views", []):
+        if isinstance(view.get("sections"), list):
+            view["sections"] = [s for s in view["sections"] if not is_bar(s)]
+    return config
+
+
+def add_bar(config: dict) -> dict:
+    """Setzt die Eingabeleiste als ersten Abschnitt in die erste Ansicht."""
+    views = config.get("views") or []
+    if views and views[0].get("type") == "sections":
+        views[0]["sections"] = [{"type": "grid", "cards": [
+            {"type": "heading", "heading": "Haglo Assist", "icon": "mdi:brain"},
+            {"type": "entities", "entities": [{"entity": BAR_ENTITY, "name": "Was soll ich ändern?"}]},
+            {"type": "markdown", "content": "{{ states('" + BAR_STATUS + "') }}"},
+        ]}] + [s for s in views[0].get("sections", []) if not is_bar(s)]
+    return config
+
+
+async def ensure_bar_helpers(ha: HAClient):
+    have = {i.get("id") for i in await ha.call("input_text/list")}
+    if "haglo_assist" not in have:
+        await ha.call("input_text/create", name="Haglo Assist", icon="mdi:brain", max=255, mode="text")
+    if "haglo_assist_status" not in have:
+        await ha.call("input_text/create", name="Haglo Assist Status", icon="mdi:brain", max=255, mode="text")
+
+
+async def set_text(ha: HAClient, entity: str, value: str):
+    await ha.call("call_service", domain="input_text", service="set_value",
+                  service_data={"value": value[:255]}, target={"entity_id": entity})
+
+
+BAR_ERRORS = {
+    "consent_required": "Bitte öffne zuerst Haglo Assist in der Seitenleiste und stimme den Bedingungen zu.",
+    "quota_exceeded": "Dein Kontingent ist aufgebraucht. Mehr dazu in Haglo Assist in der Seitenleiste.",
+}
+
+
+async def handle_bar_wish(app, wish: str):
+    """Ein Wunsch aus der Eingabeleiste im Dashboard: ändert das bestehende Dashboard direkt."""
+    session = app["session"]
+    async with app["bar_lock"]:
+        try:
+            async with HAClient(session) as ha:
+                await set_text(ha, BAR_STATUS, "Ich baue um … das dauert einen Moment.")
+            result = await build_dashboard(app, wish, refine=True, dialog=[], can_ask=False)
+            message = "Fertig: " + (result.get("erklaerung") or "Dashboard geändert.")
+        except BackendError as e:
+            message = BAR_ERRORS.get(e.code, str(e))
+        except Exception as e:
+            message = f"Das hat nicht geklappt: {e}"
+        try:
+            async with HAClient(session) as ha:
+                await set_text(ha, BAR_ENTITY, "")
+                await set_text(ha, BAR_STATUS, message)
+        except Exception as e:
+            print(f"Eingabeleiste: Rückmeldung fehlgeschlagen: {e}")
+
+
+async def bar_listener(app):
+    """Wartet auf Eingaben in der Leiste. Verbindet sich nach Abbrüchen neu."""
+    while True:
+        try:
+            async with HAClient(app["session"]) as ha:
+                await ensure_bar_helpers(ha)
+                await ha.ws.send_json({"id": 1000, "type": "subscribe_trigger",
+                                       "trigger": {"platform": "state", "entity_id": BAR_ENTITY}})
+                print("Eingabeleiste im Dashboard ist aktiv.")
+                while True:
+                    msg = await ha.ws.receive_json()
+                    if msg.get("type") != "event":
+                        continue
+                    state = (msg["event"].get("variables", {}).get("trigger", {}).get("to_state") or {}).get("state", "")
+                    wish = state.strip()
+                    if wish and wish not in ("unknown", "unavailable"):
+                        asyncio.create_task(handle_bar_wish(app, wish))
+        except asyncio.CancelledError:
+            raise
+        except Exception as e:
+            print(f"Eingabeleiste: Verbindung verloren ({e}), neuer Versuch in 20 s")
+            await asyncio.sleep(20)
+
+
+# ---------------------------------------------------------------- Dashboard bauen
+async def build_dashboard(app, wish: str, refine: bool, dialog: list, can_ask: bool) -> dict:
+    """Holt das Dashboard vom Backend und speichert es. Gibt entweder eine Rückfrage
+    ({"question": …}) oder das Ergebnis zurück. Wirft BackendError bei Backend-Fehlern."""
+    session = app["session"]
+    async with HAClient(session) as ha:
+        entities = [e for e in await collect_entities(ha) if e["id"] not in (BAR_ENTITY, BAR_STATUS)]
+        if not entities:
+            raise RuntimeError("Keine Geräte gefunden.")
+        before = await current_config(ha)
+        result = await backend(session, "POST", "/v1/generate", {
+            "wish": wish, "entities": entities, "previous": strip_bar(before) if refine else None,
+            "refine": refine, "dialog": dialog, "can_ask": can_ask,
+        }, timeout=300)
+        if result.get("type") == "question":
+            # Die KI braucht noch eine Angabe: Rückfrage anzeigen, nichts speichern.
+            return {"question": {"frage": result["frage"], "optionen": result["optionen"],
+                                 "mehrfach": bool(result.get("mehrfach"))}, "status": result["status"]}
+
+        removed: list[str] = []
+        config = clean_config(result["config"], {e["id"] for e in entities}, removed)
+        config.setdefault("title", DASHBOARD_TITLE)
+        if app.get("bar_enabled"):
+            config = add_bar(config)
+
+        await ensure_dashboard(ha)
+        backup = write_backup(before, f"vor: {wish}")
+        await ha.call("lovelace/config/save", url_path=DASHBOARD_PATH, config=config)
+    return {"erklaerung": result.get("erklaerung", ""), "config": config, "removed": sorted(set(removed)),
+            "backup": backup, "usage": result.get("usage", {}), "status": result["status"]}
 
 
 # ---------------------------------------------------------------- HTTP-Routen
@@ -307,7 +498,7 @@ routes = web.RouteTableDef()
 
 @routes.get("/")
 async def index(_):
-    return web.FileResponse(STATIC_DIR / "index.html")
+    return web.FileResponse(STATIC_DIR / "index.html", headers={"Cache-Control": "no-cache"})
 
 
 @routes.get("/api/status")
@@ -320,7 +511,8 @@ async def status(request):
     except Exception as e:
         return web.json_response({"ok": False, "error": str(e)}, status=500)
     try:
-        trial = trial_info((await backend(session, "GET", "/v1/status"))["status"])
+        st = (await backend(session, "GET", "/v1/status"))["status"]
+        trial = trial_info(await identify(request.app, st))
     except BackendError:
         trial = trial_info(None)
     return web.json_response({
@@ -329,7 +521,7 @@ async def status(request):
         "areas": sorted({e["area"] for e in entities if e["area"]}),
         "has_dashboard": cfg is not None,
         "api_key": True,  # Der Schlüssel liegt im Backend; Feld bleibt für die Oberfläche.
-        "backups": len(list(BACKUP_DIR.glob("*.json"))) if BACKUP_DIR.exists() else 0,
+        "backups": len(version_files()),
         "trial": trial,
     })
 
@@ -337,7 +529,8 @@ async def status(request):
 @routes.post("/api/consent")
 async def consent(request):
     """Meldet die Zustimmung zu AGB und Datenschutz ans Backend (dort mit Zeitstempel
-    als Nachweis gespeichert) und startet die Testphase."""
+    als Nachweis gespeichert). Erst danach wird die Hardware gemeldet, an der die
+    Testphase hängt."""
     try:
         body = await request.json()
     except Exception:
@@ -345,9 +538,10 @@ async def consent(request):
     try:
         data = await backend(request.app["session"], "POST", "/v1/consent",
                              {"version": body.get("version") or TERMS_VERSION})
+        st = await identify(request.app, data["status"])
     except BackendError as e:
         return backend_failure(e)
-    return web.json_response({"ok": True, "trial": trial_info(data["status"])})
+    return web.json_response({"ok": True, "trial": trial_info(st)})
 
 
 @routes.post("/api/generate")
@@ -369,66 +563,79 @@ async def generate(request):
     if trial["expired"]:
         return web.json_response({"ok": False, "error": "trial_expired", "trial": trial}, status=402)
     try:
-        async with HAClient(session) as ha:
-            entities = await collect_entities(ha)
-            if not entities:
-                raise RuntimeError("Keine Geräte gefunden.")
-            previous = await current_config(ha) if refine else None
-            result = await backend(session, "POST", "/v1/generate", {
-                "wish": wish, "entities": entities, "previous": previous, "refine": refine,
-                "dialog": dialog, "can_ask": True,
-            }, timeout=300)
-            if result.get("type") == "question":
-                # Die KI braucht noch eine Angabe: Rückfrage anzeigen, nichts speichern.
-                return web.json_response({
-                    "ok": True,
-                    "question": {"frage": result["frage"], "optionen": result["optionen"],
-                                 "mehrfach": bool(result.get("mehrfach"))},
-                    "trial": trial_info(result["status"]),
-                })
-
-            removed: list[str] = []
-            config = clean_config(result["config"], {e["id"] for e in entities}, removed)
-            config.setdefault("title", DASHBOARD_TITLE)
-
-            await ensure_dashboard(ha)
-            backup = write_backup(await current_config(ha))
-            await ha.call("lovelace/config/save", url_path=DASHBOARD_PATH, config=config)
+        result = await build_dashboard(request.app, wish, refine, dialog, can_ask=True)
     except BackendError as e:
         return backend_failure(e)
     except Exception as e:
         return web.json_response({"ok": False, "error": str(e)}, status=500)
+    if "question" in result:
+        return web.json_response({"ok": True, "question": result["question"], "trial": trial_info(result["status"])})
 
-    views = config.get("views", [])
-    cards = sum(
-        len([c for s in v.get("sections", []) for c in s.get("cards", []) if c.get("type") != "heading"])
-        + len(v.get("cards", []))
-        for v in views
-    )
+    config = result["config"]
     return web.json_response({
         "ok": True,
-        "erklaerung": result.get("erklaerung", ""),
-        "views": [v.get("title", "") for v in views],
-        "cards": cards,
-        "removed": sorted(set(removed)),
-        "backup": backup,
+        "erklaerung": result["erklaerung"],
+        "views": [v.get("title", "") for v in config.get("views", [])],
+        "cards": count_cards(config),
+        "removed": result["removed"],
+        "backup": result["backup"],
         "dashboard_url": f"/{DASHBOARD_PATH}",
-        "usage": result.get("usage", {}),
+        "usage": result["usage"],
         "trial": trial_info(result["status"]),
     })
 
 
+@routes.get("/api/versions")
+async def versions(_):
+    """Lokal gespeicherte Dashboard-Versionen, neueste zuerst."""
+    out = []
+    for f in reversed(version_files()):
+        try:
+            v = read_backup(f)
+        except Exception:
+            continue
+        out.append({"id": f.name, "saved_at": v["saved_at"], "label": v.get("label", ""),
+                    "views": [x.get("title", "") for x in v["config"].get("views", [])],
+                    "cards": count_cards(v["config"])})
+    return web.json_response({"ok": True, "versions": out, "max": MAX_VERSIONS})
+
+
+async def restore_version(app, path: Path, keep: bool) -> None:
+    """Spielt eine Version zurück. Mit keep=True wird vorher der aktuelle Stand gesichert,
+    damit auch das Wiederherstellen rückgängig gemacht werden kann."""
+    config = read_backup(path)["config"]
+    async with HAClient(app["session"]) as ha:
+        if keep:
+            write_backup(await current_config(ha), "vor Wiederherstellung")
+        await ensure_dashboard(ha)
+        await ha.call("lovelace/config/save", url_path=DASHBOARD_PATH, config=config)
+
+
+@routes.post("/api/restore")
+async def restore(request):
+    try:
+        name = str((await request.json()).get("id", ""))
+    except Exception:
+        name = ""
+    path = BACKUP_DIR / name
+    if not re.fullmatch(r"\d{8}-\d{6}\.json", name) or not path.exists():
+        return web.json_response({"ok": False, "error": "Diese Version gibt es nicht mehr."}, status=404)
+    try:
+        await restore_version(request.app, path, keep=True)
+    except Exception as e:
+        return web.json_response({"ok": False, "error": str(e)}, status=500)
+    return web.json_response({"ok": True, "restored": name})
+
+
 @routes.post("/api/undo")
 async def undo(request):
-    session = request.app["session"]
-    files = sorted(BACKUP_DIR.glob("*.json")) if BACKUP_DIR.exists() else []
+    """Macht die letzte Änderung rückgängig (stellt die neueste Version wieder her)."""
+    files = version_files()
     if not files:
         return web.json_response({"ok": False, "error": "Kein Backup vorhanden."}, status=404)
     latest = files[-1]
     try:
-        async with HAClient(session) as ha:
-            await ha.call("lovelace/config/save", url_path=DASHBOARD_PATH,
-                          config=json.loads(latest.read_text()))
+        await restore_version(request.app, latest, keep=False)
     except Exception as e:
         return web.json_response({"ok": False, "error": str(e)}, status=500)
     latest.unlink()
@@ -475,13 +682,20 @@ async def portal(request):
 
 async def on_startup(app):
     app["session"] = aiohttp.ClientSession()
+    app["bar_lock"] = asyncio.Lock()
+    app["bar_enabled"] = bool(load_options().get("dashboard_bar"))
     try:
         await ensure_registered(app["session"])
+        await identify(app, (await backend(app["session"], "GET", "/v1/status"))["status"])
     except BackendError as e:
         print(f"Registrierung beim Haglo-Server noch nicht möglich: {e}")
+    if app["bar_enabled"]:
+        app["bar_task"] = asyncio.create_task(bar_listener(app))
 
 
 async def on_cleanup(app):
+    if app.get("bar_task"):
+        app["bar_task"].cancel()
     await app["session"].close()
 
 

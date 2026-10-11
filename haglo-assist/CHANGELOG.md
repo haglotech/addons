@@ -1,5 +1,15 @@
 # Änderungen
 
+## 0.9.0
+
+- Versionen: Vor jeder Änderung wird dein Dashboard lokal gesichert. Unter „Versionen“ stellst du
+  jeden der letzten 30 Stände wieder her. Die Versionen verlassen dein Gerät nicht.
+- Die 30-Tage-Testphase gibt es auf von Haglo ausgelieferten Geräten, auf anderer Hardware startet
+  die App im kostenlosen Plan. Seriennummer und Netzwerkadresse werden dafür erst nach deiner
+  Zustimmung übertragen.
+- Neues Symbol in der Seitenleiste
+- Zum Ausprobieren: Eingabeleiste direkt im Dashboard (Option „dashboard_bar“ in der Konfiguration)
+
 ## 0.8.0
 
 - Rückfragen mit Auswahl: Ist ein Wunsch noch unklar, fragt Haglo Assist kurz nach, statt zu raten.

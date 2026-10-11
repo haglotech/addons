@@ -113,6 +113,12 @@
   .plan .tag2 { font-size: 13px; color: var(--muted); }
   .manage { margin-top: 16px; display: flex; flex-wrap: wrap; gap: 10px; }
   .manage .btn2 { cursor: pointer; }
+  .vlist { display: flex; flex-direction: column; gap: 8px; }
+  .ver { border: 1px solid var(--line); border-radius: 12px; padding: 12px 14px; display: flex; align-items: center; gap: 12px; }
+  .ver .info { flex: 1; min-width: 0; }
+  .ver .when { font-weight: 600; color: var(--heading); font-size: 15px; }
+  .ver .what { color: var(--muted); font-size: 13px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .ver .btn2 { cursor: pointer; flex: none; }
   .ask-q { text-align: left; }
   .ask-q .step { font-size: 13px; color: var(--muted); margin: 0 0 4px; }
   .ask-q h2 { margin-bottom: 14px; }
@@ -187,19 +193,31 @@
     <div class="result hidden" id="result"></div>
   </main>
 
-  <footer><a id="terms" href="https://haglotech.com/policies/terms-of-service" target="_blank" rel="noopener">AGB</a> · <a id="privacy" href="https://haglotech.com/policies/privacy-policy" target="_blank" rel="noopener">Datenschutz</a> · <a id="planLink" role="button" tabindex="0">Plan &amp; Abo</a> · Haglo</footer>
+  <footer><a id="terms" href="https://haglotech.com/policies/terms-of-service" target="_blank" rel="noopener">AGB</a> · <a id="privacy" href="https://haglotech.com/policies/privacy-policy" target="_blank" rel="noopener">Datenschutz</a> · <a id="versionsLink" role="button" tabindex="0">Versionen</a> · <a id="planLink" role="button" tabindex="0">Plan &amp; Abo</a> · Haglo</footer>
 
   <div class="sheet-bg hidden" id="consent">
     <div class="sheet">
-      <h3>30 Tage kostenlos testen</h3>
+      <h3>Kostenlos starten</h3>
       <ul>
-        <li>Endet automatisch – kein Abo, keine Zahlungsdaten</li>
-        <li>Dein Dashboard bleibt danach erhalten</li>
-        <li>Gerätenamen und Räume werden zur Verarbeitung an unseren KI-Dienstleister Anthropic (USA) übertragen, keine Verlaufsdaten</li>
+        <li>Auf Haglo-Geräten 30 Tage kostenlos, sonst 3 Änderungen pro Monat – kein Abo, keine Zahlungsdaten</li>
+        <li>Dein Dashboard bleibt erhalten, frühere Versionen liegen nur lokal auf deinem Gerät</li>
+        <li>Übertragen werden nur dein Wunsch sowie Namen, Räume und Typen deiner Geräte – an den Haglo-Server und unseren KI-Dienstleister Anthropic (USA)</li>
+        <li>Messwerte, Verläufe und Zustände verlassen dein Gerät nicht</li>
+        <li>Um die Testphase zu prüfen, senden wir nach deiner Zustimmung Seriennummer und Netzwerkadresse des Geräts an Haglo</li>
       </ul>
       <label><input type="checkbox" id="agree">
         <span>Ich akzeptiere die <a id="termsLink" target="_blank" rel="noopener">AGB</a> und habe die <a id="privacyLink" target="_blank" rel="noopener">Datenschutzerklärung</a> gelesen.</span></label>
       <button class="primary" id="accept" disabled>Zustimmen &amp; loslegen</button>
+    </div>
+  </div>
+
+  <div class="sheet-bg hidden" id="versions">
+    <div class="sheet wide">
+      <button class="close" id="versionsClose" aria-label="Schließen">×</button>
+      <h3>Versionen</h3>
+      <p class="now">Vor jeder Änderung sichert Haglo Assist dein Dashboard. Die Versionen liegen nur lokal auf deinem Gerät und werden nirgendwohin übertragen.</p>
+      <div class="vlist" id="vlist"></div>
+      <p class="hint" id="vHint"></p>
     </div>
   </div>
 
@@ -250,7 +268,7 @@ function setTrial(t) {
   p.classList.remove("hidden", "warn", "end");
   const days = `${t.days_left} ${t.days_left === 1 ? "Tag" : "Tage"}`;
   const left = `${t.requests_left} von ${t.limit} Änderungen`;
-  if (!t.accepted) { p.textContent = "30 Tage kostenlos testen"; }
+  if (!t.accepted) { p.textContent = "Kostenlos starten"; }
   else if (t.expired) { p.textContent = `${t.plan_name || "Testphase"} · aufgebraucht`; p.classList.add("end"); showExpired(); }
   else if (!t.plan) { p.textContent = `Kostenlos · noch ${days}`; }
   else if (t.plan === "trial") {
@@ -481,6 +499,40 @@ $("askForm").addEventListener("submit", async (e) => {
 document.addEventListener("visibilitychange", async () => {
   if (document.hidden || busy) return;
   try { await api("api/status"); renderPlans(); } catch (e) {}
+});
+
+// ---------------------------------------------------------------- Versionen
+const when = (ts) => new Date(ts * 1000).toLocaleString("de-DE", { day: "2-digit", month: "2-digit", year: "numeric", hour: "2-digit", minute: "2-digit" });
+
+async function openVersions() {
+  $("versions").classList.remove("hidden");
+  $("vHint").textContent = ""; $("vHint").classList.remove("err");
+  try {
+    const r = await api("api/versions");
+    $("vlist").innerHTML = r.versions.length ? r.versions.map((v) => `<div class="ver">
+        <div class="info"><div class="when">${when(v.saved_at)} Uhr</div>
+        <div class="what">${esc(v.label || "Gesicherter Stand")} · ${v.views.length} ${v.views.length === 1 ? "Seite" : "Seiten"}, ${v.cards} Kacheln</div></div>
+        <button class="btn2" data-restore="${esc(v.id)}">Wiederherstellen</button></div>`).join("")
+      : `<p class="now">Noch keine Versionen. Die erste entsteht bei deiner nächsten Änderung.</p>`;
+    if (r.versions.length) $("vHint").textContent = `Die letzten ${r.max} Versionen bleiben gespeichert.`;
+  } catch (e) { $("vHint").textContent = e.message; $("vHint").classList.add("err"); }
+}
+
+$("versionsLink").addEventListener("click", openVersions);
+$("versionsLink").addEventListener("keydown", (e) => { if (e.key === "Enter") openVersions(); });
+$("versionsClose").addEventListener("click", () => $("versions").classList.add("hidden"));
+$("versions").addEventListener("click", async (e) => {
+  if (e.target === $("versions")) return $("versions").classList.add("hidden");
+  const b = e.target.closest("[data-restore]");
+  if (!b) return;
+  b.disabled = true;
+  try {
+    await api("api/restore", { id: b.dataset.restore });
+    $("versions").classList.add("hidden");
+    setDashboardMode(true);
+    showResult(`<h2>Version wiederhergestellt</h2><p>Der Stand davor wurde ebenfalls gesichert – du kannst jederzeit wieder zurück.</p>
+      <div class="actions"><a class="primary" href="/haglo-ki" target="_top">Dashboard öffnen</a></div>`);
+  } catch (err) { $("vHint").textContent = err.message; $("vHint").classList.add("err"); b.disabled = false; }
 });
 
 async function undo() {

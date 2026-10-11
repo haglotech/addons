@@ -16,7 +16,9 @@ Home-Assistant-Dashboard. Auf Deutsch, ohne YAML.
 
 Zum Erstellen eines Dashboards werden Gerätenamen, Räume, Gerätetypen und Einheiten
 an den Haglo-Server und von dort an unseren KI-Dienstleister Anthropic übertragen.
-Messwerte und Verlaufsdaten werden nicht übertragen.
+Messwerte, Zustände und Verlaufsdaten werden nicht übertragen. Um die Testphase zu prüfen,
+werden nach deiner Zustimmung Seriennummer und Netzwerkadresse des Geräts an Haglo gesendet.
+Frühere Dashboard-Versionen bleiben nur lokal auf deinem Gerät.
 
 [Datenschutz](https://haglotech.com/policies/privacy-policy) ·
 [AGB](https://haglotech.com/policies/terms-of-service) ·
