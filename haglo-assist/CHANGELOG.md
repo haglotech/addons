@@ -1,5 +1,13 @@
 # Änderungen
 
+## 0.17.0
+
+- Haglo Assist arbeitet jetzt direkt an deiner Startseite („Übersicht“) statt an einem Extra-Dashboard.
+  Ist sie noch automatisch erzeugt, baut Haglo Assist sie neu. „Rückgängig“ bringt die automatische
+  Ansicht zurück.
+- Die Dashboard-Auswahl hat eindeutige Namen: Startseite, deine weiteren Dashboards und das separate
+  Haglo Dashboard zum Ausprobieren. Deine Wahl bleibt gespeichert.
+
 ## 0.16.2
 
 - Aufgeräumte Leiste unter der Eingabe: links das Dashboard, rechts Verlauf, Automationen und Versionen

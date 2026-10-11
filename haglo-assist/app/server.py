@@ -36,7 +36,7 @@ SKIP_DOMAINS = {
     "zone", "persistent_notification", "assist_satellite", "ai_task",
 }
 
-ADDON_VERSION = "0.16.2"
+ADDON_VERSION = "0.17.0"
 MAX_VERSIONS = 30                      # so viele Dashboard-Versionen bleiben lokal gespeichert
 BAR_ENTITY = "input_text.haglo_assist"           # Eingabeleiste im Dashboard
 BAR_STATUS = "input_text.haglo_assist_status"    # Rückmeldung darunter
@@ -551,7 +551,14 @@ async def selftest(app) -> None:
         return (f"geaendert={changed != before} eintrag={last['kind']}/kann-rueckgaengig={last['can_undo']} undo={res.get('ok') or res.get('error')} "
                 f"wieder-wie-vorher={after == before} markiert={last2.get('undone')}")
 
-    if job.get("undo"):
+    async def dash_list():
+        async with HAClient(app["session"]) as ha:
+            items = await list_dashboards(ha)
+        return " ; ".join(f"{d['label']}[{'auto' if d['auto'] else str(d['pages']) + ' Seiten'}{'' if d['editable'] else ',yaml'}{'' if d['allowed'] else ',fragt'}]" for d in items)
+
+    if job.get("dashlist"):
+        await step("auswahl", dash_list())
+    elif job.get("undo"):
         await step("rueckgaengig-im-faden", undo_test())
     elif job.get("welcome"):
         await step("willkommen", welcome_test())
@@ -565,7 +572,7 @@ async def selftest(app) -> None:
         await step("automation-ablauf", automation_flow())
     else:
         await step("automation", automation_api())
-    if not any(job.get(k) for k in ("full", "probe", "sidebar", "welcome", "undo")):
+    if not any(job.get(k) for k in ("full", "probe", "sidebar", "welcome", "undo", "dashlist")):
         await step("seitenleiste", panel())
         await step("hw", hw())
         await step("dashboards", dashes())
@@ -769,17 +776,44 @@ def allowed_dashboards() -> set[str]:
         return set()
 
 
+def is_auto(config) -> bool:
+    """Von Home Assistant automatisch erzeugt (oder leer): Es gibt nichts Eigenes zu erhalten."""
+    return config is None or "strategy" in config or not config.get("views")
+
+
 async def list_dashboards(ha: HAClient) -> list[dict]:
-    """Alle Dashboards. id ist der url_path; "" steht für die Standard-Übersicht."""
+    """Alle Dashboards zur Auswahl. id ist der url_path; "" ist die Startseite („Übersicht“).
+
+    Reihenfolge: Startseite, weitere Dashboards des Nutzers, zuletzt das separate Haglo Dashboard.
+    allowed = darf ohne Rückfrage bearbeitet werden (eigenes, automatisch erzeugtes oder freigegebenes)."""
     allowed = allowed_dashboards()
-    out = [{"id": DASHBOARD_PATH, "title": DASHBOARD_TITLE, "own": True, "editable": True, "allowed": True}]
-    items = [{"url_path": "", "title": "Übersicht", "mode": "storage"}] + list(await ha.call("lovelace/dashboards/list"))
+    listed = list(await ha.call("lovelace/dashboards/list"))
+    # Neuere Home-Assistant-Versionen führen die Startseite selbst als „lovelace“ in der Liste – nicht doppelt zeigen
+    items = [{"url_path": "", "title": "Übersicht", "mode": "storage"}] \
+        + [d for d in listed if d.get("url_path") not in (DASHBOARD_PATH, "lovelace", "", None)]
+    items.append(next((d for d in listed if d.get("url_path") == DASHBOARD_PATH),
+                      {"url_path": DASHBOARD_PATH, "title": DASHBOARD_TITLE, "mode": "storage"}))
+    out, seen = [], {}
     for d in items:
         path = d.get("url_path") or ""
-        if path == DASHBOARD_PATH:
-            continue
-        out.append({"id": path, "title": d.get("title") or path, "own": False,
-                    "editable": d.get("mode", "storage") == "storage", "allowed": path in allowed})
+        editable = d.get("mode", "storage") == "storage"
+        try:
+            cfg = await current_config(ha, path or None) if editable else None
+        except Exception:
+            cfg = None
+        own, auto = path == DASHBOARD_PATH, is_auto(cfg)
+        title = d.get("title") or path
+        seen[title] = seen.get(title, 0) + 1
+        out.append({"id": path, "title": title, "own": own, "start": path == "", "editable": editable, "auto": auto,
+                    "pages": 0 if auto else len(cfg.get("views", [])), "allowed": own or auto or path in allowed})
+    # Verständliche, eindeutige Namen
+    for d in out:
+        if d["start"]:
+            d["label"] = "Startseite"
+        elif d["own"]:
+            d["label"] = "Separates Haglo Dashboard"
+        else:
+            d["label"] = d["title"] + (f" (/{d['id']})" if seen[d["title"]] > 1 or d["title"] == "Übersicht" else "")
     return out
 
 
@@ -795,13 +829,13 @@ def count_all_cards(node) -> int:
 
 # ---------------------------------------------------------------- Versionen (nur lokal)
 def write_backup(config, label: str = "", dashboard: str = DASHBOARD_PATH) -> str | None:
-    """Sichert den bisherigen Stand des Dashboards lokal auf dem Gerät, bevor er überschrieben wird."""
-    if config is None:
-        return None
+    """Sichert den bisherigen Stand des Dashboards lokal auf dem Gerät, bevor er überschrieben wird.
+    config=None heißt: Das Dashboard wurde bisher von Home Assistant automatisch erzeugt."""
     BACKUP_DIR.mkdir(parents=True, exist_ok=True)
     name = time.strftime("%Y%m%d-%H%M%S") + ".json"
     (BACKUP_DIR / name).write_text(json.dumps(
-        {"haglo_version": 1, "saved_at": int(time.time()), "label": label[:200], "dashboard": dashboard, "config": config},
+        {"haglo_version": 1, "saved_at": int(time.time()), "label": label[:200], "dashboard": dashboard,
+         "config": config or {}, "auto": config is None},
         ensure_ascii=False, indent=2))
     for old in sorted(BACKUP_DIR.glob("*.json"))[:-MAX_VERSIONS]:
         old.unlink(missing_ok=True)
@@ -1128,17 +1162,19 @@ async def build_dashboard(app, wish: str, refine: bool, dialog: list, can_ask: b
     session = app["session"]
     own = dashboard == DASHBOARD_PATH
     by_id: dict = {}
-    if not own and dashboard not in allowed_dashboards():
-        raise RuntimeError("Bitte bestätige zuerst, dass Haglo Assist dieses Dashboard bearbeiten darf.")
     path = dashboard or None
     async with HAClient(session) as ha:
         entities = [e for e in await collect_entities(ha) if e["id"] not in (BAR_ENTITY, BAR_STATUS)]
         if not entities:
             raise RuntimeError("Keine Geräte gefunden.")
         before = await current_config(ha, path)
-        if not own and (before is None or "strategy" in before or not before.get("views")):
-            raise RuntimeError("Dieses Dashboard wird von Home Assistant automatisch erzeugt. Öffne es, wähle "
-                               "„Dashboard bearbeiten“ und „Kontrolle übernehmen“ – danach kann Haglo Assist es ändern.")
+        auto = is_auto(before)
+        # Neu bauen, wenn es nichts Eigenes gibt (automatisch erzeugt) oder der Nutzer es ausdrücklich will.
+        # Sonst: gezielt ändern. Dashboards, die der Kunde selbst gebaut hat, werden dabei besonders geschont.
+        rebuild = auto or not refine
+        if not own and not rebuild and dashboard not in allowed_dashboards():
+            raise RuntimeError("Bitte bestätige zuerst, dass Haglo Assist dieses Dashboard bearbeiten darf.")
+        built_by_haglo = own or dashboard in load_prefs().get("built", [])
         extra = {}
         if can_automate:
             raw = await all_states(session)
@@ -1146,8 +1182,8 @@ async def build_dashboard(app, wish: str, refine: bool, dialog: list, can_ask: b
             extra = {"kinds": KINDS, "can_control": True, "automations": await own_objects(session, raw)}
         payload = {
             "wish": wish, "entities": entities,
-            "previous": (strip_bar(before) if own else before) if (refine or not own) else None,
-            "refine": refine or not own, "foreign": not own, "dialog": dialog, "can_ask": can_ask,
+            "previous": None if rebuild else (strip_bar(before) if own else before),
+            "refine": not rebuild, "foreign": not rebuild and not built_by_haglo, "dialog": dialog, "can_ask": can_ask,
             **extra,
         }
         result = await backend(session, "POST", "/v1/generate", payload, timeout=300)
@@ -1195,15 +1231,24 @@ async def build_dashboard(app, wish: str, refine: bool, dialog: list, can_ask: b
             if app.get("bar_enabled"):
                 config = add_bar(config)
             await ensure_dashboard(ha)
-        else:
-            # Sicherheitsnetz: Bei einem fremden Dashboard darf nicht plötzlich die Hälfte fehlen.
+        elif not rebuild:
+            # Sicherheitsnetz: Beim Ändern darf nicht plötzlich die Hälfte fehlen.
             had, has = count_all_cards(before), count_all_cards(config)
             if not config.get("views") or (had > 6 and has < had * 0.6):
                 raise RuntimeError("Die Änderung hätte große Teile deines Dashboards entfernt. Es wurde nichts "
                                    "gespeichert. Bitte beschreibe genauer, was sich ändern soll.")
 
+        if not config.get("views"):
+            raise RuntimeError("Das Ergebnis war leer. Es wurde nichts gespeichert.")
         backup = write_backup(before, f"vor: {wish}", dashboard)
         await ha.call("lovelace/config/save", url_path=path, config=config)
+        if not own and rebuild:
+            # Von Haglo Assist gebaut: darf künftig ohne Rückfrage weiterbearbeitet werden
+            prefs = load_prefs()
+            prefs["built"] = sorted(set(prefs.get("built", [])) | {dashboard})
+            write_prefs(prefs)
+            ALLOWED_FILE.parent.mkdir(parents=True, exist_ok=True)
+            ALLOWED_FILE.write_text(json.dumps(sorted(allowed_dashboards() | {dashboard})))
     add_history("dashboard", wish, result.get("erklaerung", ""), url=f"/{dashboard or 'lovelace'}",
                 undo={"type": "version", "id": backup} if backup else None)
     return {"erklaerung": result.get("erklaerung", ""), "config": config, "removed": sorted(set(removed)),
@@ -1244,6 +1289,8 @@ async def status(request):
         "entities": len(entities),
         "areas": sorted({e["area"] for e in entities if e["area"]}),
         "has_dashboard": cfg is not None,
+        # Woran gearbeitet wird: die Wahl des Nutzers, sonst das vorhandene Haglo Dashboard, sonst die Startseite
+        "dashboard": load_prefs().get("dashboard", DASHBOARD_PATH if cfg is not None else ""),
         "api_key": True,  # Der Schlüssel liegt im Backend; Feld bleibt für die Oberfläche.
         "backups": len(version_files()),
         "prefs": load_prefs(),
@@ -1591,6 +1638,8 @@ async def prefs_route(request):
     for key in ("states_allowed", "foreign_automations"):
         if isinstance(body.get(key), bool):
             prefs[key] = body[key]
+    if isinstance(body.get("dashboard"), str) and len(body["dashboard"]) <= 100:
+        prefs["dashboard"] = body["dashboard"]
     write_prefs(prefs)
     return web.json_response({"ok": True, "prefs": prefs})
 
@@ -1637,6 +1686,7 @@ async def versions(request):
             continue
         out.append({"id": f.name, "saved_at": v["saved_at"], "label": v.get("label", ""),
                     "dashboard": titles.get(v["dashboard"], v["dashboard"] or "Übersicht"),
+                    "auto": bool(v.get("auto")),
                     "views": [x.get("title", "") for x in v["config"].get("views", [])],
                     "cards": count_cards(v["config"])})
     return web.json_response({"ok": True, "versions": out, "max": MAX_VERSIONS})
@@ -1652,7 +1702,15 @@ async def restore_version(app, path: Path, keep: bool, log: bool = True) -> None
             write_backup(await current_config(ha, dashboard or None), "vor Wiederherstellung", dashboard)
         if dashboard == DASHBOARD_PATH:
             await ensure_dashboard(ha)
-        await ha.call("lovelace/config/save", url_path=dashboard or None, config=version["config"])
+        if version.get("auto"):
+            # zurück zur automatisch erzeugten Ansicht von Home Assistant
+            try:
+                await ha.call("lovelace/config/delete", url_path=dashboard or None)
+            except HAError as e:
+                if e.code != "config_not_found":
+                    raise
+        else:
+            await ha.call("lovelace/config/save", url_path=dashboard or None, config=version["config"])
     if log:
         add_history("restore", "", "Frühere Version wiederhergestellt", url=f"/{dashboard or 'lovelace'}")
 

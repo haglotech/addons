@@ -209,7 +209,7 @@
   .dash { display: inline-flex; align-items: center; gap: 6px; font-size: 13px; color: var(--brand); border: 1px solid var(--line);
           border-radius: 999px; padding: 2px 6px 2px 12px; background: var(--surface); }
   .dash select { font: inherit; font-weight: 600; color: var(--brand); background: transparent; border: 0; outline: 0;
-                 padding: 4px 2px; width: 150px; max-width: 40vw; text-overflow: ellipsis; cursor: pointer; }
+                 padding: 4px 2px; width: 172px; max-width: 44vw; text-overflow: ellipsis; cursor: pointer; }
   .sheet .row { display: flex; gap: 10px; }
   .sheet .row > * { flex: 1; }
   .sheet .row .btn2 { justify-content: center; cursor: pointer; padding: 12px; }
@@ -393,9 +393,11 @@
 
 <script>
 const $ = (id) => document.getElementById(id);
-let trial = null, hasDashboard = false, pending = null, busy = false;
+let trial = null, pending = null, busy = false;
 const OWN = "haglo-ki";
-let dashList = [], dash = OWN;  // gewähltes Dashboard; OWN ist das eigene „Haglo Dashboard“
+// Woran gearbeitet wird: "" ist die Startseite („Übersicht“), OWN das separate Haglo Dashboard
+let dashList = [], dash = "", rebuild = false;
+const current = () => dashList.find((x) => x.id === dash);
 let features = {};
 // Getipptes und offene Rückfragen überstehen das Verlassen der Seite (nur in diesem Browser-Tab gespeichert)
 const mem = {
@@ -473,36 +475,57 @@ function resetText(ts) {
     : `am ${d.toLocaleDateString("de-DE", { weekday: "short" })}, ${time} Uhr`;
 }
 
-function setDashboardMode(exists) {
-  hasDashboard = exists;
-  const d = dashList.find((x) => x.id === dash);
-  $("wish").placeholder = dash !== OWN ? `Was soll ich an „${d ? d.title : "deinem Dashboard"}“ ändern?`
-    : features.control ? (exists ? "Was soll ich ändern, anlegen oder schalten?" : "z. B. Alle Räume mit Licht – oder: Mach das Flurlicht aus")
-    : exists ? "Was soll ich ändern?" : "z. B. Alle Räume mit Licht";
+// Platzhalter und „neu aufbauen“ passend zum gewählten Dashboard
+function setDashboardMode() {
+  const d = current(), edit = d && !d.auto && !rebuild;
+  $("wish").placeholder = edit ? `Was soll ich an ${d.start ? "deiner Startseite" : `„${d.title}“`} ändern, anlegen oder schalten?`
+    : "z. B. Alle Räume mit Licht – oder: Mach das Flurlicht aus";
+  $("freshSlot").replaceChildren();
+  if (d && !d.auto && !rebuild) {
+    const b = document.createElement("button");
+    b.type = "button"; b.textContent = "neu aufbauen";
+    b.title = "Der nächste Wunsch baut dieses Dashboard von Grund auf neu, statt es anzupassen. Der bisherige Stand wird gesichert.";
+    b.onclick = () => {
+      if (!d.own && !confirm(`„${d.label}“ mit dem nächsten Wunsch komplett neu aufbauen? Der bisherige Stand wird gesichert und lässt sich wiederherstellen.`)) return;
+      rebuild = true; setDashboardMode(); $("wish").focus();
+    };
+    $("freshSlot").append(b);
+  } else if (rebuild) {
+    const t = document.createElement("button");
+    t.type = "button"; t.textContent = "wird neu aufgebaut ✕"; t.title = "Abbrechen: doch nur anpassen";
+    t.onclick = () => { rebuild = false; setDashboardMode(); };
+    $("freshSlot").append(t);
+  }
 }
 
 // ---------------------------------------------------------------- Dashboard-Auswahl
 async function loadDashboards() {
   try {
     dashList = (await api("api/dashboards")).dashboards;
-    $("dash").innerHTML = dashList.map((d) =>
-      `<option value="${esc(d.id)}"${d.editable ? "" : " disabled"}>${esc(d.title)}${d.editable ? "" : " (YAML, nicht änderbar)"}</option>`).join("");
+    if (!current()) dash = (dashList.find((d) => d.start) || dashList[0] || { id: "" }).id;
+    const opt = (d) => `<option value="${esc(d.id)}"${d.editable ? "" : " disabled"}>${esc(d.label)}${d.editable ? (d.auto && !d.own ? " – noch automatisch" : "") : " – nicht änderbar (YAML)"}</option>`;
+    const start = dashList.filter((d) => d.start), own = dashList.filter((d) => d.own), rest = dashList.filter((d) => !d.start && !d.own);
+    $("dash").innerHTML = start.map(opt).join("")
+      + (rest.length ? `<optgroup label="Weitere Dashboards">${rest.map(opt).join("")}</optgroup>` : "")
+      + `<optgroup label="Zum Ausprobieren">${own.map(opt).join("")}</optgroup>`;
     $("dash").value = dash;
-    $("dashRow").classList.toggle("hidden", dashList.length < 2);
-  } catch (e) { /* ohne Liste bleibt es beim Haglo Dashboard */ }
+    $("dashRow").classList.remove("hidden");
+    setDashboardMode();
+  } catch (e) { /* ohne Liste bleibt es bei der Startseite */ }
 }
 
 function selectDashboard(id) {
-  dash = id; $("dash").value = id; dialog = []; asking = null;
+  dash = id; $("dash").value = id; dialog = []; asking = null; rebuild = false;
   dismiss();
-  setDashboardMode(hasDashboard);
+  setDashboardMode();
+  api("api/prefs", { dashboard: id }).catch(() => {});
 }
 
 $("dash").addEventListener("change", () => {
   const d = dashList.find((x) => x.id === $("dash").value);
-  if (!d || d.own || d.allowed) return selectDashboard(d ? d.id : OWN);
+  if (!d || d.allowed) return selectDashboard(d ? d.id : "");
   // Erst fragen: Für ein eigenes Dashboard wird dessen Aufbau übertragen.
-  $("allowTitle").textContent = `„${d.title}“ mit Haglo Assist bearbeiten?`;
+  $("allowTitle").textContent = `„${d.label}“ mit Haglo Assist bearbeiten?`;
   $("allow").dataset.id = d.id;
   $("allow").classList.remove("hidden");
 });
@@ -638,23 +661,14 @@ async function init() {
     else if (trial && !trial.accepted && (s.haglo_marker || s.preinstalled)) showWelcome(s.haglo_marker);
     else if (mem.get("question")) { const m = mem.get("question"); dialog = m.dialog || []; showQuestion(m.wish, m.label, m.q); }
     else if (mem.get("automations")) { const m = mem.get("automations"); showAutomations(m.wish, m.erklaerung, m.items); }
-    setDashboardMode(s.has_dashboard);
+    dash = typeof s.dashboard === "string" ? s.dashboard : "";
     let m = `${s.entities} ${s.entities === 1 ? "Gerät" : "Geräte"} in ${s.areas.length} ${s.areas.length === 1 ? "Raum" : "Räumen"} erkannt`;
     if (!s.api_key) m += " · ⚠ API-Schlüssel fehlt";
     $("meta").textContent = m;
-    if (s.has_dashboard) addFreshLink();
     loadDashboards();
   } catch (e) {
     $("meta").textContent = "Geräte konnten nicht gelesen werden: " + e.message;
   }
-}
-
-function addFreshLink() {
-  const b = document.createElement("button");
-  b.type = "button"; b.textContent = "neu aufbauen";
-  b.title = "Der nächste Wunsch ersetzt das Haglo Dashboard komplett, statt es anzupassen. Der bisherige Stand wird gesichert.";
-  b.onclick = () => { setDashboardMode(false); b.remove(); $("wish").focus(); };
-  $("freshSlot").replaceChildren(b);
 }
 
 $("wish").addEventListener("input", () => mem.set("draft", $("wish").value));
@@ -691,17 +705,13 @@ async function generate(wish, label, keepDialog, allowStates) {
   let i = 0; typing(steps[0]);
   const t = setInterval(() => { i = Math.min(i + 1, steps.length - 1); if ($("loadText")) $("loadText").textContent = steps[i]; }, 7000);
   try {
-    const foreign = dash !== OWN;
-    const r = await api("api/generate", { wish, refine: foreign || hasDashboard, dialog, dashboard: dash, allow_states: !!allowStates });
+    const r = await api("api/generate", { wish, refine: !rebuild, dialog, dashboard: dash, allow_states: !!allowStates });
     if (r.question) { showQuestion(wish, label, r.question); return; }
     dialog = []; mem.set("draft", null);
     if (r.objects) { showAutomations(wish, r.erklaerung, r.objects); return; }
     if (r.need_consent) { showStateConsent(wish, label, r.need_consent); return; }
     if (r.confirm_actions) { showConfirmActions(wish, r.erklaerung, r.confirm_actions); return; }
-    if (!foreign && r.done === undefined && r.answer === undefined) {
-      if (!hasDashboard) addFreshLink();
-      setDashboardMode(true);
-    }
+    if (r.done === undefined && r.answer === undefined) { rebuild = false; loadDashboards(); }   // Dashboard wurde gebaut oder geändert
     dismiss(); await loadHistory();      // das Ergebnis steht jetzt als Eintrag im Verlauf, mit „Rückgängig“
   } catch (e) {
     if (e.code === "consent_required") { dismiss(); pending = [wish, label]; $("consent").classList.remove("hidden"); }
@@ -993,7 +1003,7 @@ async function openVersions() {
     const r = await api("api/versions");
     $("vlist").innerHTML = r.versions.length ? r.versions.map((v) => `<div class="ver">
         <div class="info"><div class="when">${when(v.saved_at)} Uhr</div>
-        <div class="what">${esc(v.dashboard)} · ${esc(v.label || "Gesicherter Stand")} · ${v.views.length} ${v.views.length === 1 ? "Seite" : "Seiten"}, ${v.cards} Kacheln</div></div>
+        <div class="what">${esc(v.dashboard)} · ${esc(v.label || "Gesicherter Stand")} · ${v.auto ? "automatische Ansicht von Home Assistant" : `${v.views.length} ${v.views.length === 1 ? "Seite" : "Seiten"}, ${v.cards} Kacheln`}</div></div>
         <button class="btn2" data-restore="${esc(v.id)}">Wiederherstellen</button></div>`).join("")
       : `<p class="now">Noch keine Versionen. Die erste entsteht bei deiner nächsten Änderung.</p>`;
     if (r.versions.length) $("vHint").textContent = `Die letzten ${r.max} Versionen bleiben gespeichert.`;
@@ -1011,7 +1021,7 @@ $("versions").addEventListener("click", async (e) => {
   try {
     await api("api/restore", { id: b.dataset.restore }); loadHistory();
     $("versions").classList.add("hidden");
-    setDashboardMode(true);
+    loadDashboards();
   } catch (err) { $("vHint").textContent = err.message; $("vHint").classList.add("err"); b.disabled = false; }
 });
 
