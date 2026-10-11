@@ -113,6 +113,12 @@
   .logo { width: 210px; aspect-ratio: 897 / 145; margin: 0 auto; background: var(--logo);
           -webkit-mask: url("static/logo-mask.png") center / contain no-repeat; mask: url("static/logo-mask.png") center / contain no-repeat; }
   .sub { color: var(--sub); font-weight: 600; font-size: 15px; letter-spacing: .62em; margin: 10px -0.62em 0 0; }
+  .subt { position: relative; }
+  .beta { display: inline-block; border: 1px solid var(--brand); color: var(--brand); border-radius: 20px; padding: 1px 7px;
+          font-size: 10px; font-weight: 600; letter-spacing: .08em; text-transform: uppercase; line-height: 1.5; white-space: nowrap; }
+  .subt .beta { position: absolute; left: 100%; top: 50%; transform: translateY(-50%); }
+  .tl > .beta { margin-left: -6px; visibility: hidden; flex: none; }
+  body.has-thread .tl > .beta { visibility: visible; }
   .tag { color: var(--muted); margin-top: 18px; font-size: 16px; }
 
   .search { display: flex; align-items: center; gap: 8px; border: 1px solid var(--line); border-radius: 28px;
@@ -280,7 +286,7 @@
 </style>
 </head>
 <body>
-  <div class="top"><div class="tl"><div class="minilogo" role="img" aria-label="HAGLO Assist"></div>
+  <div class="top"><div class="tl"><div class="minilogo" role="img" aria-label="HAGLO Assist"></div><span class="beta">Beta</span>
     <div class="devbar hidden" id="devbar"><span>Entwickler</span>
     <select id="devPlan" aria-label="Plan zum Testen">
       <option value="">Automatisch</option><option value="free">Free (fremde Hardware)</option>
@@ -292,7 +298,7 @@
   <main id="main">
     <div class="brand">
       <div class="logo" role="img" aria-label="HAGLO Assist"></div>
-      <div class="sub" aria-hidden="true">ASSIST</div>
+      <div class="sub"><span class="subt"><span aria-hidden="true">ASSIST</span><span class="beta">Beta</span></span></div>
       <div class="tag" id="tagline">Sag, was du sehen willst. Ich baue dein Dashboard.</div>
     </div>
     <div class="owner hidden" id="owner"></div>

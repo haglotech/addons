@@ -1,5 +1,9 @@
 # Änderungen
 
+## 0.18.3
+
+- Haglo Assist ist als Beta gekennzeichnet
+
 ## 0.18.2
 
 - Neues Symbol in der Seitenleiste und grünes Haglo-H als App-Symbol
