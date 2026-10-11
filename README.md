@@ -1,4 +1,4 @@
-# HagloTech Add-ons für Home Assistant
+# HagloTech Apps (Add-ons) für Home Assistant
 
 ## Haglo Assistent
 
@@ -12,9 +12,11 @@ Home-Assistant-Dashboard. Auf Deutsch, ohne YAML.
 
 ### Installation
 
-Voraussetzung: Home Assistant OS oder Supervised (Add-ons werden unterstützt).
+Voraussetzung: Home Assistant OS oder Supervised.
 
-1. **Einstellungen → Add-ons → Add-on Store → ⋮ → Repositories**
+Hinweis: In neueren Home-Assistant-Versionen heißen Add-ons **Apps**. Der Weg ist derselbe.
+
+1. **Einstellungen → Apps** (früher „Add-ons“) **→ App Store → ⋮ → Repositories**
 2. Diese Adresse eintragen und hinzufügen:
    `https://github.com/haglotech/haglo-addons`
 3. Im Store **Haglo Assistent** auswählen → **Installieren** → **Starten**.
