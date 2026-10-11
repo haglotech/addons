@@ -34,7 +34,7 @@ SKIP_DOMAINS = {
     "zone", "persistent_notification", "assist_satellite", "ai_task",
 }
 
-ADDON_VERSION = "0.6.0"
+ADDON_VERSION = "0.6.1"
 DEFAULT_BACKEND_URL = "https://api.haglotech.com"
 HUB_FILE = Path("/data/hub.json")
 TERMS_VERSION = "2026-10"
@@ -278,7 +278,7 @@ async def ensure_dashboard(ha: HAClient):
         "lovelace/dashboards/create",
         url_path=DASHBOARD_PATH,
         title=DASHBOARD_TITLE,
-        icon="mdi:robot-happy-outline",
+        icon="mdi:alpha-h-box-outline",
         mode="storage",
         require_admin=False,
         show_in_sidebar=True,
