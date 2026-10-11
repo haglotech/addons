@@ -40,9 +40,45 @@
           background: transparent; text-decoration: none; padding: 8px 14px; font: inherit; font-size: 14px; font-weight: 600; white-space: nowrap; border-radius: 10px; }
   .btn2:hover { background: var(--brand-soft); color: var(--brand-hover); border-color: var(--brand-hover); }
 
-  main { flex: 1; width: 100%; max-width: 680px; margin: 0 auto; padding: 5vh 16px 24px;
+  /* Ein Gesprächsfaden: oben die Marke, darunter die Nachrichten, die Eingabe steht fest unten */
+  main { flex: 1; min-height: 0; overflow-y: auto; width: 100%; padding: 12px 16px 8px;
          display: flex; flex-direction: column; justify-content: center; }
-  .brand { text-align: center; margin-bottom: 30px; }
+  main > * { width: 100%; max-width: 720px; margin-left: auto; margin-right: auto; flex: none; }
+  body.has-thread main { justify-content: flex-start; }
+  body.has-thread .brand { margin-bottom: 12px; }
+  body.has-thread .logo { width: 132px; }
+  body.has-thread .sub { font-size: 11px; margin-top: 6px; }
+  body.has-thread .tag, body.has-thread .chips { display: none; }
+  .composer { flex: none; width: 100%; max-width: 752px; margin: 0 auto; padding: 6px 16px 0; }
+  .crow { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; min-height: 34px; padding: 0 8px; }
+  .thread { display: flex; flex-direction: column; gap: 10px; padding-bottom: 6px; }
+  .msg { display: flex; }
+  .msg.user { justify-content: flex-end; }
+  .bub { max-width: 92%; border-radius: 18px; padding: 14px 16px; font-size: 15px; }
+  .msg.user .bub { background: var(--brand); color: var(--brand-ink); border-bottom-right-radius: 5px; padding: 10px 14px; max-width: 80%; }
+  .msg.bot .bub { background: var(--surface); border: 1px solid var(--line); border-bottom-left-radius: 5px; color: var(--text); }
+  .bub h2 { margin: 0 0 6px; font-size: 16px; font-weight: 600; color: var(--heading); }
+  .bub p { margin: 0 0 10px; color: var(--muted); }
+  .bub > :last-child, .bub .ask-q > :last-child { margin-bottom: 0; }
+  .bub .actions { justify-content: flex-start; margin-top: 4px; }
+  .bub .actions .primary, .bub .actions .btn2 { padding: 8px 14px; font-size: 14px; }
+  .bub .err { color: var(--err); }
+  .bub .links { margin-top: 8px; font-size: 13px; }
+  .bub .undo { background: none; border: 0; padding: 0; color: var(--muted); font: inherit; font-size: 13px; cursor: pointer; text-decoration: underline; }
+  .bub .undo:hover { color: var(--text); }
+  .bub .gone { font-size: 13px; color: var(--muted); }
+  .msg.was .bub { opacity: .6; }
+  .when2 { font-size: 11px; color: var(--muted); margin: 0 6px; align-self: flex-end; white-space: nowrap; }
+  .typing { display: flex; align-items: center; gap: 5px; color: var(--muted); }
+  .typing i { width: 7px; height: 7px; border-radius: 50%; background: var(--brand); animation: blink 1.2s infinite ease-in-out; }
+  .typing i:nth-child(2) { animation-delay: .2s; } .typing i:nth-child(3) { animation-delay: .4s; margin-right: 6px; }
+  @keyframes blink { 0%, 80%, 100% { opacity: .25; } 40% { opacity: 1; } }
+  details.fold { text-align: center; }
+  details.fold summary { cursor: pointer; color: var(--muted); font-size: 13px; padding: 4px 0 8px; list-style: none; }
+  details.fold summary::-webkit-details-marker { display: none; }
+  details.fold[open] summary { margin-bottom: 6px; }
+  details.fold .thread { text-align: left; }
+  .brand { text-align: center; margin-bottom: 26px; }
   .logo { width: 210px; aspect-ratio: 897 / 145; margin: 0 auto; background: var(--logo);
           -webkit-mask: url("static/logo-mask.png") center / contain no-repeat; mask: url("static/logo-mask.png") center / contain no-repeat; }
   .sub { color: var(--sub); font-weight: 600; font-size: 15px; letter-spacing: .62em; margin: 10px -0.62em 0 0; }
@@ -60,14 +96,14 @@
   .send:active { transform: scale(.94); }
   .send:disabled { opacity: .4; cursor: default; }
 
-  .chips { display: flex; flex-wrap: wrap; justify-content: center; gap: 8px; margin-top: 20px; }
+  .chips { display: flex; flex-wrap: wrap; justify-content: center; gap: 8px; margin-bottom: 12px; }
   .chip { border: 1px solid var(--line); background: var(--surface); color: var(--text); border-radius: 999px;
           padding: 8px 15px 8px 12px; font: inherit; font-size: 14px; cursor: pointer;
           display: inline-flex; align-items: center; gap: 7px; transition: border-color .15s, color .15s, background .15s; }
   .chip svg { color: var(--brand); flex: none; }
   .chip:hover { border-color: var(--brand); color: var(--brand); background: var(--brand-soft); }
   .chip:disabled { opacity: .5; cursor: default; }
-  .meta { text-align: center; color: var(--muted); font-size: 13px; margin-top: 16px; min-height: 20px; }
+  .meta { color: var(--muted); font-size: 12px; margin-left: auto; }
   .auto { text-align: left; border: 1px solid var(--line); background: var(--bg); border-radius: 12px; padding: 12px 14px; margin-bottom: 10px; }
   .auto b { color: var(--heading); font-size: 15px; }
   .kind { font-size: 12px; font-weight: 400; color: var(--muted); border: 1px solid var(--line); border-radius: 999px; padding: 1px 8px; margin-left: 4px; white-space: nowrap; }
@@ -84,11 +120,17 @@
   .hrow .w { flex: 1; min-width: 0; }
   .hrow .w small { display: block; color: var(--muted); font-size: 13px; }
   .hrow a { color: var(--brand); white-space: nowrap; font-size: 13px; }
-  .devbar { position: fixed; left: 12px; bottom: 12px; z-index: 5; display: flex; align-items: center; gap: 8px; font-size: 12px;
-            background: var(--surface); border: 1px dashed var(--line); border-radius: 12px; padding: 7px 10px; color: var(--muted); }
+  .tl { margin-right: auto; display: flex; align-items: center; gap: 14px; min-width: 0; }
+  .minilogo { width: 92px; aspect-ratio: 897 / 145; background: var(--logo); flex: none; visibility: hidden;
+              -webkit-mask: url("static/logo-mask.png") center / contain no-repeat; mask: url("static/logo-mask.png") center / contain no-repeat; }
+  body.has-thread .minilogo { visibility: visible; }
+  body.has-thread .brand { display: none; }
+  .devbar { display: flex; align-items: center; gap: 8px; font-size: 12px;
+            background: var(--surface); border: 1px dashed var(--line); border-radius: 12px; padding: 5px 9px; color: var(--muted); }
+  @media (max-width: 760px) { .devbar span { display: none; } .minilogo { width: 70px; } }
   .devbar select, .devbar button { font: inherit; color: var(--text); background: var(--bg); border: 1px solid var(--line);
             border-radius: 8px; padding: 4px 8px; cursor: pointer; }
-  .owner { margin: 14px auto 0; max-width: 520px; font-size: 13px; color: var(--text); position: relative;
+  .owner { margin: 0 auto 12px; max-width: 520px; font-size: 13px; color: var(--text); position: relative;
            background: var(--brand-soft); border-radius: 12px; padding: 9px 38px 9px 14px; text-align: center; }
   .owner b { color: var(--brand); }
   .owner .txt { cursor: pointer; }
@@ -114,7 +156,7 @@
   .links { margin-top: 12px; font-size: 14px; }
   .links button { background: none; border: 0; color: var(--muted); font: inherit; cursor: pointer; text-decoration: underline; }
 
-  footer { text-align: center; font-size: 12px; color: var(--muted); padding: 16px; }
+  footer { text-align: center; font-size: 12px; color: var(--muted); padding: 8px 16px 12px; flex: none; }
   footer a { color: var(--muted); cursor: pointer; }
 
   .sheet-bg { position: fixed; inset: 0; background: rgba(0,0,0,.55); display: flex; align-items: flex-end; justify-content: center; z-index: 10; }
@@ -151,7 +193,7 @@
   .plan .tag2 { font-size: 13px; color: var(--muted); }
   .manage { margin-top: 16px; display: flex; flex-wrap: wrap; gap: 10px; }
   .manage .btn2 { cursor: pointer; }
-  .dash { display: flex; align-items: center; gap: 8px; margin: 10px 0 0 22px; font-size: 13px; color: var(--muted); }
+  .dash { display: flex; align-items: center; gap: 8px; font-size: 12px; color: var(--muted); }
   .dash select { font: inherit; font-weight: 600; color: var(--brand); background: var(--surface); border: 1px solid var(--line);
                  border-radius: 999px; padding: 5px 10px; max-width: 240px; cursor: pointer; }
   .sheet .row { display: flex; gap: 10px; }
@@ -192,7 +234,6 @@
   /* Desktop */
   @media (min-width: 760px) {
     .top { padding: 18px 28px; }
-    main { padding-bottom: 12vh; }
     .logo { width: 320px; }
     .sub { font-size: 19px; margin-top: 14px; }
     .tag { font-size: 17px; }
@@ -207,48 +248,43 @@
 </style>
 </head>
 <body>
-  <div class="top"><a id="pill" class="pill hidden" role="button" tabindex="0"></a>
+  <div class="top"><div class="tl"><div class="minilogo" role="img" aria-label="HAGLO Assist"></div>
+    <div class="devbar hidden" id="devbar"><span>Entwickler</span>
+    <select id="devPlan" aria-label="Plan zum Testen">
+      <option value="">Automatisch</option><option value="free">Free (fremde Hardware)</option>
+      <option value="lite">Lite inklusive (Haglo-Gerät)</option><option value="pro">Pro</option><option value="max">Max</option>
+    </select>
+    <button id="devReset">Limits zurücksetzen</button></div></div><a id="pill" class="pill hidden" role="button" tabindex="0"></a>
     <a class="btn2" id="booking" href="https://haglotech.com/pages/termin" target="_blank" rel="noopener"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><rect x="3" y="5" width="18" height="16" rx="2"/><path d="M3 10h18M8 3v4M16 3v4"/></svg><span>Beratung<span class="long"> buchen</span></span></a></div>
 
-  <main>
+  <main id="main">
     <div class="brand">
       <div class="logo" role="img" aria-label="HAGLO Assist"></div>
       <div class="sub" aria-hidden="true">ASSIST</div>
       <div class="tag" id="tagline">Sag, was du sehen willst. Ich baue dein Dashboard.</div>
     </div>
+    <div class="owner hidden" id="owner"></div>
+    <div class="thread" id="result"></div>
+  </main>
 
-    <form class="search" id="form">
-      <input id="wish" autocomplete="off" placeholder="z. B. Alle Räume mit Licht">
-      <button class="send" id="send" aria-label="Los">
-        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h14M13 6l6 6-6 6"/></svg>
-      </button>
-    </form>
-
-    <div class="dash hidden" id="dashRow"><label for="dash">Dashboard</label><select id="dash"></select></div>
-
+  <div class="composer">
     <div class="chips" id="chips">
       <button class="chip" data-w="Erstelle eine übersichtliche Startseite mit allen Räumen. Pro Raum Licht, Heizung, Fenster und wichtige Sensoren."><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 11l9-7 9 7"/><path d="M5 10v10h14V10"/></svg>Alle Räume</button>
       <button class="chip" data-w="Erstelle eine Energie-Seite: Stromverbrauch, PV-Erzeugung, Speicher und Verläufe der letzten 24 Stunden."><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M13 2L4 14h7l-1 8 9-12h-7z"/></svg>Energie &amp; PV</button>
       <button class="chip" data-w="Erstelle eine Seite für Licht und Klima: alle Lichter zum Schalten, Thermostate und Temperaturen mit Verlauf."><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 18h6M10 21h4"/><path d="M12 3a6 6 0 0 0-4 10.5c.7.7 1 1.5 1 2.5h6c0-1 .3-1.800 1-2.500A6 6 0 0 0 12 3z"/></svg>Licht &amp; Klima</button>
       <button class="chip" data-w="Erstelle eine Sicherheits-Seite: Türen, Fenster, Bewegungsmelder, Rauchmelder und Kameras."><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3l8 3v6c0 5-3.500 8-8 9-4.500-1-8-4-8-9V6z"/></svg>Sicherheit</button>
     </div>
+    <form class="search" id="form">
+      <input id="wish" autocomplete="off" placeholder="z. B. Alle Räume mit Licht">
+      <button class="send" id="send" aria-label="Los">
+        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h14M13 6l6 6-6 6"/></svg>
+      </button>
+    </form>
+    <div class="crow"><div class="dash hidden" id="dashRow"><label for="dash">Dashboard</label><select id="dash"></select></div>
+      <div class="meta" id="meta"></div></div>
+  </div>
 
-    <div class="meta" id="meta"></div>
-    <div class="owner hidden" id="owner"></div>
-
-    <div class="loading hidden" id="loading"><div class="bar"><i></i></div><span id="loadText"></span></div>
-    <div class="result hidden" id="result"></div>
-    <div class="hist hidden" id="hist"></div>
-  </main>
-
-  <div class="devbar hidden" id="devbar"><span>Entwickler</span>
-    <select id="devPlan" aria-label="Plan zum Testen">
-      <option value="">Automatisch</option><option value="free">Free (fremde Hardware)</option>
-      <option value="lite">Lite inklusive (Haglo-Gerät)</option><option value="pro">Pro</option><option value="max">Max</option>
-    </select>
-    <button id="devReset">Limits zurücksetzen</button></div>
-
-  <footer><a id="terms" href="https://haglotech.com/policies/terms-of-service" target="_blank" rel="noopener">AGB</a> · <a id="privacy" href="https://haglotech.com/policies/privacy-policy" target="_blank" rel="noopener">Datenschutz</a> · <a id="autosLink" role="button" tabindex="0" class="hidden">Automationen</a><span id="autosSep" class="hidden"> · </span><a id="versionsLink" role="button" tabindex="0">Versionen</a> · <a id="planLink" role="button" tabindex="0">Plan &amp; Abo</a> · Haglo</footer>
+  <footer><a id="terms" href="https://haglotech.com/policies/terms-of-service" target="_blank" rel="noopener">AGB</a> · <a id="privacy" href="https://haglotech.com/policies/privacy-policy" target="_blank" rel="noopener">Datenschutz</a> · <a id="freshLink" role="button" tabindex="0">Neu beginnen</a> · <a id="autosLink" role="button" tabindex="0" class="hidden">Automationen</a><span id="autosSep" class="hidden"> · </span><a id="versionsLink" role="button" tabindex="0">Versionen</a> · <a id="planLink" role="button" tabindex="0">Plan &amp; Abo</a> · Haglo</footer>
 
   <div class="sheet-bg hidden" id="consent">
     <div class="sheet">
@@ -395,7 +431,7 @@ function setTrial(t) {
     p.innerHTML = `${esc(t.plan_name)}${gift ? " inklusive" : ""} · ${used}`;
     if (pct >= 80) p.classList.add("warn");
   }
-  if (!t.expired && wasExpired) { $("result").classList.add("hidden"); setInputs(true); }
+  if (!t.expired && wasExpired) { dismiss(); setInputs(true); }
   wasExpired = !!t.expired;
   // Sobald das Limit wieder frei ist, von selbst entsperren
   clearTimeout(resetTimer);
@@ -434,7 +470,7 @@ async function loadDashboards() {
 
 function selectDashboard(id) {
   dash = id; $("dash").value = id; dialog = []; asking = null;
-  $("result").classList.add("hidden");
+  dismiss();
   setDashboardMode(hasDashboard);
 }
 
@@ -457,30 +493,88 @@ $("allowYes").addEventListener("click", async () => {
   $("allow").classList.add("hidden");
 });
 
-async function loadHistory() {
-  try {
-    const items = (await api("api/history")).history.slice(0, 6);
-    const label = { dashboard: "Dashboard", automation: "Angelegt", restore: "Wiederhergestellt", automation_deleted: "Gelöscht", control: "Geschaltet", answer: "Antwort" };
-    $("hist").innerHTML = items.length ? "<h4>Zuletzt</h4>" + items.map((h) => `<div class="hrow"><span class="t">${when(h.ts)}</span>
-      <span class="w">${esc(h.wish || label[h.kind] || "")}<small>${esc(label[h.kind] || "")}${h.text ? " · " + esc(h.text) : ""}</small></span>
-      ${h.url ? `<a href="${esc(h.url)}" target="_top">Öffnen</a>` : ""}</div>`).join("") : "";
-    $("hist").classList.toggle("hidden", !items.length);
-  } catch (e) {}
+// ---------------------------------------------------------------- Gesprächsfaden
+// Ein einziger Faden: links die Antworten von Haglo Assist, rechts deine Wünsche. Alles, was erledigt
+// ist, kommt aus dem lokalen Verlauf der App und lässt sich dort einzeln rückgängig machen. `cur` ist
+// die Antwort, an der gerade gearbeitet wird (Tippen, Rückfrage, Vorschlag).
+let cur = null;
+const FOLD_AFTER = 3 * 3600;   // Älteres klappt sich ein, damit der Faden frisch beginnt
+const KIND = { dashboard: "Dashboard geändert", automation: "Angelegt", control: "Erledigt", restore: "Wiederhergestellt", automation_deleted: "Gelöscht" };
+
+function scrollDown() { const m = $("main"); requestAnimationFrame(() => { m.scrollTop = m.scrollHeight; }); }
+function hasThread() { document.body.classList.toggle("has-thread", $("result").children.length > 0); }
+
+function addUser(text) {
+  freeze();
+  const d = document.createElement("div");
+  d.className = "msg user"; d.innerHTML = `<div class="bub">${esc(text)}</div>`;
+  $("result").append(d); hasThread(); scrollDown();
 }
+
+// Eine beantwortete Karte bleibt stehen, lässt sich aber nicht mehr bedienen
+function freeze() {
+  if (!cur) return;
+  cur.querySelectorAll("button:not([data-undo]), input").forEach((b) => { b.disabled = true; });
+  cur.querySelectorAll("[id]").forEach((e) => e.removeAttribute("id"));
+  cur.classList.add("was"); cur = null;
+}
+
+function showResult(html) {
+  if (!cur) { cur = document.createElement("div"); cur.className = "msg bot"; cur.innerHTML = `<div class="bub"></div>`; $("result").append(cur); }
+  cur.firstChild.innerHTML = html; hasThread(); scrollDown();
+}
+
+function dismiss() { if (cur) { cur.remove(); cur = null; } hasThread(); }
+
+function typing(text) { showResult(`<div class="typing"><i></i><i></i><i></i><span id="loadText">${esc(text)}</span></div>`); }
+
+function historyMsg(h) {
+  const title = KIND[h.kind], undone = h.undone ? `<div class="gone">↩ Rückgängig gemacht</div>` : "";
+  const body = h.kind === "answer" ? `<p style="color:var(--text)">${esc(h.text)}</p>`
+    : `${title ? `<h2>${h.undone ? "" : "✓ "}${esc(title)}</h2>` : ""}${h.text ? `<p>${esc(h.text)}</p>` : ""}`;
+  const open = h.url && !h.undone ? `<a class="btn2" href="${esc(h.url)}" target="_top">Öffnen</a>` : "";
+  const undo = h.can_undo ? `<div class="links"><button class="undo" data-undo="${esc(h.id)}">Rückgängig</button></div>` : "";
+  return (h.wish ? `<div class="msg user"><div class="bub">${esc(h.wish)}</div></div>` : "")
+    + `<div class="msg bot${h.undone ? " was" : ""}"><div class="bub">${body}${open ? `<div class="actions">${open}</div>` : ""}${undo}${undone}</div>
+       <span class="when2">${when(h.ts)}</span></div>`;
+}
+
+// Baut den Faden aus dem Verlauf neu auf. Was gerade offen ist (cur), bleibt am Ende stehen.
+async function loadHistory() {
+  let items = [];
+  try { items = (await api("api/history")).history; } catch (e) { return; }
+  const now = Date.now() / 1000;
+  const old = items.filter((h) => now - h.ts > FOLD_AFTER), fresh = items.filter((h) => now - h.ts <= FOLD_AFTER);
+  const live = cur; if (live) live.remove();
+  $("result").innerHTML = (old.length ? `<details class="fold"><summary>Frühere Änderungen anzeigen (${old.length})</summary>
+      <div class="thread">${old.map(historyMsg).join("")}</div></details>` : "") + fresh.map(historyMsg).join("");
+  if (live) $("result").append(live);
+  hasThread(); scrollDown();
+}
+
+$("result").addEventListener("click", async (e) => {
+  const b = e.target.closest("[data-undo]");
+  if (!b) return;
+  b.disabled = true; b.textContent = "Wird rückgängig gemacht …";
+  try { await api("api/history/undo", { id: b.dataset.undo }); await loadHistory(); }
+  catch (err) { b.disabled = false; b.textContent = "Rückgängig"; alert(err.message); }
+});
+$("freshLink").addEventListener("click", async () => {
+  if (!confirm("Den Gesprächsverlauf leeren und neu beginnen? Deine Dashboards, Automationen und Versionen bleiben erhalten.")) return;
+  try { await api("api/history/clear", {}); cur = null; await loadHistory(); } catch (e) { alert(e.message); }
+});
 
 // Läuft noch eine Anfrage (z. B. Seite währenddessen verlassen), bis zum Ergebnis warten
 async function waitForJob(job) {
   busy = true; setInputs(false);
-  $("loading").classList.remove("hidden");
-  $("loadText").textContent = `Ich arbeite noch an: „${job.wish}“ …`;
+  addUser(job.wish); typing("Ich arbeite noch daran …");
   for (let i = 0; i < 120; i++) {
     await new Promise((r) => setTimeout(r, 3000));
     try { const s = await api("api/status"); if (!s.busy) break; } catch (e) {}
   }
-  $("loading").classList.add("hidden"); busy = false;
+  busy = false; dismiss();
   if (!(trial && trial.expired)) setInputs(true);
-  showResult(`<h2>✓ Fertig</h2><p>Deine letzte Anfrage ist abgeschlossen. Das Ergebnis steht unten unter „Zuletzt“.</p>`);
-  loadHistory();
+  await loadHistory();
 }
 
 async function init() {
@@ -494,7 +588,7 @@ async function init() {
       $("autosLink").classList.remove("hidden"); $("autosSep").classList.remove("hidden");
     }
     $("wish").value = mem.get("draft") || "";
-    loadHistory();
+    await loadHistory();
     if (s.busy) waitForJob(s.busy);
     else if (trial && !trial.accepted && (s.haglo_marker || s.preinstalled)) showWelcome(s.haglo_marker);
     else if (mem.get("question")) { const m = mem.get("question"); dialog = m.dialog || []; showQuestion(m.wish, m.label, m.q); }
@@ -534,54 +628,43 @@ $("accept").addEventListener("click", async () => {
   try {
     await api("api/consent", { version: "2026-10" });
     $("consent").classList.add("hidden");
-    if (welcomed && !pending) $("result").classList.add("hidden");
+    if (welcomed && !pending) dismiss();
     if (pending) generate(...pending);
     pending = null;
   } catch (e) { alert(e.message); $("accept").disabled = false; }
 });
 
-const steps = ["Ich schaue mir deine Geräte an …", "Ich sortiere nach Räumen …", "Ich baue die Kacheln …", "Fast fertig …"];
+const steps = ["Ich schaue mir deine Geräte an …", "Ich überlege, was am besten passt …", "Ich baue es zusammen …", "Fast fertig …"];
 async function generate(wish, label, keepDialog, allowStates) {
   if (!keepDialog) dialog = [];
   asking = null; mem.set("question", null); mem.set("automations", null);
   busy = true; setInputs(false);
-  if (label) $("wish").value = "";
-  $("result").classList.add("hidden");
-  $("loading").classList.remove("hidden");
-  let i = 0; $("loadText").textContent = steps[0];
-  const t = setInterval(() => { i = Math.min(i + 1, steps.length - 1); $("loadText").textContent = steps[i]; }, 7000);
+  if (!keepDialog && !allowStates) addUser(label || wish);   // Antworten auf Rückfragen stehen schon im Faden
+  else freeze();
+  $("wish").value = "";
+  let i = 0; typing(steps[0]);
+  const t = setInterval(() => { i = Math.min(i + 1, steps.length - 1); if ($("loadText")) $("loadText").textContent = steps[i]; }, 7000);
   try {
     const foreign = dash !== OWN;
     const r = await api("api/generate", { wish, refine: foreign || hasDashboard, dialog, dashboard: dash, allow_states: !!allowStates });
     if (r.question) { showQuestion(wish, label, r.question); return; }
     dialog = []; mem.set("draft", null);
-    if (r.objects) { $("wish").value = ""; showAutomations(wish, r.erklaerung, r.objects); return; }
+    if (r.objects) { showAutomations(wish, r.erklaerung, r.objects); return; }
     if (r.need_consent) { showStateConsent(wish, label, r.need_consent); return; }
-    if (r.confirm_actions) { $("wish").value = ""; showConfirmActions(wish, r.erklaerung, r.confirm_actions); return; }
-    if (r.done !== undefined || r.answer !== undefined) {
-      $("wish").value = "";
-      showResult(r.answer !== undefined ? `<p style="color:var(--text);font-size:16px;margin:0">${esc(r.answer)}</p>`
-        : `<h2>✓ Erledigt</h2><p style="margin:0">${esc(r.done)}</p>`);
-      loadHistory(); return;
+    if (r.confirm_actions) { showConfirmActions(wish, r.erklaerung, r.confirm_actions); return; }
+    if (!foreign && r.done === undefined && r.answer === undefined) {
+      if (!hasDashboard) addFreshLink();
+      setDashboardMode(true);
     }
-    const first = !hasDashboard && !foreign;
-    if (!foreign) setDashboardMode(true);
-    if (first) addFreshLink();
-    $("wish").value = "";
-    showResult(`
-      <h2>✓ ${foreign ? "Dein Dashboard ist geändert" : "Dein Dashboard ist fertig"}</h2>
-      <p>${esc(r.erklaerung)}</p>
-      <div class="actions"><a class="primary" href="${r.dashboard_url}" target="_top">Dashboard öffnen</a>
-      <a class="btn2" href="${trial.booking_url}" target="_blank" rel="noopener">Profi-Einrichtung buchen</a></div>
-      ${r.backup ? '<div class="links"><button id="undo">Rückgängig</button></div>' : ""}`);
-    if ($("undo")) $("undo").onclick = undo;
-    loadHistory();
+    dismiss(); await loadHistory();      // das Ergebnis steht jetzt als Eintrag im Verlauf, mit „Rückgängig“
   } catch (e) {
-    if (e.code === "consent_required") { pending = [wish, label]; $("consent").classList.remove("hidden"); }
-    else if (e.code !== "trial_expired") showResult(`<p class="err">Das hat nicht geklappt: ${esc(e.message)}</p>
+    if (e.code === "consent_required") { dismiss(); pending = [wish, label]; $("consent").classList.remove("hidden"); }
+    else if (e.code === "trial_expired") { /* die Limit-Karte steht schon da */ }
+    else showResult(`<p class="err">Das hat nicht geklappt: ${esc(e.message)}</p>
       <div class="actions"><a class="btn2" href="${trial ? trial.booking_url : "#"}" target="_blank" rel="noopener">Lieber persönlich? Beratung buchen</a></div>`);
   } finally {
-    clearInterval(t); $("loading").classList.add("hidden");
+    clearInterval(t);
+    if (cur && cur.querySelector(".typing")) dismiss();
     busy = false; if (!(trial && trial.expired)) setInputs(true);
   }
 }
@@ -634,6 +717,7 @@ function answer(text) {
   if (!asking || busy) return;
   const { wish, label, q } = asking;
   dialog.push({ frage: q.frage, antwort: text.slice(0, 500) });
+  addUser(text);
   generate(wish, label, true);
 }
 
@@ -722,7 +806,7 @@ async function toStripe(path, body) {
 }
 
 async function devSet(body) {
-  try { await api("api/dev", body); if (!trial.expired) { $("result").classList.add("hidden"); setInputs(true); } renderPlans(); }
+  try { await api("api/dev", body); if (!trial.expired) { dismiss(); setInputs(true); } renderPlans(); }
   catch (e) { alert(e.message); }
 }
 $("devPlan").addEventListener("change", () => devSet({ plan: $("devPlan").value || null }));
@@ -785,25 +869,13 @@ function showAutomations(wish, erklaerung, items) {
     <div class="actions" style="justify-content:flex-start"><button class="primary" id="autoYes">${change && one ? "Ändern" : "Anlegen"}</button>
       <button class="btn2" id="autoNo">Verwerfen</button></div>
     <p class="hint">Du findest alles später unter „Automationen“ und kannst es dort wieder löschen.</p></div>`);
-  $("autoNo").onclick = () => { mem.set("automations", null); $("result").classList.add("hidden"); };
+  $("autoNo").onclick = () => { mem.set("automations", null); dismiss(); };
   $("autoYes").onclick = async () => {
     $("autoYes").disabled = true;
     try {
       const r = await api("api/automations/apply", { automations: items, wish });
       mem.set("automations", null);
-      const first = r.created[0], link = { automation: "/config/automation/edit/" + first.id, skript: "/config/script/edit/" + first.id,
-        szene: "/config/scene/edit/" + first.id, helfer: "/config/helpers" }[first.art];
-      showResult(`<h2>✓ ${r.created.length === 1 ? "Fertig und aktiv" : "Alles ist angelegt"}</h2>
-        <p>${esc(r.created.map((c) => c.alias).join(", "))}</p>
-        <div class="actions"><a class="btn2" href="${esc(link)}" target="_top">In Home Assistant ansehen</a></div>
-        <div class="links"><button id="autoUndo">Rückgängig</button></div>`);
-      $("autoUndo").onclick = async () => {
-        try {
-          for (const c of r.created) await (c.backup ? api("api/automations/restore", { backup: c.backup }) : api("api/automations/delete", { id: c.id }));
-          showResult("<p>Das wurde rückgängig gemacht.</p>"); loadHistory();
-        } catch (e) { showResult(`<p class="err">${esc(e.message)}</p>`); }
-      };
-      loadHistory();
+      dismiss(); await loadHistory();
     } catch (e) {
       showResult(`<p class="err">Das hat nicht geklappt: ${esc(e.message)}</p>`);
     }
@@ -816,10 +888,10 @@ function showConfirmActions(wish, erklaerung, actions) {
     <p style="color:var(--text)">${esc(erklaerung)}</p>
     <div class="actions" style="justify-content:flex-start"><button class="primary" id="actYes">Ja, ausführen</button>
       <button class="btn2" id="actNo">Abbrechen</button></div></div>`);
-  $("actNo").onclick = () => $("result").classList.add("hidden");
+  $("actNo").onclick = () => dismiss();
   $("actYes").onclick = async () => {
     $("actYes").disabled = true;
-    try { await api("api/actions/run", { actions, wish, erklaerung }); showResult(`<h2>✓ Erledigt</h2><p style="margin:0">${esc(erklaerung)}</p>`); loadHistory(); }
+    try { await api("api/actions/run", { actions, wish, erklaerung }); dismiss(); await loadHistory(); }
     catch (e) { showResult(`<p class="err">Das hat nicht geklappt: ${esc(e.message)}</p>`); }
   };
 }
@@ -833,7 +905,7 @@ function showStateConsent(wish, label, items) {
     <div class="actions" style="justify-content:flex-start"><button class="primary" id="stOnce">Einmal erlauben</button>
       <button class="btn2" id="stAlways">Immer erlauben</button><button class="btn2" id="stNo">Abbrechen</button></div>
     <p class="hint">„Immer erlauben“ kannst du unter „Automationen“ wieder abschalten.</p></div>`);
-  $("stNo").onclick = () => $("result").classList.add("hidden");
+  $("stNo").onclick = () => dismiss();
   $("stOnce").onclick = () => generate(wish, label, false, true);
   $("stAlways").onclick = async () => { try { await api("api/prefs", { states_allowed: true }); } catch (e) {} generate(wish, label, false, true); };
 }
@@ -894,8 +966,6 @@ $("versions").addEventListener("click", async (e) => {
     await api("api/restore", { id: b.dataset.restore }); loadHistory();
     $("versions").classList.add("hidden");
     setDashboardMode(true);
-    showResult(`<h2>Version wiederhergestellt</h2><p>Der Stand davor wurde ebenfalls gesichert – du kannst jederzeit wieder zurück.</p>
-      <div class="actions"><a class="primary" href="/haglo-ki" target="_top">Dashboard öffnen</a></div>`);
   } catch (err) { $("vHint").textContent = err.message; $("vHint").classList.add("err"); b.disabled = false; }
 });
 
@@ -904,7 +974,6 @@ async function undo() {
   catch (e) { showResult(`<p class="err">${esc(e.message)}</p>`); }
 }
 
-function showResult(html) { $("result").innerHTML = html; $("result").classList.remove("hidden"); }
 function setInputs(on) {
   $("wish").disabled = !on; $("send").disabled = !on;
   document.querySelectorAll(".chip").forEach((c) => (c.disabled = !on));

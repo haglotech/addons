@@ -36,7 +36,7 @@ SKIP_DOMAINS = {
     "zone", "persistent_notification", "assist_satellite", "ai_task",
 }
 
-ADDON_VERSION = "0.15.2"
+ADDON_VERSION = "0.16.0"
 MAX_VERSIONS = 30                      # so viele Dashboard-Versionen bleiben lokal gespeichert
 BAR_ENTITY = "input_text.haglo_assist"           # Eingabeleiste im Dashboard
 BAR_STATUS = "input_text.haglo_assist_status"    # Rückmeldung darunter
@@ -532,7 +532,28 @@ async def selftest(app) -> None:
         write_prefs(before)
         return f"zurueckstellen={done} | waehrend={mid} nachricht={WELCOME_ID in notes} danach={after} nachricht-weg={WELCOME_ID not in notes2} vorher-prefs={sorted(before)}"
 
-    if job.get("welcome"):
+    async def undo_test():
+        """Dashboard ändern, den Eintrag im Verlauf rückgängig machen, prüfen, dass der Stand davor zurück ist."""
+        base = "http://127.0.0.1:8099"
+        async with HAClient(app["session"]) as ha:
+            before = await current_config(ha)
+        await build_dashboard(app, job["undo"], refine=before is not None, dialog=[], can_ask=False)
+        async with HAClient(app["session"]) as ha:
+            changed = await current_config(ha)
+        async with app["session"].get(f"{base}/api/history") as x:
+            last = (await x.json())["history"][-1]
+        async with app["session"].post(f"{base}/api/history/undo", json={"id": last["id"]}) as x:
+            res = await x.json()
+        async with HAClient(app["session"]) as ha:
+            after = await current_config(ha)
+        async with app["session"].get(f"{base}/api/history") as x:
+            last2 = (await x.json())["history"][-1]
+        return (f"geaendert={changed != before} eintrag={last['kind']}/kann-rueckgaengig={last['can_undo']} undo={res.get('ok') or res.get('error')} "
+                f"wieder-wie-vorher={after == before} markiert={last2.get('undone')}")
+
+    if job.get("undo"):
+        await step("rueckgaengig-im-faden", undo_test())
+    elif job.get("welcome"):
         await step("willkommen", welcome_test())
     elif job.get("sidebar"):
         await step("seitenleiste-reihenfolge", sidebar_test())
@@ -544,7 +565,7 @@ async def selftest(app) -> None:
         await step("automation-ablauf", automation_flow())
     else:
         await step("automation", automation_api())
-    if not any(job.get(k) for k in ("full", "probe", "sidebar", "welcome")):
+    if not any(job.get(k) for k in ("full", "probe", "sidebar", "welcome", "undo")):
         await step("seitenleiste", panel())
         await step("hw", hw())
         await step("dashboards", dashes())
@@ -915,12 +936,30 @@ def load_history() -> list:
         return []
 
 
-def add_history(kind: str, wish: str, text: str, **extra) -> None:
-    """Merkt sich, was gemacht wurde – damit beim Zurückkommen nichts weg ist. Bleibt auf dem Gerät."""
-    items = load_history()
-    items.append({"ts": int(time.time()), "kind": kind, "wish": wish[:300], "text": text[:500], **extra})
+def save_history(items: list) -> None:
     HISTORY_FILE.parent.mkdir(parents=True, exist_ok=True)
     HISTORY_FILE.write_text(json.dumps(items[-MAX_HISTORY:], ensure_ascii=False))
+
+
+def add_history(kind: str, wish: str, text: str, **extra) -> str:
+    """Merkt sich, was gemacht wurde – das ist der Gesprächsverlauf in der Oberfläche. Bleibt auf dem
+    Gerät. `undo` beschreibt, wie sich der Eintrag zurücknehmen lässt:
+    {"type": "version", "id": <Datei>} oder {"type": "objects", "items": [{"id", "backup"}]}."""
+    items = load_history()
+    hid = f"{int(time.time() * 1000)}"
+    items.append({"id": hid, "ts": int(time.time()), "kind": kind, "wish": wish[:300], "text": text[:500],
+                  **{k: v for k, v in extra.items() if v is not None}})
+    save_history(items)
+    return hid
+
+
+def can_undo(entry: dict, reg: dict) -> bool:
+    undo = entry.get("undo")
+    if not undo or entry.get("undone"):
+        return False
+    if undo["type"] == "version":
+        return (BACKUP_DIR / str(undo["id"])).exists()
+    return any((i.get("backup") and (AUTO_BACKUP_DIR / i["backup"]).exists()) or i["id"] in reg for i in undo.get("items", []))
 
 
 # ---------------------------------------------------------------- Automationen, Skripte, Szenen, Helfer
@@ -1165,7 +1204,8 @@ async def build_dashboard(app, wish: str, refine: bool, dialog: list, can_ask: b
 
         backup = write_backup(before, f"vor: {wish}", dashboard)
         await ha.call("lovelace/config/save", url_path=path, config=config)
-    add_history("dashboard", wish, result.get("erklaerung", ""), url=f"/{dashboard or 'lovelace'}")
+    add_history("dashboard", wish, result.get("erklaerung", ""), url=f"/{dashboard or 'lovelace'}",
+                undo={"type": "version", "id": backup} if backup else None)
     return {"erklaerung": result.get("erklaerung", ""), "config": config, "removed": sorted(set(removed)),
             "backup": backup, "usage": result.get("usage", {}), "status": result["status"],
             "dashboard_url": f"/{dashboard or 'lovelace'}"}
@@ -1288,8 +1328,66 @@ async def generate(request):
 
 @routes.get("/api/history")
 async def history(_):
-    """Was zuletzt gemacht wurde (lokal gespeichert), neueste zuerst."""
-    return web.json_response({"ok": True, "history": list(reversed(load_history()))})
+    """Der Gesprächsverlauf (lokal gespeichert), älteste zuerst."""
+    reg = load_automations()
+    items = [{**{k: v for k, v in h.items() if k != "undo"}, "id": h.get("id") or str(h.get("ts")),
+              "can_undo": can_undo(h, reg)} for h in load_history()]
+    return web.json_response({"ok": True, "history": items})
+
+
+@routes.post("/api/history/undo")
+async def undo_history(request):
+    """Nimmt genau diesen Eintrag zurück: Dashboard auf den Stand davor, Angelegtes löschen,
+    geänderte eigene Automationen wiederherstellen."""
+    try:
+        hid = str((await request.json()).get("id", ""))
+    except Exception:
+        hid = ""
+    items = load_history()
+    entry = next((h for h in items if (h.get("id") or str(h.get("ts"))) == hid), None)
+    reg = load_automations()
+    if not entry or not can_undo(entry, reg):
+        return web.json_response({"ok": False, "error": "Das lässt sich nicht mehr rückgängig machen."}, status=404)
+    session, undo = request.app["session"], entry["undo"]
+    try:
+        if undo["type"] == "version":
+            # keep=True: Der jetzige Stand wird vorher gesichert, das Rückgängig lässt sich also selbst zurücknehmen
+            await restore_version(request.app, BACKUP_DIR / undo["id"], keep=True, log=False)
+        else:
+            for item in undo["items"]:
+                if item.get("backup") and (AUTO_BACKUP_DIR / item["backup"]).exists():
+                    saved = json.loads((AUTO_BACKUP_DIR / item["backup"]).read_text())
+                    cfg = {k: v for k, v in saved["config"].items() if k != "id"}
+                    status, _ = await core(session, "POST", f"/config/automation/config/{saved['id']}", cfg)
+                    if status != 200:
+                        raise RuntimeError(f"Fehler {status}")
+                elif item["id"] in reg:
+                    art = reg[item["id"]].get("art", "automation")
+                    if art == "helfer":
+                        typ, helper_id = item["id"].split(":", 1)
+                        async with HAClient(session) as ha:
+                            await ha.call(f"{typ}/delete", **{f"{typ}_id": helper_id})
+                    else:
+                        status, _ = await core(session, "DELETE", f"/config/{CONFIG_PATH[art]}/config/{item['id']}")
+                        if status not in (200, 404):
+                            raise RuntimeError(f"Fehler {status}")
+                    reg.pop(item["id"], None)
+                    save_automations(reg)
+    except Exception as e:
+        return web.json_response({"ok": False, "error": f"Rückgängig fehlgeschlagen: {str(e)[:160]}"}, status=500)
+    items = load_history()
+    for h in items:
+        if (h.get("id") or str(h.get("ts"))) == hid:
+            h["undone"] = True
+    save_history(items)
+    return web.json_response({"ok": True})
+
+
+@routes.post("/api/history/clear")
+async def clear_history(_):
+    """Neu beginnen: leert den Gesprächsverlauf. Versionen und Angelegtes bleiben erhalten."""
+    save_history([])
+    return web.json_response({"ok": True})
 
 
 @routes.get("/api/automations")
@@ -1389,7 +1487,8 @@ async def apply_objects(request):
                         "created": reg.get(oid, {}).get("created") or int(time.time())}
             save_automations(reg)
         done.append({"id": oid, "alias": alias, "art": art, "backup": backup})
-    add_history("automation", str(body.get("wish") or ""), ", ".join(d["alias"] for d in done))
+    add_history("automation", str(body.get("wish") or ""), ", ".join(d["alias"] for d in done),
+                undo={"type": "objects", "items": [{"id": d["id"], "backup": d["backup"]} for d in done]})
     return web.json_response({"ok": True, "created": done})
 
 
@@ -1543,7 +1642,7 @@ async def versions(request):
     return web.json_response({"ok": True, "versions": out, "max": MAX_VERSIONS})
 
 
-async def restore_version(app, path: Path, keep: bool) -> None:
+async def restore_version(app, path: Path, keep: bool, log: bool = True) -> None:
     """Spielt eine Version zurück. Mit keep=True wird vorher der aktuelle Stand gesichert,
     damit auch das Wiederherstellen rückgängig gemacht werden kann."""
     version = read_backup(path)
@@ -1554,7 +1653,8 @@ async def restore_version(app, path: Path, keep: bool) -> None:
         if dashboard == DASHBOARD_PATH:
             await ensure_dashboard(ha)
         await ha.call("lovelace/config/save", url_path=dashboard or None, config=version["config"])
-    add_history("restore", "", "Frühere Version wiederhergestellt", url=f"/{dashboard or 'lovelace'}")
+    if log:
+        add_history("restore", "", "Frühere Version wiederhergestellt", url=f"/{dashboard or 'lovelace'}")
 
 
 @routes.post("/api/restore")

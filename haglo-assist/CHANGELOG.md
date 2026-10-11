@@ -1,5 +1,13 @@
 # Änderungen
 
+## 0.16.0
+
+- Neue Oberfläche als ein Gesprächsfaden: deine Wünsche und die Antworten untereinander, die Eingabe
+  steht fest unten
+- Jede Änderung hat ihr eigenes „Rückgängig“ – auch später noch
+- Ältere Einträge klappen sich ein. Mit „Neu beginnen“ leerst du den Faden, deine Dashboards,
+  Automationen und Versionen bleiben erhalten
+
 ## 0.15.2
 
 - Geräte von Haglo zeigen schon beim ersten Start, dass Lite inklusive ist – ohne dass dafür vor
