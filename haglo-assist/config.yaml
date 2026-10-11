@@ -1,7 +1,7 @@
 name: Haglo Assist
 version: "0.6.0"
 slug: haglo-assist
-description: KI-Assistent von HagloTech – erstellt dein Dashboard auf Deutsch
+description: KI-Assistent von Haglo – erstellt dein Dashboard auf Deutsch
 url: https://haglotech.com
 arch:
   - amd64
