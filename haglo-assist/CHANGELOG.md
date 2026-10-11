@@ -1,8 +1,9 @@
 # Änderungen
 
-## 0.15.1
+## 0.15.2
 
-- Geräte von Haglo werden schon beim ersten Start erkannt: Die App zeigt sofort, dass Lite inklusive ist
+- Geräte von Haglo zeigen schon beim ersten Start, dass Lite inklusive ist – ohne dass dafür vor
+  deiner Zustimmung etwas übertragen wird
 
 ## 0.15.0
 

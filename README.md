@@ -36,9 +36,9 @@ Hinweis: In neueren Home-Assistant-Versionen heißen Add-ons **Apps**. Der Weg i
 
 Zum Erstellen eines Dashboards überträgt das Add-on Gerätenamen, Räume, Gerätetypen
 und Einheiten an den Haglo-Server (`api.haglotech.com`) und von dort an unseren
-KI-Dienstleister Anthropic. Messwerte, Zustände und Verlaufsdaten werden nicht übertragen. Um zu erkennen, ob dein Gerät von Haglo
-stammt, werden Seriennummer und Netzwerkadresse an Haglo gesendet: auf Geräten von Haglo beim ersten
-Start, auf anderer Hardware erst nach deiner Zustimmung.
+KI-Dienstleister Anthropic. Messwerte, Zustände und Verlaufsdaten werden nicht übertragen. Um den Kauf bei Haglo zu
+bestätigen, werden Seriennummer und Netzwerkadresse des Geräts an Haglo gesendet – erst nach deiner
+Zustimmung. Vorher wird nichts übertragen.
 Frühere Dashboard-Versionen bleiben nur lokal auf deinem Gerät.
 
 Aktuelle Werte einzelner Geräte (für Fragen wie „Wie warm ist es im Bad?“), der Aufbau eigener
