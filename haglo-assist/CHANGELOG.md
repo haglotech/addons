@@ -1,5 +1,9 @@
 # Änderungen
 
+## 0.18.4
+
+- Diagramme im hellen Modus in neutralen Farben
+
 ## 0.18.3
 
 - Haglo Assist ist als Beta gekennzeichnet

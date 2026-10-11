@@ -571,7 +571,7 @@ async function renderDiagrams(root) {
     const sc = document.createElement("script");
     sc.src = "static/vendor/mermaid.min.js"; sc.onload = ok; sc.onerror = fail; document.head.append(sc);
   }).then(() => window.mermaid.initialize({ startOnLoad: false, securityLevel: "strict", fontFamily: "Work Sans, system-ui, sans-serif",
-    theme: matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "default" }));
+    theme: matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "neutral" }));
   try { await mermaidReady; } catch (e) { return; }      // ohne Bibliothek bleibt der Text stehen
   for (const el of items) {
     el.classList.add("done");
