@@ -1,5 +1,9 @@
 # Änderungen
 
+## 0.18.1
+
+- Neues App-Symbol mit dem Haglo-H; auch in der Seitenleiste steht jetzt ein H
+
 ## 0.18.0
 
 - Keine Dashboard-Auswahl mehr: Haglo Assist arbeitet einfach an deiner Startseite. Meinst du ein
