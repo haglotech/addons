@@ -46,5 +46,6 @@ Details: [Datenschutzerklärung](https://haglotech.com/policies/privacy-policy) 
 
 ### Lizenz
 
-Der Quelltext ist einsehbar, die Software ist aber nicht Open Source. Du darfst sie unverändert
-installieren und nutzen. Einzelheiten stehen in der Datei [LICENSE](LICENSE).
+Die App ist Open Source unter der [Apache-Lizenz 2.0](LICENSE). Die Namen „Haglo“ und „Haglo Assist“
+und die Logos bleiben Kennzeichen von Haglo, siehe [NOTICE](NOTICE). Der Dienst hinter der App ist
+nicht Teil dieser Software.

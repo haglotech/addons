@@ -1,0 +1,14 @@
+Haglo Assist
+Copyright 2026 Jonas Hagenlocher (Haglo)
+
+Diese Software steht unter der Apache-Lizenz, Version 2.0 (siehe Datei LICENSE).
+
+Die Namen "Haglo" und "Haglo Assist" sowie die Logos sind Kennzeichen von Haglo.
+Die Lizenz erlaubt nicht, sie für eigene Produkte oder Dienste zu verwenden
+(Abschnitt 6 der Lizenz).
+
+Der Dienst hinter der App (api.haglotech.com) ist nicht Teil dieser Software. Seine
+Nutzung richtet sich nach den AGB: https://haglotech.com/policies/terms-of-service
+
+Enthält die Schrift "Work Sans" unter der SIL Open Font License 1.1, siehe
+haglo-assist/app/static/fonts/OFL-LICENSE.txt.
