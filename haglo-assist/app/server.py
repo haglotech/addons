@@ -1,4 +1,4 @@
-"""Haglo Assistent – Home-Assistant-Add-on.
+"""Haglo Assist – Home-Assistant-Add-on.
 
 Liest die Geräte aus Home Assistant, lässt das Haglo-Backend daraus per KI ein
 Dashboard bauen und speichert es in einem EIGENEN Dashboard ("haglo-ki").

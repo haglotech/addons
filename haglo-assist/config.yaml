@@ -1,6 +1,6 @@
-name: Haglo Assistent
+name: Haglo Assist
 version: "0.6.0"
-slug: haglo
+slug: haglo-assist
 description: KI-Assistent von HagloTech – erstellt dein Dashboard auf Deutsch
 url: https://haglotech.com
 arch:
@@ -11,7 +11,7 @@ boot: auto
 ingress: true
 ingress_port: 8099
 panel_icon: mdi:robot-happy-outline
-panel_title: Haglo
+panel_title: Haglo Assist
 homeassistant_api: true
 options:
   backend_url: https://api.haglotech.com

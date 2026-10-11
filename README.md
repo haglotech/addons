@@ -1,8 +1,8 @@
 # HagloTech Apps (Add-ons) für Home Assistant
 
-## Haglo Assistent
+## Haglo Assist
 
-Sag in einem Satz, was du sehen willst – der Haglo Assistent baut daraus ein
+Sag in einem Satz, was du sehen willst – Haglo Assist baut daraus ein
 Home-Assistant-Dashboard. Auf Deutsch, ohne YAML.
 
 - Speichert in ein **eigenes Dashboard „Haglo Dashboard“**. Deine bestehenden
@@ -19,8 +19,8 @@ Hinweis: In neueren Home-Assistant-Versionen heißen Add-ons **Apps**. Der Weg i
 1. **Einstellungen → Apps** (früher „Add-ons“) **→ App Store → ⋮ → Repositories**
 2. Diese Adresse eintragen und hinzufügen:
    `https://github.com/haglotech/addons`
-3. Im Store **Haglo Assistent** auswählen → **Installieren** → **Starten**.
-4. „In Seitenleiste anzeigen“ einschalten – links erscheint **Haglo**.
+3. Im Store **Haglo Assist** auswählen → **Installieren** → **Starten**.
+4. „In Seitenleiste anzeigen“ einschalten – links erscheint **Haglo Assist**.
 
 [![Repository zu Home Assistant hinzufügen](https://my.home-assistant.io/badges/supervisor_add_addon_repository.svg)](https://my.home-assistant.io/redirect/supervisor_add_addon_repository/?repository_url=https%3A%2F%2Fgithub.com%2Fhaglotech%2Faddons)
 
