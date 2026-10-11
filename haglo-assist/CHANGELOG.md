@@ -1,5 +1,11 @@
 # Änderungen
 
+## 0.12.0
+
+- Ruhigerer, neutraler Hintergrund – Grün nur noch als Akzent
+- Auf Haglo-Geräten ist Lite mindestens 12 Monate inklusive. Die App zeigt das direkt an,
+  mit dem Datum, bis zu dem es mindestens gilt. Eine gesonderte Testphase gibt es nicht mehr.
+
 ## 0.11.0
 
 - Nutzungslimits wie bei Claude: ein 5-Stunden-Limit und ein Wochenlimit, angezeigt in Prozent.

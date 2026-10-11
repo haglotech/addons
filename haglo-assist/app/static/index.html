@@ -9,13 +9,13 @@
   @font-face { font-family: "Work Sans"; font-weight: 600; font-display: swap; src: url("static/fonts/work-sans-latin-600-normal.woff2") format("woff2"); }
   /* Farben aus dem haglotech.com-Theme (Farbschema 1 hell, 7 dunkel) */
   :root {
-    --bg: #ffffff; --surface: #f0f7f1; --text: #1a1a1a; --heading: #0d3d1a; --muted: #5d6b61; --line: #e0e0e0;
-    --logo: #267b42; --sub: #7d827e; --brand: #2e7d32; --brand-hover: #1b5e20; --brand-ink: #ffffff; --brand-soft: #e8f5e9;
-    --warn: #8a5300; --warn-soft: #fdf1df; --err: #b3261e; --err-soft: #fbe9e7; --shadow: 0 1px 6px rgba(13, 61, 26, .12);
+    --bg: #ffffff; --surface: #f4f5f4; --text: #1a1c1b; --heading: #111312; --muted: #5f6662; --line: #e1e4e2; --glow: #f1f6f2;
+    --logo: #267b42; --sub: #7d827e; --brand: #2e7d32; --brand-hover: #1b5e20; --brand-ink: #ffffff; --brand-soft: #e7f3e8;
+    --warn: #8a5300; --warn-soft: #fdf1df; --err: #b3261e; --err-soft: #fbe9e7; --shadow: 0 1px 6px rgba(0, 0, 0, .10);
   }
   @media (prefers-color-scheme: dark) {
-    :root { --bg: #0d1b0f; --surface: #142a18; --text: #e8f5e9; --heading: #ffffff; --muted: #9fb5a4; --line: #23422a;
-            --logo: #81c784; --sub: #9aa39c; --brand: #81c784; --brand-hover: #a5d6a7; --brand-ink: #0d1b0f; --brand-soft: #16301b;
+    :root { --bg: #131514; --surface: #1c1f1d; --text: #eceeed; --heading: #ffffff; --muted: #a2a9a5; --line: #2e3330; --glow: #181b19;
+            --logo: #81c784; --sub: #9aa39c; --brand: #81c784; --brand-hover: #a5d6a7; --brand-ink: #10130f; --brand-soft: #223127;
             --warn: #f0b45a; --warn-soft: #2e2416; --err: #f2b8b5; --err-soft: #321d1b; --shadow: 0 1px 6px rgba(0, 0, 0, .5); }
   }
   * { box-sizing: border-box; }
@@ -23,7 +23,7 @@
   body { margin: 0; background: var(--bg); color: var(--text);
          font: 16px/1.5 "Work Sans", system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
          display: flex; flex-direction: column;
-         background-image: radial-gradient(900px 420px at 50% -80px, var(--brand-soft), transparent 70%); background-repeat: no-repeat; }
+         background-image: radial-gradient(900px 420px at 50% -80px, var(--glow), transparent 70%); background-repeat: no-repeat; }
   a { color: inherit; }
 
   .top { display: flex; flex-wrap: wrap; justify-content: flex-end; align-items: center; gap: 10px; padding: 14px 16px; min-height: 64px; }
@@ -64,6 +64,9 @@
   .chip:hover { border-color: var(--brand); color: var(--brand); background: var(--brand-soft); }
   .chip:disabled { opacity: .5; cursor: default; }
   .meta { text-align: center; color: var(--muted); font-size: 13px; margin-top: 16px; min-height: 20px; }
+  .owner { margin: 14px auto 0; max-width: 520px; text-align: center; font-size: 13px; color: var(--text);
+           background: var(--brand-soft); border-radius: 12px; padding: 9px 14px; cursor: pointer; }
+  .owner b { color: var(--brand); }
   .meta button, .meta a { background: none; border: 0; color: var(--brand); font: inherit; cursor: pointer; padding: 0; text-decoration: underline; }
 
   .loading { margin-top: 28px; text-align: center; color: var(--muted); }
@@ -86,7 +89,7 @@
   footer { text-align: center; font-size: 12px; color: var(--muted); padding: 16px; }
   footer a { color: var(--muted); cursor: pointer; }
 
-  .sheet-bg { position: fixed; inset: 0; background: rgba(0,0,0,.45); display: flex; align-items: flex-end; justify-content: center; z-index: 10; }
+  .sheet-bg { position: fixed; inset: 0; background: rgba(0,0,0,.55); display: flex; align-items: flex-end; justify-content: center; z-index: 10; }
   .sheet { background: var(--bg); width: 100%; max-width: 520px; border-radius: 16px 16px 0 0; padding: 24px 20px 28px; }
   .sheet h3 { margin: 0 0 8px; font-size: 20px; font-weight: 600; color: var(--heading); }
   .sheet ul { margin: 0 0 16px; padding-left: 20px; color: var(--muted); font-size: 15px; }
@@ -203,6 +206,7 @@
     </div>
 
     <div class="meta" id="meta"></div>
+    <div class="owner hidden" id="owner"></div>
 
     <div class="loading hidden" id="loading"><div class="bar"><i></i></div><span id="loadText"></span></div>
     <div class="result hidden" id="result"></div>
@@ -214,7 +218,8 @@
     <div class="sheet">
       <h3>Kostenlos starten</h3>
       <ul>
-        <li>Free für alle – kein Abo, keine Zahlungsdaten. Auf Haglo-Geräten ist Lite mindestens 12 Monate ohne Aufpreis inklusive, dazu 30 Tage Pro zum Testen</li>
+        <li>Free für alle – kein Abo, keine Zahlungsdaten</li>
+        <li>Bei Haglo gekauft? Dann ist Lite bei deinem Gerät mindestens 12 Monate ohne Aufpreis inklusive</li>
         <li>Dein Dashboard bleibt erhalten, frühere Versionen liegen nur lokal auf deinem Gerät</li>
         <li>Übertragen werden nur dein Wunsch sowie Namen, Räume und Typen deiner Geräte – an den Haglo-Server und unseren KI-Dienstleister Anthropic (USA)</li>
         <li>Messwerte, Verläufe und Zustände verlassen dein Gerät nicht</li>
@@ -302,6 +307,11 @@ function setTrial(t) {
   const days = `${t.days_left} ${t.days_left === 1 ? "Tag" : "Tage"}`;
   const pct = t.window ? Math.max(t.window.used_pct, t.week.used_pct >= 100 ? 100 : 0) : 0;
   const used = `${pct} % genutzt`;
+  // Wer bei Haglo gekauft hat, sieht, dass Lite deshalb inklusive ist – und bis wann mindestens
+  const gift = t.accepted && t.included_plan && t.level === t.included_plan && !(t.subscription && t.subscription.active);
+  const until = t.included_until ? new Date(t.included_until * 1000).toLocaleDateString("de-DE") : "";
+  $("owner").classList.toggle("hidden", !gift);
+  if (gift) $("owner").innerHTML = `Danke für deinen Kauf bei Haglo: <b>${esc(t.plan_name)} ist bei deinem Gerät inklusive</b>${until ? `, mindestens bis ${until}` : ""}.`;
   if (!t.accepted) { p.textContent = "Kostenlos starten"; }
   else if (t.expired) { p.textContent = `${t.plan_name || ""} · Limit erreicht`; p.classList.add("end"); showExpired(); }
   else if (!t.plan) { p.textContent = "Haglo Assist"; }
@@ -309,7 +319,7 @@ function setTrial(t) {
     p.innerHTML = `Testphase · noch ${days}<span class="long"> · ${used}</span>`;
     if (t.days_left <= 5 || pct >= 80) p.classList.add("warn");
   } else {
-    p.innerHTML = `${esc(t.plan_name)} · ${used}`;
+    p.innerHTML = `${esc(t.plan_name)}${gift ? " inklusive" : ""} · ${used}`;
     if (pct >= 80) p.classList.add("warn");
   }
   if (!t.expired && wasExpired) { $("result").classList.add("hidden"); setInputs(true); }
@@ -537,7 +547,7 @@ function renderPlans() {
     if (key !== "free") {
       price = interval === "year" ? `${money(p.price_year_eur)} <small>/ Jahr</small>` : `${money(p.price_month_eur)} <small>/ Monat</small>`;
       const bookable = (catalog.bookable[key] || []).includes(interval);
-      if (included) action = `<span class="tag2 inc">Bei deinem Haglo-Gerät inklusive${trial.included_until ? `, mindestens bis ${new Date(trial.included_until * 1000).toLocaleDateString("de-DE")}` : ""}</span>`;
+      if (included) action = `<span class="tag2 inc">Inklusive, weil du bei Haglo gekauft hast${trial.included_until ? ` – mindestens bis ${new Date(trial.included_until * 1000).toLocaleDateString("de-DE")}` : ""}</span>`;
       else if (sub.plan === key) action = `<span class="tag2">Dein Abo</span>`;
       else if (sub.active) action = `<button class="btn2" data-portal>Wechseln</button>`;
       else if (bookable) action = `<button class="primary" data-plan="${esc(key)}">${esc(p.name)} wählen</button>`;
@@ -563,7 +573,7 @@ async function toStripe(path, body) {
   }
 }
 
-for (const id of ["pill", "planLink"]) {
+for (const id of ["pill", "planLink", "owner"]) {
   $(id).addEventListener("click", openPlans);
   $(id).addEventListener("keydown", (e) => { if (e.key === "Enter") openPlans(); });
 }
