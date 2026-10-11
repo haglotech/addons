@@ -36,7 +36,7 @@ SKIP_DOMAINS = {
     "zone", "persistent_notification", "assist_satellite", "ai_task",
 }
 
-ADDON_VERSION = "0.18.1"
+ADDON_VERSION = "0.18.2"
 MAX_VERSIONS = 30                      # so viele Dashboard-Versionen bleiben lokal gespeichert
 BAR_ENTITY = "input_text.haglo_assist"           # Eingabeleiste im Dashboard
 BAR_STATUS = "input_text.haglo_assist_status"    # Rückmeldung darunter
@@ -913,7 +913,7 @@ def add_bar(config: dict) -> dict:
     views = config.get("views") or []
     if views and views[0].get("type") == "sections":
         views[0]["sections"] = [{"type": "grid", "cards": [
-            {"type": "heading", "heading": "Haglo Assist", "icon": "mdi:alpha-h-box"},
+            {"type": "heading", "heading": "Haglo Assist", "icon": "mdi:head-lightbulb-outline"},
             {"type": "entities", "entities": [{"entity": BAR_ENTITY, "name": "Was soll ich ändern?"}]},
             {"type": "markdown", "content": "{{ states('" + BAR_STATUS + "') }}"},
         ]}] + [s for s in views[0].get("sections", []) if not is_bar(s)]
@@ -923,9 +923,9 @@ def add_bar(config: dict) -> dict:
 async def ensure_bar_helpers(ha: HAClient):
     have = {i.get("id") for i in await ha.call("input_text/list")}
     if "haglo_assist" not in have:
-        await ha.call("input_text/create", name="Haglo Assist", icon="mdi:alpha-h-box", max=255, mode="text")
+        await ha.call("input_text/create", name="Haglo Assist", icon="mdi:head-lightbulb-outline", max=255, mode="text")
     if "haglo_assist_status" not in have:
-        await ha.call("input_text/create", name="Haglo Assist Status", icon="mdi:alpha-h-box", max=255, mode="text")
+        await ha.call("input_text/create", name="Haglo Assist Status", icon="mdi:head-lightbulb-outline", max=255, mode="text")
 
 
 async def set_text(ha: HAClient, entity: str, value: str):

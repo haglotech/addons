@@ -1,5 +1,9 @@
 # Änderungen
 
+## 0.18.2
+
+- Neues Symbol in der Seitenleiste und grünes Haglo-H als App-Symbol
+
 ## 0.18.1
 
 - Neues App-Symbol mit dem Haglo-H; auch in der Seitenleiste steht jetzt ein H
