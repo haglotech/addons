@@ -252,14 +252,14 @@
 
   <div class="sheet-bg hidden" id="consent">
     <div class="sheet">
-      <h3>Kostenlos starten</h3>
+      <h3 id="consentTitle">Kostenlos starten</h3>
       <ul>
-        <li>Free für alle – kein Abo, keine Zahlungsdaten</li>
-        <li>Bei Haglo gekauft? Dann ist Lite bei deinem Gerät mindestens 12 Monate ohne Aufpreis inklusive</li>
+        <li id="consentOffer">Free für alle – kein Abo, keine Zahlungsdaten</li>
+        <li id="consentBought">Bei Haglo gekauft? Dann ist Lite bei deinem Gerät mindestens 12 Monate ohne Aufpreis inklusive</li>
         <li>Dein Dashboard bleibt erhalten, frühere Versionen liegen nur lokal auf deinem Gerät</li>
         <li>Übertragen werden nur dein Wunsch sowie Namen, Räume und Typen deiner Geräte – an den Haglo-Server und unseren KI-Dienstleister Anthropic (USA)</li>
         <li>Messwerte, Verläufe und Zustände verlassen dein Gerät nicht</li>
-        <li>Um die Testphase zu prüfen, senden wir nach deiner Zustimmung Seriennummer und Netzwerkadresse des Geräts an Haglo</li>
+        <li>Seriennummer und Netzwerkadresse des Geräts nutzen wir nur, um zu erkennen, ob es von Haglo stammt</li>
       </ul>
       <label><input type="checkbox" id="agree">
         <span>Ich akzeptiere die <a id="termsLink" target="_blank" rel="noopener">AGB</a> und habe die <a id="privacyLink" target="_blank" rel="noopener">Datenschutzerklärung</a> gelesen.</span></label>
@@ -375,7 +375,14 @@ function setTrial(t) {
   $("owner").classList.toggle("hidden", !gift || ownerHidden);
   if (gift) $("owner").innerHTML = `<span class="txt" data-plans-open>Danke für deinen Kauf bei Haglo: <b>${esc(t.plan_name)} ist bei deinem Gerät inklusive</b>${until ? `, mindestens bis ${until}` : ""}.</span>
     <button class="x" id="ownerClose" aria-label="Hinweis schließen" title="Nicht mehr anzeigen">×</button>`;
-  if (!t.accepted) { p.textContent = welcomed ? "Loslegen" : "Kostenlos starten"; p.classList.add("cta"); }
+  // Vom Server bestätigtes Haglo-Gerät: schon vor dem Start zeigen, dass Lite inklusive ist
+  const bought = !t.accepted && t.haglo_device && t.included_plan;
+  $("consentTitle").textContent = bought ? `${t.plan_name} aktivieren` : "Kostenlos starten";
+  $("consentOffer").innerHTML = bought ? `Dieses Gerät wurde bei Haglo gekauft: <b>${esc(t.plan_name)} ist mindestens 12 Monate ohne Aufpreis inklusive</b> – kein Abo, keine Zahlungsdaten`
+    : "Free für alle – kein Abo, keine Zahlungsdaten";
+  $("consentBought").classList.toggle("hidden", !!bought);
+  $("accept").textContent = bought ? `Zustimmen & ${t.plan_name} aktivieren` : "Zustimmen & loslegen";
+  if (!t.accepted) { p.textContent = bought ? `${t.plan_name} inklusive · Loslegen` : "Kostenlos starten"; p.classList.add("cta"); }
   else if (t.expired) { p.textContent = `${t.plan_name || ""} · Limit erreicht`; p.classList.add("end"); showExpired(); }
   else if (!t.plan) { p.textContent = "Haglo Assist"; }
   else if (t.plan === "trial") {
@@ -484,7 +491,7 @@ async function init() {
     $("wish").value = mem.get("draft") || "";
     loadHistory();
     if (s.busy) waitForJob(s.busy);
-    else if (s.preinstalled && trial && !trial.accepted) showWelcome();
+    else if (trial && !trial.accepted && trial.haglo_device) showWelcome();
     else if (mem.get("question")) { const m = mem.get("question"); dialog = m.dialog || []; showQuestion(m.wish, m.label, m.q); }
     else if (mem.get("automations")) { const m = mem.get("automations"); showAutomations(m.wish, m.erklaerung, m.items); }
     setDashboardMode(s.has_dashboard);
@@ -576,14 +583,16 @@ async function generate(wish, label, keepDialog, allowStates) {
 
 // ---------------------------------------------------------------- Begrüßung auf Haglo-Geräten
 function showWelcome() {
-  welcomed = true; $("pill").textContent = "Loslegen";
-  showResult(`<h2>Danke für deinen Kauf bei Haglo</h2>
-    <p style="color:var(--text)">Haglo Assist ist auf deinem Gerät schon eingerichtet. <b>Lite ist mindestens 12 Monate ohne Aufpreis inklusive.</b></p>
+  welcomed = true;
+  const plan = esc(trial.plan_name || "Lite");
+  showResult(`<p class="step" style="color:var(--brand);font-weight:600">✓ Gerät von Haglo erkannt</p>
+    <h2>Danke für deinen Kauf bei Haglo</h2>
+    <p style="color:var(--text)">Zu deinem Gerät gehört <b>Haglo Assist ${plan} – mindestens 12 Monate ohne Aufpreis</b>. Kein Abo, keine Zahlungsdaten, nichts läuft automatisch weiter.</p>
     <div class="auto"><dl>
       <dt>Dashboards</dt><dd>„Zeig mir alle Räume mit Licht und Heizung.“</dd>
       <dt>Automationen</dt><dd>„Wenn sich im Flur etwas bewegt, mach das Licht an.“</dd>
       <dt>Schalten</dt><dd>„Mach im Wohnzimmer das Licht aus.“</dd></dl></div>
-    <div class="actions"><button class="primary" id="welcomeGo">Loslegen</button>
+    <div class="actions"><button class="primary" id="welcomeGo">${plan} aktivieren</button>
       <a class="btn2" href="https://haglotech.com/pages/termin" target="_blank" rel="noopener">Lieber persönlich? Beratung buchen</a></div>
     <p class="hint">Sobald du Geräte hinzugefügt hast, sag einfach in einem Satz, was du brauchst.</p>`);
   $("welcomeGo").onclick = () => $("consent").classList.remove("hidden");

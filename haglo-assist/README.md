@@ -18,8 +18,9 @@ deine Geräte. Auf Deutsch, ohne YAML.
 
 Zum Erstellen eines Dashboards werden Gerätenamen, Räume, Gerätetypen und Einheiten
 an den Haglo-Server und von dort an unseren KI-Dienstleister Anthropic übertragen.
-Messwerte, Zustände und Verlaufsdaten werden nicht übertragen. Um die Testphase zu prüfen,
-werden nach deiner Zustimmung Seriennummer und Netzwerkadresse des Geräts an Haglo gesendet.
+Messwerte, Zustände und Verlaufsdaten werden nicht übertragen. Um zu erkennen, ob dein Gerät von Haglo
+stammt, werden Seriennummer und Netzwerkadresse an Haglo gesendet: auf Geräten von Haglo beim ersten
+Start, auf anderer Hardware erst nach deiner Zustimmung.
 Frühere Dashboard-Versionen bleiben nur lokal auf deinem Gerät.
 
 Aktuelle Werte einzelner Geräte (für Fragen wie „Wie warm ist es im Bad?“), der Aufbau eigener

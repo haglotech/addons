@@ -1,5 +1,9 @@
 # Änderungen
 
+## 0.15.1
+
+- Geräte von Haglo werden schon beim ersten Start erkannt: Die App zeigt sofort, dass Lite inklusive ist
+
 ## 0.15.0
 
 - Begrüßung auf Haglo-Geräten: Dank für den Kauf, kurze Einführung und der Hinweis auf das inklusive Lite

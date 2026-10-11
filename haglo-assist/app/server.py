@@ -36,7 +36,7 @@ SKIP_DOMAINS = {
     "zone", "persistent_notification", "assist_satellite", "ai_task",
 }
 
-ADDON_VERSION = "0.15.0"
+ADDON_VERSION = "0.15.1"
 MAX_VERSIONS = 30                      # so viele Dashboard-Versionen bleiben lokal gespeichert
 BAR_ENTITY = "input_text.haglo_assist"           # Eingabeleiste im Dashboard
 BAR_STATUS = "input_text.haglo_assist_status"    # Rückmeldung darunter
@@ -312,9 +312,13 @@ async def read_hardware(session) -> dict:
 
 
 async def identify(app, status: dict) -> dict:
-    """Meldet Seriennummer und MAC-Adressen ans Backend – erst nachdem der Nutzer zugestimmt
-    hat, und nur einmal pro Start. Gibt den (ggf. neuen) Backend-Status zurück."""
-    if app.get("identified") or not status.get("accepted"):
+    """Meldet Seriennummer und MAC-Adressen ans Backend, einmal pro Start, und gibt den (ggf.
+    neuen) Backend-Status zurück.
+
+    Auf Geräten, die nach Modell oder Geräte-Zettel von Haglo stammen, schon beim ersten Start:
+    So sieht der Käufer sofort, dass Lite inklusive ist. Auf anderer Hardware erst nach der
+    Zustimmung des Nutzers."""
+    if app.get("identified") or not (status.get("accepted") or looks_like_haglo()):
         return status
     data = await backend(app["session"], "POST", "/v1/hubs/identify", await read_hardware(app["session"]))
     app["identified"] = True
