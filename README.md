@@ -1,5 +1,11 @@
 # Haglo Apps für Home Assistant
 
+![Version](https://img.shields.io/badge/dynamic/yaml?url=https%3A%2F%2Fraw.githubusercontent.com%2Fhaglotech%2Faddons%2Fmain%2Fhaglo-assist%2Fconfig.yaml&query=%24.version&label=version&color=2e7d32)
+![Maintained](https://img.shields.io/maintenance/yes/2026)
+![Letzte Änderung](https://img.shields.io/github/last-commit/haglotech/addons?label=letzte%20%C3%84nderung)
+![Supports aarch64](https://img.shields.io/badge/aarch64-yes-green)
+![Supports amd64](https://img.shields.io/badge/amd64-yes-green)
+
 ## Haglo Assist
 
 Sag in einem Satz, was du sehen willst – Haglo Assist baut daraus ein
