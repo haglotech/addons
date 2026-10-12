@@ -1,5 +1,11 @@
 # Änderungen
 
+## 0.18.6
+
+- Behoben: Bei einer selbst gestalteten Startseite endete jede Anfrage mit „Ungültige Antwort“
+- Fragen, Schalten und Automationen gehen jetzt auch ohne Freigabe des eigenen Dashboards; gefragt wird
+  nur noch, wenn der Wunsch wirklich das Dashboard betrifft
+
 ## 0.18.5
 
 - Eigene Nutzungsbedingungen und Datenschutzhinweise für Haglo Assist verlinkt

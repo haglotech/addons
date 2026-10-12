@@ -36,7 +36,7 @@ SKIP_DOMAINS = {
     "zone", "persistent_notification", "assist_satellite", "ai_task",
 }
 
-ADDON_VERSION = "0.18.5"
+ADDON_VERSION = "0.18.6"
 MAX_VERSIONS = 30                      # so viele Dashboard-Versionen bleiben lokal gespeichert
 BAR_ENTITY = "input_text.haglo_assist"           # Eingabeleiste im Dashboard
 BAR_STATUS = "input_text.haglo_assist_status"    # Rückmeldung darunter
@@ -1203,9 +1203,10 @@ async def build_dashboard(app, wish: str, refine: bool, dialog: list, can_ask: b
         # Neu bauen, wenn es nichts Eigenes gibt (automatisch erzeugt) oder der Nutzer es ausdrücklich will.
         # Sonst: gezielt ändern. Dashboards, die der Kunde selbst gebaut hat, werden dabei besonders geschont.
         rebuild = auto or not refine
-        if not own and not auto and dashboard not in allowed_dashboards():
-            # Der Kunde hat dieses Dashboard selbst gestaltet: erst fragen, bevor sein Aufbau übertragen
-            # oder es ersetzt wird. Die Oberfläche zeigt dazu eine Karte.
+        # Der Kunde hat dieses Dashboard selbst gestaltet: Sein Aufbau wird erst nach Freigabe übertragen.
+        # Bis dahin geht alles, was das Dashboard nicht braucht (anlegen, schalten, fragen).
+        locked = not own and not auto and dashboard not in allowed_dashboards()
+        if locked and not can_automate:
             return {"need_dashboard_consent": {"id": dashboard, "label": label}}
         built_by_haglo = own or dashboard in load_prefs().get("built", [])
         extra = {}
@@ -1215,11 +1216,15 @@ async def build_dashboard(app, wish: str, refine: bool, dialog: list, can_ask: b
             extra = {"kinds": KINDS, "can_control": True, "automations": await own_objects(session, raw)}
         payload = {
             "wish": wish, "entities": entities,
-            "previous": None if rebuild else (strip_bar(before) if own else before),
+            "previous": None if rebuild or locked else (strip_bar(before) if own else before),
             "refine": not rebuild, "foreign": not rebuild and not built_by_haglo, "dialog": dialog, "can_ask": can_ask,
+            "dashboard_locked": locked,
             **extra,
         }
         result = await backend(session, "POST", "/v1/generate", payload, timeout=300)
+        if locked and result.get("type") not in ("objects", "actions", "answer", "need_states", "question"):
+            # Der Wunsch betrifft das Dashboard: Die Oberfläche fragt mit einer Karte nach der Freigabe.
+            return {"need_dashboard_consent": {"id": dashboard, "label": label}, "status": result.get("status")}
         if result.get("type") == "need_states" and can_automate:
             # Die KI braucht aktuelle Zustände. Die verlassen das Gerät nur mit Zustimmung des Nutzers –
             # und nur für genau die Geräte, nach denen gefragt wurde.
@@ -1389,7 +1394,7 @@ async def generate(request):
     for key in ("objects", "confirm_actions", "need_consent", "need_dashboard_consent", "done", "answer"):
         if key in result:
             return web.json_response({"ok": True, key: result[key], "erklaerung": result.get("erklaerung", ""),
-                                      "trial": trial_info(result["status"])})
+                                      "trial": trial_info(result["status"]) if result.get("status") else trial})
     if "question" in result:
         return web.json_response({"ok": True, "question": result["question"], "trial": trial_info(result["status"])})
 
