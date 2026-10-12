@@ -1,5 +1,10 @@
 # Änderungen
 
+## 0.20.0
+
+- „Gibt es Probleme?“: Haglo Assist sieht nach offenen Reparaturhinweisen, Updates und gestoppten Apps
+  und sagt, was zu tun ist – nach deiner Zustimmung
+
 ## 0.19.9
 
 - Öffnest du Haglo Assist innerhalb von 5 Minuten wieder, steht das laufende Gespräch noch da.

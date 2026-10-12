@@ -843,11 +843,12 @@ async function generate(wish, label, keepDialog, allowStates) {
   let i = 0; typing(steps[0]);
   const t = setInterval(() => { i = Math.min(i + 1, steps.length - 1); if ($("loadText")) $("loadText").textContent = steps[i]; }, 7000);
   try {
-    const r = await api("api/generate", { wish, dialog, allow_states: !!allowStates });
+    const r = await api("api/generate", { wish, dialog, allow_states: !!allowStates, allow_diagnose: !!allowStates });
     if (r.question) { showQuestion(wish, label, r.question); return; }
     dialog = []; mem.set("draft", null);
     if (r.objects) { showAutomations(wish, r.erklaerung, r.objects); return; }
     if (r.need_consent) { showStateConsent(wish, label, r.need_consent); return; }
+    if (r.need_diagnose_consent) { showDiagnoseConsent(wish, label); return; }
     if (r.need_dashboard_consent) { showDashboardConsent(wish, label, r.need_dashboard_consent); return; }
     if (r.confirm_actions) { showConfirmActions(wish, r.erklaerung, r.confirm_actions); return; }
     if (r.confirm_device) { showConfirmDevice(wish, r.confirm_device); return; }
@@ -1172,6 +1173,18 @@ function showDashboardConsent(wish, label, d) {
 }
 
 // Aktuelle Zustände verlassen das Gerät nur mit Zustimmung
+// Systemmeldungen (Reparaturen, Updates, gestoppte Apps) verlassen das Gerät nur mit Zustimmung
+function showDiagnoseConsent(wish, label) {
+  showResult(`<div class="ask-q"><p class="step">Deine Zustimmung ist nötig</p><h2>Systemmeldungen übertragen?</h2>
+    <p style="color:var(--text)">Um das zu prüfen, braucht Haglo Assist die <b>offenen Reparaturhinweise, verfügbaren Updates und gestoppten Apps</b>
+      deines Home Assistant. Sie gehen an den Haglo-Server und unseren KI-Dienstleister Anthropic (USA). Protokolle und Zugangsdaten werden nicht übertragen.</p>
+    <div class="actions" style="justify-content:flex-start"><button class="primary" id="dgOnce">Einmal erlauben</button>
+      <button class="btn2" id="dgAlways">Immer erlauben</button><button class="btn2" id="dgNo">Abbrechen</button></div></div>`);
+  $("dgNo").onclick = () => dismiss();
+  $("dgOnce").onclick = () => generate(wish, label, false, true);
+  $("dgAlways").onclick = async () => { try { await api("api/prefs", { diagnose_allowed: true }); } catch (e) {} generate(wish, label, false, true); };
+}
+
 function showStateConsent(wish, label, items) {
   showResult(`<div class="ask-q"><p class="step">Deine Zustimmung ist nötig</p><h2>Aktuelle Werte übertragen?</h2>
     <p style="color:var(--text)">Um das zu beantworten, braucht Haglo Assist den aktuellen Zustand von:

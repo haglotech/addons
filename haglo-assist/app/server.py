@@ -38,7 +38,7 @@ SKIP_DOMAINS = {
     "zone", "persistent_notification", "assist_satellite", "ai_task",
 }
 
-ADDON_VERSION = "0.19.9"
+ADDON_VERSION = "0.20.0"
 MAX_VERSIONS = 30                      # so viele Dashboard-Versionen bleiben lokal gespeichert
 BAR_ENTITY = "input_text.haglo_assist"           # Eingabeleiste im Dashboard
 BAR_STATUS = "input_text.haglo_assist_status"    # Rückmeldung darunter
@@ -1304,6 +1304,47 @@ async def find_ha_device(session, mac: str, domain: str, tries: int = 15) -> lis
     return found
 
 
+async def system_messages(session) -> list[str]:
+    """Offene Reparaturhinweise, verfügbare Updates und gestoppte Apps – als kurze Zeilen.
+    Verlässt das Gerät nur nach Zustimmung des Nutzers. Keine Protokolle, keine Zugangsdaten."""
+    lines: list[str] = []
+    try:
+        async with HAClient(session) as ha:
+            issues = [i for i in (await ha.call("repairs/list_issues") or {}).get("issues", []) if not i.get("ignored")]
+            titles = {}
+            domains = sorted({i.get("domain") for i in issues if i.get("domain")})
+            if domains:
+                try:
+                    res = (await ha.call("frontend/get_translations", language="de", category="issues", integration=domains)).get("resources", {})
+                    titles = {k: v for k, v in res.items() if k.endswith(".title")}
+                except Exception:
+                    pass
+            for i in issues[:15]:
+                key = i.get("translation_key") or i.get("issue_id")
+                title = titles.get(f"component.{i.get('domain')}.issues.{key}.title") or str(key).replace("_", " ")
+                for k, v in (i.get("translation_placeholders") or {}).items():
+                    title = title.replace("{" + k + "}", str(v))
+                lines.append(f"Reparatur ({ {'error': 'Fehler', 'critical': 'kritisch'}.get(i.get('severity'), 'Hinweis') }, "
+                             f"Integration {i.get('domain')}, seit {str(i.get('created') or '')[:10]}"
+                             f"{', lässt sich per Klick beheben' if i.get('is_fixable') else ''}): {title}"[:300])
+    except Exception as e:
+        lines.append(f"Reparaturen konnten nicht gelesen werden ({type(e).__name__}).")
+    try:
+        for st in await all_states(session):
+            if st["entity_id"].startswith("update.") and st.get("state") == "on":
+                a = st.get("attributes", {})
+                lines.append(f"Update verfügbar: {a.get('friendly_name') or st['entity_id']} {a.get('installed_version')} → {a.get('latest_version')}"[:200])
+    except Exception:
+        pass
+    try:
+        for a in (await supervisor_get(session, "/addons")).get("addons", []):
+            if a.get("state") not in ("started", None):
+                lines.append(f"App nicht gestartet: {a.get('name')} (Zustand: {a.get('state')})"[:200])
+    except Exception:
+        pass
+    return lines[:40]
+
+
 TALK_GAP = 5 * 60
 
 
@@ -1520,7 +1561,8 @@ async def ensure_host_entry(session, domain: str, host: str) -> tuple[bool, str]
 
 # ---------------------------------------------------------------- Dashboard bauen
 async def build_dashboard(app, wish: str, refine: bool, dialog: list, can_ask: bool,
-                          dashboard: str | None = DASHBOARD_PATH, can_automate: bool = False, allow_states: bool = False) -> dict:
+                          dashboard: str | None = DASHBOARD_PATH, can_automate: bool = False, allow_states: bool = False,
+                          allow_diagnose: bool = False) -> dict:
     """Holt das Dashboard vom Backend und speichert es. Gibt entweder eine Rückfrage
     ({"question": …}) oder das Ergebnis zurück. Wirft BackendError bei Backend-Fehlern.
 
@@ -1553,7 +1595,7 @@ async def build_dashboard(app, wish: str, refine: bool, dialog: list, can_ask: b
         if can_automate:
             raw = await all_states(session)
             by_id = {x["entity_id"]: x for x in raw}
-            extra = {"kinds": KINDS, "can_control": True, "can_add_device": True, "can_rename": True,
+            extra = {"kinds": KINDS, "can_control": True, "can_add_device": True, "can_rename": True, "can_diagnose": True,
                      "context": recent_context(), "hints": await address_hints(session, wish),
                      "automations": await own_objects(session, raw)}
         payload = {
@@ -1587,9 +1629,15 @@ async def build_dashboard(app, wish: str, refine: bool, dialog: list, can_ask: b
             want = result.get("device") or {}
             info = await probe_device(session, str(want.get("adresse") or ""))
             return {"confirm_device": {**info, "wanted_name": str(want.get("name") or "")[:40]}, "status": result["status"]}
-        if locked and result.get("type") not in ("objects", "actions", "answer", "need_states", "question"):
+        if locked and result.get("type") not in ("objects", "actions", "answer", "need_states", "need_diagnose", "question"):
             # Der Wunsch betrifft das Dashboard: Die Oberfläche fragt mit einer Karte nach der Freigabe.
             return {"need_dashboard_consent": {"id": dashboard, "label": label}, "status": result.get("status")}
+        if result.get("type") == "need_diagnose" and can_automate:
+            # Systemmeldungen sind eine eigene Art von Daten: Sie gehen nur mit Zustimmung raus.
+            if not (allow_diagnose or load_prefs().get("diagnose_allowed")):
+                return {"need_diagnose_consent": True, "status": result["status"]}
+            payload["diagnose"] = await system_messages(session)
+            result = await backend(session, "POST", "/v1/generate", payload, timeout=300)
         if result.get("type") == "need_states" and can_automate:
             # Die KI braucht aktuelle Zustände. Die verlassen das Gerät nur mit Zustimmung des Nutzers –
             # und nur für genau die Geräte, nach denen gefragt wurde.
@@ -1749,14 +1797,15 @@ async def generate(request):
     request.app["job"] = {"wish": wish, "since": int(time.time())}
     try:
         result = await build_dashboard(request.app, wish, refine, dialog, can_ask=True, dashboard=dashboard,
-                                       can_automate=True, allow_states=bool(body.get("allow_states")))
+                                       can_automate=True, allow_states=bool(body.get("allow_states")),
+                                       allow_diagnose=bool(body.get("allow_diagnose")))
     except BackendError as e:
         return backend_failure(e)
     except Exception as e:
         return web.json_response({"ok": False, "error": str(e)}, status=500)
     finally:
         request.app["job"] = None
-    for key in ("objects", "confirm_actions", "confirm_device", "need_consent", "need_dashboard_consent", "done", "answer"):
+    for key in ("objects", "confirm_actions", "confirm_device", "need_consent", "need_diagnose_consent", "need_dashboard_consent", "done", "answer"):
         if key in result:
             return web.json_response({"ok": True, key: result[key], "erklaerung": result.get("erklaerung", ""),
                                       "trial": trial_info(result["status"]) if result.get("status") else trial})
@@ -2071,7 +2120,7 @@ async def prefs_route(request):
     if body.get("owner_hint_dismissed") is True:
         prefs["owner_hint_dismissed"] = True
     # Zustimmungen: Zustände für Fragen übertragen; eigene Automationen bearbeiten (und dafür übertragen)
-    for key in ("states_allowed", "foreign_automations"):
+    for key in ("states_allowed", "foreign_automations", "diagnose_allowed"):
         if isinstance(body.get(key), bool):
             prefs[key] = body[key]
     if isinstance(body.get("dashboard"), str) and len(body["dashboard"]) <= 100:
