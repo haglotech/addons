@@ -38,7 +38,7 @@ SKIP_DOMAINS = {
     "zone", "persistent_notification", "assist_satellite", "ai_task",
 }
 
-ADDON_VERSION = "0.19.4"
+ADDON_VERSION = "0.19.5"
 MAX_VERSIONS = 30                      # so viele Dashboard-Versionen bleiben lokal gespeichert
 BAR_ENTITY = "input_text.haglo_assist"           # Eingabeleiste im Dashboard
 BAR_STATUS = "input_text.haglo_assist_status"    # Rückmeldung darunter
@@ -1349,18 +1349,27 @@ def recent_context() -> list[dict]:
 
 async def rename_items(session, items: list) -> list[str]:
     """Benennt Geräte oder einzelne Entitäten in Home Assistant um. Die entity_id bleibt gleich."""
-    done = []
+    done, areas = [], None
     async with HAClient(session) as ha:
         registry = {e["entity_id"]: e for e in await ha.call("config/entity_registry/list") or []}
         for it in items[:5]:
             ent, name = registry.get(str(it.get("entity_id"))), str(it.get("name") or "").strip()[:60]
-            if not ent or not name:
+            room = str(it.get("raum") or "").strip()[:60]
+            if not ent or not (name or room):
                 raise RuntimeError("Dieses Gerät kenne ich nicht – nenn mir bitte seinen bisherigen Namen.")
+            change = {}
+            if room:
+                # Raum suchen (Groß-/Kleinschreibung egal), sonst anlegen
+                if areas is None:
+                    areas = {a["name"].strip().lower(): a["area_id"] for a in await ha.call("config/area_registry/list") or []}
+                if room.lower() not in areas:
+                    areas[room.lower()] = (await ha.call("config/area_registry/create", name=room))["area_id"]
+                change["area_id"] = areas[room.lower()]
             if it.get("geraet") is not False and ent.get("device_id"):
-                await ha.call("config/device_registry/update", device_id=ent["device_id"], name_by_user=name)
+                await ha.call("config/device_registry/update", device_id=ent["device_id"], **change, **({"name_by_user": name} if name else {}))
             else:
-                await ha.call("config/entity_registry/update", entity_id=ent["entity_id"], name=name)
-            done.append(name)
+                await ha.call("config/entity_registry/update", entity_id=ent["entity_id"], **change, **({"name": name} if name else {}))
+            done.append(name or room)
     return done
 
 
@@ -1508,8 +1517,21 @@ async def build_dashboard(app, wish: str, refine: bool, dialog: list, can_ask: b
         result = await backend(session, "POST", "/v1/generate", payload, timeout=300)
         if result.get("type") == "rename":
             done = await rename_items(session, result.get("items") or [])
-            add_history("control", wish, result.get("erklaerung") or "Umbenannt: " + ", ".join(done))
-            return {"done": result.get("erklaerung", ""), "status": result["status"]}
+            text = result.get("erklaerung") or "Geändert: " + ", ".join(done)
+            actions = result.get("aktionen") or []
+            if actions:
+                # im selben Satz auch schalten: gleiche Prüfungen wie beim Schalten allein
+                by_now = {x["entity_id"]: x for x in await all_states(session)}
+                error = check_actions(actions, by_now)
+                if error:
+                    add_history("control", wish, text + " Das Schalten ging nicht: " + error)
+                    return {"done": text, "status": result["status"]}
+                if any(risky_action(a, by_now) for a in actions):
+                    add_history("control", wish, text)
+                    return {"confirm_actions": actions, "erklaerung": text, "status": result["status"]}
+                await run_actions(session, actions)
+            add_history("control", wish, text)
+            return {"done": text, "status": result["status"]}
         if result.get("type") == "add_device":
             # Die KI hat nur Adresse und Namen herausgelesen. Geprüft wird hier, im Heimnetz.
             want = result.get("device") or {}

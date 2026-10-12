@@ -1,5 +1,10 @@
 # Änderungen
 
+## 0.19.5
+
+- Geräte lassen sich einem Raum zuordnen („Ordne die Kaffeemaschine der Küche zu“); fehlt der Raum, wird er angelegt
+- Mehreres in einem Satz: „Benenne sie um und schalte sie ein“ wird in einem Schritt erledigt
+
 ## 0.19.4
 
 - Nennst du eine Adresse im Heimnetz (z. B. 192.168.1.50), sieht Haglo Assist selbst nach, welches
