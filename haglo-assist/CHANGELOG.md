@@ -1,5 +1,10 @@
 # Änderungen
 
+## 0.19.9
+
+- Öffnest du Haglo Assist innerhalb von 5 Minuten wieder, steht das laufende Gespräch noch da.
+  Danach wechselt die App zurück zur aufgeräumten Startansicht
+
 ## 0.19.8
 
 - Unter der Eingabe steht, wie lange sich Haglo Assist das Gespräch noch merkt; ein Klick darauf beginnt ein neues

@@ -38,7 +38,7 @@ SKIP_DOMAINS = {
     "zone", "persistent_notification", "assist_satellite", "ai_task",
 }
 
-ADDON_VERSION = "0.19.8"
+ADDON_VERSION = "0.19.9"
 MAX_VERSIONS = 30                      # so viele Dashboard-Versionen bleiben lokal gespeichert
 BAR_ENTITY = "input_text.haglo_assist"           # Eingabeleiste im Dashboard
 BAR_STATUS = "input_text.haglo_assist_status"    # Rückmeldung darunter
@@ -1341,16 +1341,22 @@ async def address_hints(session, wish: str) -> list[str]:
     return hints
 
 
+def talk_items() -> list[dict]:
+    """Die Einträge des laufenden Gesprächs: höchstens TALK_GAP Sekunden Pause dazwischen und bis jetzt."""
+    items, last, reset = [], time.time(), load_prefs().get("talk_reset", 0)
+    for h in reversed(load_history()):
+        if last - h.get("ts", 0) > TALK_GAP or h.get("ts", 0) <= reset:
+            break
+        items.insert(0, h)
+        last = h.get("ts", 0)
+    return items
+
+
 def recent_context() -> list[dict]:
     """Die Wechsel des laufenden Gesprächs (höchstens 10), damit die KI Bezüge wie „es“ versteht.
     Ein Gespräch endet nach TALK_GAP Sekunden ohne Nachricht – danach beginnt ein neues, und das
     Frühere wird nicht mehr mitgeschickt. Die Oberfläche zeigt diese Grenze an."""
-    items, last, reset = [], time.time(), load_prefs().get("talk_reset", 0)
-    for h in reversed([h for h in load_history() if h.get("wish")]):
-        if last - h.get("ts", 0) > TALK_GAP or len(items) >= 10 or h.get("ts", 0) <= reset:
-            break
-        items.insert(0, h)
-        last = h.get("ts", 0)
+    items = [h for h in talk_items() if h.get("wish")][-10:]
     return [{"wunsch": str(h["wish"])[:300], "antwort": re.sub(r"\[([^\]]+)\]\([^)]*\)", r"\1", str(h.get("text") or ""))[:600]} for h in items]
 
 
@@ -1777,7 +1783,9 @@ async def history(_):
     reg = load_automations()
     items = [{**{k: v for k, v in h.items() if k != "undo"}, "id": h.get("id") or str(h.get("ts")),
               "can_undo": can_undo(h, reg)} for h in load_history()]
-    return web.json_response({"ok": True, "history": items})
+    talk = talk_items()
+    # talk_since: ab wann das laufende Gespräch geht – die Oberfläche zeigt es beim Öffnen wieder an
+    return web.json_response({"ok": True, "history": items, "talk_since": talk[0].get("ts") if talk else None})
 
 
 @routes.post("/api/history/undo")
