@@ -38,7 +38,7 @@ SKIP_DOMAINS = {
     "zone", "persistent_notification", "assist_satellite", "ai_task",
 }
 
-ADDON_VERSION = "0.19.7"
+ADDON_VERSION = "0.19.8"
 MAX_VERSIONS = 30                      # so viele Dashboard-Versionen bleiben lokal gespeichert
 BAR_ENTITY = "input_text.haglo_assist"           # Eingabeleiste im Dashboard
 BAR_STATUS = "input_text.haglo_assist_status"    # Rückmeldung darunter
@@ -1345,9 +1345,9 @@ def recent_context() -> list[dict]:
     """Die Wechsel des laufenden Gesprächs (höchstens 10), damit die KI Bezüge wie „es“ versteht.
     Ein Gespräch endet nach TALK_GAP Sekunden ohne Nachricht – danach beginnt ein neues, und das
     Frühere wird nicht mehr mitgeschickt. Die Oberfläche zeigt diese Grenze an."""
-    items, last = [], time.time()
+    items, last, reset = [], time.time(), load_prefs().get("talk_reset", 0)
     for h in reversed([h for h in load_history() if h.get("wish")]):
-        if last - h.get("ts", 0) > TALK_GAP or len(items) >= 10:
+        if last - h.get("ts", 0) > TALK_GAP or len(items) >= 10 or h.get("ts", 0) <= reset:
             break
         items.insert(0, h)
         last = h.get("ts", 0)
@@ -1984,6 +1984,13 @@ async def restore_automation(request):
     if status != 200:
         return web.json_response({"ok": False, "error": f"Wiederherstellen fehlgeschlagen ({status})."}, status=500)
     add_history("restore", "", "Automation wiederhergestellt: " + str(cfg.get("alias", "")))
+    return web.json_response({"ok": True})
+
+
+@routes.post("/api/talk/reset")
+async def talk_reset(_):
+    """Der Nutzer beginnt von sich aus ein neues Gespräch: Das Bisherige wird nicht mehr mitgeschickt."""
+    write_prefs({**load_prefs(), "talk_reset": int(time.time())})
     return web.json_response({"ok": True})
 
 

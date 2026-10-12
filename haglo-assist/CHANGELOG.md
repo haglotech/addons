@@ -1,5 +1,9 @@
 # Änderungen
 
+## 0.19.8
+
+- Unter der Eingabe steht, wie lange sich Haglo Assist das Gespräch noch merkt; ein Klick darauf beginnt ein neues
+
 ## 0.19.7
 
 - Ein Gespräch endet nach 5 Minuten ohne Nachricht: Eine Linie „Neues Gespräch“ zeigt, ab wo Haglo Assist
