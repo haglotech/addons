@@ -1,5 +1,9 @@
 # Änderungen
 
+## 0.20.4
+
+- Behoben: 0.20.3 startete nicht
+
 ## 0.20.3
 
 - Behoben: Auf neuen Home-Assistant-Versionen blieb die Startseite scheinbar unverändert, obwohl Haglo Assist sie

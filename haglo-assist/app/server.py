@@ -38,7 +38,7 @@ SKIP_DOMAINS = {
     "zone", "persistent_notification", "assist_satellite", "ai_task",
 }
 
-ADDON_VERSION = "0.20.3"
+ADDON_VERSION = "0.20.4"
 MAX_VERSIONS = 30                      # so viele Dashboard-Versionen bleiben lokal gespeichert
 BAR_ENTITY = "input_text.haglo_assist"           # Eingabeleiste im Dashboard
 BAR_STATUS = "input_text.haglo_assist_status"    # Rückmeldung darunter
@@ -285,7 +285,7 @@ START_PATH, START_TITLE = "mein-zuhause", "Mein Zuhause"
 BUILTIN_START = (None, "", "home", "lovelace")
 
 
-async def start_path(ha: HAClient, create: bool = False) -> str | None:
+async def start_path(ha: "HAClient", create: bool = False) -> str | None:
     """url_path der Startseite, an der Haglo Assist arbeitet. None ist die klassische Übersicht."""
     listed = await ha.call("lovelace/dashboards/list")
     if not any(d.get("url_path") == START_PATH for d in listed):
@@ -297,7 +297,7 @@ async def start_path(ha: HAClient, create: bool = False) -> str | None:
     return START_PATH
 
 
-async def show_start_page(session, ha: HAClient, path: str | None) -> bool:
+async def show_start_page(session, ha: "HAClient", path: str | None) -> bool:
     """Macht die gebaute Seite zur Startseite, falls bisher das eingebaute „Home“ geöffnet wurde."""
     if path is None:
         return False                # klassische Übersicht: ist schon die Startseite
@@ -319,7 +319,7 @@ async def show_start_page(session, ha: HAClient, path: str | None) -> bool:
     return True
 
 
-async def reset_start_page(ha: HAClient) -> None:
+async def reset_start_page(ha: "HAClient") -> None:
     """Übersicht ist wieder die automatische von Home Assistant: Startseite zurück auf den Stand davor."""
     prefs = load_prefs()
     if "start_before" not in prefs:
