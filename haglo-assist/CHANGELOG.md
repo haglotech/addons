@@ -1,5 +1,10 @@
 # Änderungen
 
+## 0.18.8
+
+- Hilfe beim Einrichten: Haglo Assist erklärt, wie du ein Gerät oder eine Integration hinzufügst, und
+  führt dich mit Knöpfen direkt zur richtigen Seite in Home Assistant
+
 ## 0.18.7
 
 - Nach einer beantworteten Rückfrage bleiben im Gespräch nur Frage und Antwort stehen

@@ -89,6 +89,9 @@
   .mdx pre { background: var(--bg); border: 1px solid var(--line); border-radius: 10px; padding: 10px 12px; overflow-x: auto; font-size: 13px; margin: 0 0 8px; }
   .mdx pre code { border: 0; padding: 0; background: none; }
   .mdx a { color: var(--brand); }
+  .mdx a.go { display: inline-block; margin: 2px 0; padding: 7px 14px; border: 1px solid var(--brand); border-radius: 20px;
+              font-weight: 600; font-size: 14px; text-decoration: none; }
+  .mdx a.go:hover { background: var(--brand); color: var(--bg); }
   .mdx .tw { overflow-x: auto; margin: 0 0 8px; }
   .mdx table { border-collapse: collapse; font-size: 14px; }
   .mdx th, .mdx td { border: 1px solid var(--line); padding: 5px 10px; text-align: left; }
@@ -537,7 +540,10 @@ function md(src) {
   t = esc(t);
   const inline = (x) => x.replace(/`([^`]+)`/g, "<code>$1</code>").replace(/\*\*([^*]+)\*\*/g, "<b>$1</b>")
     .replace(/(^|[\s(])\*([^*\n]+)\*(?=[\s).,!?]|$)/g, "$1<i>$2</i>")
-    .replace(/\[([^\]]+)\]\((https?:\/\/[^\s)]+|\/[^\s)]*)\)/g, '<a href="$2" target="_blank" rel="noopener">$1</a>');
+    // Links in Home Assistant hinein (beginnen mit /) werden Knöpfe und öffnen sich im selben Fenster
+    .replace(/\[([^\]]+)\]\((\/(?!\/)[^\s)]*)\)/g, '<a class="go" href="$2" target="_top">$1 <span aria-hidden="true">›</span></a>')
+    .replace(/\[([^\]]+)\]\((https:\/\/my\.home-assistant\.io\/[^\s)]+)\)/g, '<a class="go" href="$2" target="_blank" rel="noopener">$1 <span aria-hidden="true">›</span></a>')
+    .replace(/\[([^\]]+)\]\((https?:\/\/[^\s)]+)\)/g, '<a href="$2" target="_blank" rel="noopener">$1</a>');
   const out = []; let list = null, rows = null;
   const flush = () => {
     if (list) { out.push(`<${list.t}>${list.i.map((i) => `<li>${i}</li>`).join("")}</${list.t}>`); list = null; }
