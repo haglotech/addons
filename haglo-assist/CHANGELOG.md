@@ -1,5 +1,10 @@
 # Änderungen
 
+## 0.18.7
+
+- Nach einer beantworteten Rückfrage bleiben im Gespräch nur Frage und Antwort stehen
+- Neutraler Wartetext („Ich überlege …“)
+
 ## 0.18.6
 
 - Behoben: Bei einer selbst gestalteten Startseite endete jede Anfrage mit „Ungültige Antwort“

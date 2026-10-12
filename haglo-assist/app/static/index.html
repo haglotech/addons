@@ -696,7 +696,7 @@ $("accept").addEventListener("click", async () => {
   } catch (e) { alert(e.message); $("accept").disabled = false; }
 });
 
-const steps = ["Ich schaue mir deine Geräte an …", "Ich überlege, was am besten passt …", "Ich baue es zusammen …", "Fast fertig …"];
+const steps = ["Ich überlege …", "Ich überlege, was am besten passt …", "Ich arbeite daran …", "Fast fertig …"];
 async function generate(wish, label, keepDialog, allowStates) {
   if (!keepDialog) dialog = [];
   asking = null; mem.set("question", null); mem.set("automations", null);
@@ -775,6 +775,8 @@ function answer(text) {
   if (!asking || busy) return;
   const { wish, label, q } = asking;
   dialog.push({ frage: q.frage, antwort: text.slice(0, 500) });
+  // Beantwortet: Die Auswahl verschwindet, im Gespräch bleiben nur Frage und Antwort stehen.
+  if (cur) { cur.firstChild.innerHTML = `<p style="color:var(--text)">${esc(q.frage)}</p>`; cur = null; }
   addUser(text);
   generate(wish, label, true);
 }
