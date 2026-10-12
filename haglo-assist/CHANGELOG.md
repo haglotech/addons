@@ -1,5 +1,15 @@
 # Änderungen
 
+## 0.19.7
+
+- Ein Gespräch endet nach 5 Minuten ohne Nachricht: Eine Linie „Neues Gespräch“ zeigt, ab wo Haglo Assist
+  sich nichts mehr merkt
+
+## 0.19.6
+
+- Erledigtes wird anschaulich gezeigt: je Gerät eine Zeile mit Symbol (eingeschaltet, umbenannt, Raum)
+  und Link direkt zum Gerät
+
 ## 0.19.5
 
 - Geräte lassen sich einem Raum zuordnen („Ordne die Kaffeemaschine der Küche zu“); fehlt der Raum, wird er angelegt

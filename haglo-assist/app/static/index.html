@@ -79,6 +79,19 @@
   .bub .undo:hover { color: var(--text); }
   .bub .gone { font-size: 13px; color: var(--muted); }
   .msg.was .bub { opacity: .6; }
+  .sep { display: flex; align-items: center; gap: 10px; color: var(--muted); font-size: 12px; margin: 6px 0; }
+  .sep::before, .sep::after { content: ""; flex: 1; height: 1px; background: var(--line); }
+  .steps { display: flex; flex-direction: column; gap: 6px; margin-top: 10px; }
+  .stp { display: flex; align-items: center; gap: 10px; padding: 8px 10px; border: 1px solid var(--line); border-radius: 12px;
+         background: var(--bg); color: var(--text); text-decoration: none; transition: border-color .15s; }
+  a.stp[href]:hover { border-color: var(--brand); }
+  .stp .ic { flex: none; width: 34px; height: 34px; border-radius: 10px; display: grid; place-items: center; background: var(--brand-soft); color: var(--brand); }
+  .stp.on .ic { background: var(--brand); color: var(--brand-ink); }
+  .stp.off .ic { background: var(--surface); color: var(--muted); border: 1px solid var(--line); }
+  .stp .tx { flex: 1; min-width: 0; display: flex; flex-direction: column; line-height: 1.3; }
+  .stp .tx b { font-weight: 600; font-size: 14.5px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .stp .tx small { color: var(--muted); font-size: 12.5px; }
+  .stp .go2 { color: var(--muted); font-size: 20px; line-height: 1; }
   .mdx { color: var(--text); }
   .msg.bot .bub h2 + .mdx { color: var(--muted); }
   .mdx p { margin: 0 0 8px; color: inherit; }
@@ -642,14 +655,41 @@ async function renderDiagrams(root) {
   scrollDown();
 }
 
+// Ein Gespräch endet nach 5 Minuten ohne Nachricht. Danach zählt das Frühere nicht mehr mit – die Linie zeigt das.
+const TALK_GAP = 300, SEP = '<div class="sep"><span>Neues Gespräch</span></div>';
+let lastTs = 0;
+function threadHtml(items) {
+  lastTs = items.length ? items[items.length - 1].ts : 0;
+  return items.map((h, i) => (i && h.ts - items[i - 1].ts > TALK_GAP ? SEP : "") + historyMsg(h)).join("");
+}
+setInterval(() => {
+  const r = $("result"), end = r && r.lastElementChild;
+  if (!lastTs || busy || cur || !end || end.classList.contains("sep")) return;
+  if (Date.now() / 1000 - lastTs > TALK_GAP) { r.insertAdjacentHTML("beforeend", SEP); scrollDown(); }
+}, 15000);
+
+const STEP_SVG = (d) => `<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">${d}</svg>`;
+const STEP_ICON = {
+  on: STEP_SVG('<path d="M12 3v9"/><path d="M6.4 6.6a8 8 0 1 0 11.2 0"/>'),
+  off: STEP_SVG('<path d="M12 3v9"/><path d="M6.4 6.6a8 8 0 1 0 11.2 0"/>'),
+  name: STEP_SVG('<path d="M4 20h4L19 9l-4-4L4 16v4z"/><path d="M13.5 6.5l4 4"/>'),
+  room: STEP_SVG('<path d="M3 11l9-7 9 7"/><path d="M5 10v10h14V10"/><path d="M10 20v-6h4v6"/>'),
+  action: STEP_SVG('<path d="M13 3L5 14h6l-1 7 8-11h-6l1-7z"/>'),
+};
+
 function historyMsg(h) {
   const title = h.kind === "dashboard" && h.target ? (h.target === "Startseite" ? "Startseite geändert" : `„${h.target}“ geändert`) : KIND[h.kind], undone = h.undone ? `<div class="gone">↩ Rückgängig gemacht</div>` : "";
   const body = h.kind === "answer" ? md(h.text)
     : `${title ? `<h2>${h.undone ? "" : "✓ "}${esc(title)}</h2>` : ""}${h.text ? md(h.text) : ""}`;
   const open = h.url && !h.undone ? `<a class="btn2" href="${esc(h.url)}" target="_top">Öffnen</a>` : "";
+  // Was genau passiert ist: je Gerät eine Zeile mit Symbol und Link zum Gerät
+  const steps = (h.steps || []).length ? `<div class="steps">${h.steps.map((s) => `<a class="stp ${esc(s.icon)}"${s.url ? ` href="${esc(s.url)}" target="_top"` : ""}>
+      <span class="ic">${STEP_ICON[s.icon] || STEP_ICON.action}</span>
+      <span class="tx"><b>${esc(s.title)}</b>${s.sub ? `<small>${esc(s.sub)}</small>` : ""}</span>
+      ${s.url ? '<span class="go2" aria-hidden="true">›</span>' : ""}</a>`).join("")}</div>` : "";
   const undo = h.can_undo ? `<div class="links"><button class="undo" data-undo="${esc(h.id)}">Rückgängig</button></div>` : "";
   return (h.wish ? `<div class="msg user"><div class="bub">${esc(h.wish)}</div></div>` : "")
-    + `<div class="msg bot${h.undone ? " was" : ""}"><div class="bub">${body}${open ? `<div class="actions">${open}</div>` : ""}${undo}${undone}</div>
+    + `<div class="msg bot${h.undone ? " was" : ""}"><div class="bub">${body}${steps}${open ? `<div class="actions">${open}</div>` : ""}${undo}${undone}</div>
        <span class="when2">${stamp(h.ts)}</span></div>`;
 }
 
@@ -663,7 +703,7 @@ async function loadHistory(open) {
   const wasOpen = open || ($("foldOld") && $("foldOld").open);
   $("result").innerHTML = (old.length ? `<details class="fold" id="foldOld"${wasOpen ? " open" : ""}><summary>Frühere Änderungen anzeigen (${old.length})</summary>
       <div class="thread">${old.map(historyMsg).join("")}</div>
-      <p class="clearrow"><a data-clear role="button" tabindex="0">Verlauf leeren</a></p></details>` : "") + fresh.map(historyMsg).join("")
+      <p class="clearrow"><a data-clear role="button" tabindex="0">Verlauf leeren</a></p></details>` : "") + threadHtml(fresh)
     + (!items.length && !live ? `<p class="clearrow">Noch kein Verlauf. Hier steht, was Haglo Assist für dich gemacht hat.</p>` : "");
   if (live) $("result").append(live);
   hasThread(); scrollDown(); renderDiagrams($("result"));

@@ -38,7 +38,7 @@ SKIP_DOMAINS = {
     "zone", "persistent_notification", "assist_satellite", "ai_task",
 }
 
-ADDON_VERSION = "0.19.5"
+ADDON_VERSION = "0.19.7"
 MAX_VERSIONS = 30                      # so viele Dashboard-Versionen bleiben lokal gespeichert
 BAR_ENTITY = "input_text.haglo_assist"           # Eingabeleiste im Dashboard
 BAR_STATUS = "input_text.haglo_assist_status"    # Rückmeldung darunter
@@ -1304,6 +1304,9 @@ async def find_ha_device(session, mac: str, domain: str, tries: int = 15) -> lis
     return found
 
 
+TALK_GAP = 5 * 60
+
+
 async def address_hints(session, wish: str) -> list[str]:
     """Nennt der Wunsch eine Adresse im Heimnetz, sieht die App selbst nach, welches Gerät das in
     Home Assistant ist – damit die KI nicht danach fragen muss."""
@@ -1339,38 +1342,78 @@ async def address_hints(session, wish: str) -> list[str]:
 
 
 def recent_context() -> list[dict]:
-    """Die jüngsten Wechsel des laufenden Gesprächs (höchstens 10, aus den letzten 3 Stunden), damit die KI
-    Bezüge wie „es“ versteht und weiß, worum es ging. Enthält nur, was der Nutzer geschrieben und die
-    App geantwortet hat."""
-    since = time.time() - 3 * 3600
-    items = [h for h in load_history() if h.get("ts", 0) >= since and h.get("wish")][-10:]
+    """Die Wechsel des laufenden Gesprächs (höchstens 10), damit die KI Bezüge wie „es“ versteht.
+    Ein Gespräch endet nach TALK_GAP Sekunden ohne Nachricht – danach beginnt ein neues, und das
+    Frühere wird nicht mehr mitgeschickt. Die Oberfläche zeigt diese Grenze an."""
+    items, last = [], time.time()
+    for h in reversed([h for h in load_history() if h.get("wish")]):
+        if last - h.get("ts", 0) > TALK_GAP or len(items) >= 10:
+            break
+        items.insert(0, h)
+        last = h.get("ts", 0)
     return [{"wunsch": str(h["wish"])[:300], "antwort": re.sub(r"\[([^\]]+)\]\([^)]*\)", r"\1", str(h.get("text") or ""))[:600]} for h in items]
 
 
-async def rename_items(session, items: list) -> list[str]:
-    """Benennt Geräte oder einzelne Entitäten in Home Assistant um. Die entity_id bleibt gleich."""
-    done, areas = [], None
+def device_url(device_id: str | None) -> str:
+    return f"/config/devices/device/{device_id}" if device_id else "/config/entities"
+
+
+async def rename_items(session, items: list) -> list[dict]:
+    """Benennt Geräte oder einzelne Entitäten um oder ordnet sie einem Raum zu. Die entity_id bleibt gleich.
+    Gibt die Schritte für die Anzeige zurück: {"icon", "title", "sub", "url"}."""
+    steps, areas = [], None
     async with HAClient(session) as ha:
         registry = {e["entity_id"]: e for e in await ha.call("config/entity_registry/list") or []}
+        devices = {d["id"]: d for d in await ha.call("config/device_registry/list") or []}
         for it in items[:5]:
             ent, name = registry.get(str(it.get("entity_id"))), str(it.get("name") or "").strip()[:60]
             room = str(it.get("raum") or "").strip()[:60]
             if not ent or not (name or room):
                 raise RuntimeError("Dieses Gerät kenne ich nicht – nenn mir bitte seinen bisherigen Namen.")
-            change = {}
+            whole = it.get("geraet") is not False and ent.get("device_id")
+            dev = devices.get(ent.get("device_id")) or {}
+            old = ((dev.get("name_by_user") or dev.get("name")) if whole else (ent.get("name") or ent.get("original_name"))) or ent["entity_id"]
+            change, created = {}, False
             if room:
                 # Raum suchen (Groß-/Kleinschreibung egal), sonst anlegen
                 if areas is None:
                     areas = {a["name"].strip().lower(): a["area_id"] for a in await ha.call("config/area_registry/list") or []}
                 if room.lower() not in areas:
                     areas[room.lower()] = (await ha.call("config/area_registry/create", name=room))["area_id"]
+                    created = True
                 change["area_id"] = areas[room.lower()]
-            if it.get("geraet") is not False and ent.get("device_id"):
+            if whole:
                 await ha.call("config/device_registry/update", device_id=ent["device_id"], **change, **({"name_by_user": name} if name else {}))
             else:
                 await ha.call("config/entity_registry/update", entity_id=ent["entity_id"], **change, **({"name": name} if name else {}))
-            done.append(name or room)
-    return done
+            url = device_url(ent.get("device_id"))
+            if name:
+                steps.append({"icon": "name", "title": name, "sub": f"hieß vorher „{old}“", "url": url})
+            if room:
+                steps.append({"icon": "room", "title": f"{name or old} → {room}", "sub": "Raum neu angelegt" if created else "Raum zugeordnet", "url": url})
+    return steps
+
+
+async def action_steps(session, actions: list, by_id: dict) -> list[dict]:
+    """Was geschaltet wurde, für die Anzeige: je Gerät eine Zeile mit Link."""
+    try:
+        async with HAClient(session) as ha:
+            registry = {e["entity_id"]: e for e in await ha.call("config/entity_registry/list") or []}
+    except Exception:
+        registry = {}
+    words = {"turn_on": ("on", "eingeschaltet"), "turn_off": ("off", "ausgeschaltet"), "toggle": ("action", "umgeschaltet"),
+             "open_cover": ("on", "geöffnet"), "close_cover": ("off", "geschlossen"), "lock": ("off", "verriegelt"), "unlock": ("on", "entriegelt")}
+    steps = []
+    for a in actions:
+        service = a["action"].split(".", 1)[1]
+        icon, word = words.get(service, ("action", service.replace("_", " ")))
+        data = a.get("data") if isinstance(a.get("data"), dict) else {}
+        extra = ", ".join(f"{k}: {v}" for k, v in list(data.items())[:2])
+        for e in ((a.get("target") or {}).get("entity_id") or [])[:6]:
+            name = (by_id.get(e) or {}).get("attributes", {}).get("friendly_name") or e
+            steps.append({"icon": icon, "title": name, "sub": word + (f" ({extra})" if extra else ""),
+                          "url": device_url((registry.get(e) or {}).get("device_id"))})
+    return steps[:12]
 
 
 class NeedMqtt(Exception):
@@ -1516,21 +1559,22 @@ async def build_dashboard(app, wish: str, refine: bool, dialog: list, can_ask: b
         }
         result = await backend(session, "POST", "/v1/generate", payload, timeout=300)
         if result.get("type") == "rename":
-            done = await rename_items(session, result.get("items") or [])
-            text = result.get("erklaerung") or "Geändert: " + ", ".join(done)
+            steps = await rename_items(session, result.get("items") or [])
+            text = result.get("erklaerung") or "Erledigt."
             actions = result.get("aktionen") or []
             if actions:
                 # im selben Satz auch schalten: gleiche Prüfungen wie beim Schalten allein
                 by_now = {x["entity_id"]: x for x in await all_states(session)}
                 error = check_actions(actions, by_now)
                 if error:
-                    add_history("control", wish, text + " Das Schalten ging nicht: " + error)
+                    add_history("control", wish, text + " Das Schalten ging nicht: " + error, steps=steps)
                     return {"done": text, "status": result["status"]}
                 if any(risky_action(a, by_now) for a in actions):
-                    add_history("control", wish, text)
+                    add_history("control", wish, text, steps=steps)
                     return {"confirm_actions": actions, "erklaerung": text, "status": result["status"]}
                 await run_actions(session, actions)
-            add_history("control", wish, text)
+                steps += await action_steps(session, actions, by_now)
+            add_history("control", wish, text, steps=steps)
             return {"done": text, "status": result["status"]}
         if result.get("type") == "add_device":
             # Die KI hat nur Adresse und Namen herausgelesen. Geprüft wird hier, im Heimnetz.
@@ -1560,7 +1604,7 @@ async def build_dashboard(app, wish: str, refine: bool, dialog: list, can_ask: b
             if any(risky_action(a, by_id) for a in actions):
                 return {"confirm_actions": actions, "erklaerung": result.get("erklaerung", ""), "status": result["status"]}
             await run_actions(session, actions)
-            add_history("control", wish, result.get("erklaerung", ""))
+            add_history("control", wish, result.get("erklaerung", ""), steps=await action_steps(session, actions, by_id))
             return {"done": result.get("erklaerung", ""), "status": result["status"]}
         if result.get("type") == "answer":
             add_history("answer", wish, result["antwort"])
@@ -1982,7 +2026,8 @@ async def run_confirmed_actions(request):
         await run_actions(session, actions)
     except Exception as e:
         return web.json_response({"ok": False, "error": str(e)}, status=500)
-    add_history("control", str(body.get("wish") or ""), str(body.get("erklaerung") or "Ausgeführt"))
+    add_history("control", str(body.get("wish") or ""), str(body.get("erklaerung") or "Ausgeführt"),
+                steps=await action_steps(session, actions, by_id))
     return web.json_response({"ok": True})
 
 
