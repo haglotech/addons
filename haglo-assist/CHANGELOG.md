@@ -1,5 +1,10 @@
 # Änderungen
 
+## 0.18.5
+
+- Eigene Nutzungsbedingungen und Datenschutzhinweise für Haglo Assist verlinkt
+- Die Hub-ID steht jetzt unter „Plan & Abo“ (für Auskunft oder Löschung deiner Daten)
+
 ## 0.18.4
 
 - Diagramme im hellen Modus in neutralen Farben

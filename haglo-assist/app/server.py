@@ -36,7 +36,7 @@ SKIP_DOMAINS = {
     "zone", "persistent_notification", "assist_satellite", "ai_task",
 }
 
-ADDON_VERSION = "0.18.4"
+ADDON_VERSION = "0.18.5"
 MAX_VERSIONS = 30                      # so viele Dashboard-Versionen bleiben lokal gespeichert
 BAR_ENTITY = "input_text.haglo_assist"           # Eingabeleiste im Dashboard
 BAR_STATUS = "input_text.haglo_assist_status"    # Rückmeldung darunter
@@ -45,8 +45,8 @@ HUB_FILE = Path("/data/hub.json")
 TERMS_VERSION = "2026-10"
 # Nur als Rückfall, solange das Backend nicht erreichbar ist.
 FALLBACK_URLS = {
-    "terms_url": "https://haglotech.com/policies/terms-of-service",
-    "privacy_url": "https://haglotech.com/policies/privacy-policy",
+    "terms_url": "https://haglotech.com/pages/haglo-assist-bedingungen",
+    "privacy_url": "https://haglotech.com/pages/haglo-assist-datenschutz",
     "booking_url": "https://haglotech.com/pages/termin",
 }
 
@@ -614,6 +614,7 @@ def trial_info(status: dict | None) -> dict:
         "plan_name": status["plan_name"],
         "limit": status["limit"],
         "subscription": status["subscription"],
+        "terms_version": status.get("terms_version"),
         "terms_url": status["terms_url"],
         "privacy_url": status["privacy_url"],
         "booking_url": status["booking_url"],
@@ -1330,6 +1331,7 @@ async def status(request):
         # Rein lokal: "sicher" = Geräte-Zettel der Haglo-Einrichtung, "vermutlich" = nur das Modell passt
         "preinstalled": looks_like_haglo(),
         "haglo_marker": bool(load_marker()),
+        "hub_id": load_hub()["hub_id"],
         "busy": request.app.get("job"),
         "trial": trial,
     })

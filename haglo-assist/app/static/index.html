@@ -327,7 +327,7 @@
     </div>
   </div>
 
-  <footer><span id="meta"></span><span class="fsep"> · </span><a id="terms" href="https://haglotech.com/policies/terms-of-service" target="_blank" rel="noopener">AGB</a> · <a id="privacy" href="https://haglotech.com/policies/privacy-policy" target="_blank" rel="noopener">Datenschutz</a> · <a href="static/vendor/THIRD-PARTY-LICENSES.txt" target="_blank" rel="noopener">Lizenzen</a> · <a id="planLink" role="button" tabindex="0">Plan &amp; Abo</a></footer>
+  <footer><span id="meta"></span><span class="fsep"> · </span><a id="terms" href="https://haglotech.com/pages/haglo-assist-bedingungen" target="_blank" rel="noopener">Bedingungen</a> · <a id="privacy" href="https://haglotech.com/pages/haglo-assist-datenschutz" target="_blank" rel="noopener">Datenschutz</a> · <a href="static/vendor/THIRD-PARTY-LICENSES.txt" target="_blank" rel="noopener">Lizenzen</a> · <a id="planLink" role="button" tabindex="0">Plan &amp; Abo</a></footer>
 
   <div class="sheet-bg hidden" id="consent">
     <div class="sheet">
@@ -341,7 +341,7 @@
         <li>Nach deiner Zustimmung senden wir Seriennummer und Netzwerkadresse des Geräts an Haglo, um den Kauf zu bestätigen</li>
       </ul>
       <label><input type="checkbox" id="agree">
-        <span>Ich akzeptiere die <a id="termsLink" target="_blank" rel="noopener">AGB</a> und habe die <a id="privacyLink" target="_blank" rel="noopener">Datenschutzerklärung</a> gelesen.</span></label>
+        <span>Ich akzeptiere die <a id="termsLink" target="_blank" rel="noopener">Nutzungsbedingungen</a> und habe die <a id="privacyLink" target="_blank" rel="noopener">Datenschutzhinweise</a> gelesen.</span></label>
       <button class="primary" id="accept" disabled>Zustimmen &amp; loslegen</button>
     </div>
   </div>
@@ -383,6 +383,7 @@
         <button class="btn2" id="cancel">Verträge hier kündigen</button>
       </div>
       <p class="hint">Die Limits füllen sich laufend wieder auf. Große Dashboards und lange Wünsche verbrauchen mehr als kleine Änderungen.</p>
+      <p class="hint" id="hubId"></p>
       <p class="hint" id="planHint">Bezahlung, Rechnungen und Kündigung laufen sicher über unseren Zahlungsdienst Stripe.</p>
       <details class="ask">
         <summary>Integration anfragen</summary>
@@ -666,6 +667,7 @@ async function init() {
     let m = `${s.entities} ${s.entities === 1 ? "Gerät" : "Geräte"} in ${s.areas.length} ${s.areas.length === 1 ? "Raum" : "Räumen"} erkannt`;
     if (!s.api_key) m += " · ⚠ API-Schlüssel fehlt";
     $("meta").textContent = m;
+    if (s.hub_id) $("hubId").textContent = "Hub-ID (für Anfragen zu deinen Daten): " + s.hub_id;
   } catch (e) {
     $("meta").textContent = "Geräte konnten nicht gelesen werden: " + e.message;
   }
@@ -686,7 +688,7 @@ $("agree").addEventListener("change", (e) => { $("accept").disabled = !e.target.
 $("accept").addEventListener("click", async () => {
   $("accept").disabled = true;
   try {
-    await api("api/consent", { version: "2026-10" });
+    await api("api/consent", { version: (trial && trial.terms_version) || "2026-10" });
     $("consent").classList.add("hidden");
     if (welcomed && !pending) dismiss();
     if (pending) generate(...pending);
