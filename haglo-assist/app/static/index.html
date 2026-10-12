@@ -262,6 +262,8 @@
                border: 1px solid var(--line); border-radius: 12px; padding: 11px 14px; outline: 0; }
   .own input:focus { border-color: var(--brand); }
   .own .primary { padding: 11px 18px; }
+  .fld { font: inherit; font-size: 15px; color: var(--text); background: var(--bg); border: 1px solid var(--line); border-radius: 10px; padding: 10px 12px; outline: 0; }
+  .fld:focus { border-color: var(--brand); }
   .ask-q .links { text-align: center; }
   .hint { font-size: 13px; color: var(--muted); margin: 12px 0 0; }
   .hint.err { color: var(--err); }
@@ -1005,13 +1007,38 @@ function showConfirmDevice(wish, d) {
     <div class="actions" style="justify-content:flex-start"><button class="primary" id="devYes">Verbinden</button>
       <button class="btn2" id="devNo">Abbrechen</button></div></div>`);
   $("devNo").onclick = () => dismiss();
-  $("devYes").onclick = async () => {
-    typing("Ich verbinde das Gerät … das dauert bis zu einer Minute");
-    busy = true; setInputs(false);
-    try { await api("api/devices/add", { host: d.host, name: d.wanted_name || "", wish }); dismiss(); await loadHistory(); }
-    catch (e) { showResult(`<p class="err">Das hat nicht geklappt: ${esc(e.message)}</p>`); }
-    finally { busy = false; if (!(trial && trial.expired)) setInputs(true); }
-  };
+  $("devYes").onclick = () => connectDevice(wish, d);
+}
+
+async function connectDevice(wish, d, mqtt) {
+  typing("Ich verbinde das Gerät … das dauert bis zu einer Minute");
+  busy = true; setInputs(false);
+  try {
+    const r = await api("api/devices/add", { host: d.host, name: d.wanted_name || "", wish, mqtt });
+    if (r.need_mqtt) { showMqttForm(wish, d, r.need_mqtt); return; }
+    dismiss(); await loadHistory();
+  } catch (e) { showResult(`<p class="err">Das hat nicht geklappt: ${esc(e.message)}</p>`); }
+  finally { busy = false; if (!(trial && trial.expired)) setInputs(true); }
+}
+
+// MQTT läuft, aber die App kennt die Zugangsdaten nicht: Der Nutzer trägt sie ein. Sie bleiben lokal.
+function showMqttForm(wish, d, m) {
+  const why = m.reason === "403"
+    ? "Der App fehlt noch die Berechtigung, die Zugangsdaten selbst zu holen. Nach einem Neustart der App (Entwickler-Variante: „Neu bauen“) geht es ohne Eingabe."
+    : "Dein MQTT-Dienst läuft nicht als App „Mosquitto broker“, deshalb kenne ich seine Zugangsdaten nicht.";
+  showResult(`<div class="ask-q"><p class="step">Eine Angabe fehlt noch</p><h2>MQTT-Zugangsdaten</h2>
+    <p style="color:var(--text)">${why} Trag sie hier ein – sie gehen nur an die Steckdose, nicht an Haglo.</p>
+    <form id="mqForm" style="display:flex;flex-direction:column;gap:8px;max-width:340px">
+      <input id="mqHost" class="fld" placeholder="Adresse des MQTT-Dienstes" value="${esc(m.host || "")}" autocomplete="off">
+      <input id="mqUser" class="fld" placeholder="Benutzername" autocomplete="off" required>
+      <input id="mqPass" class="fld" type="password" placeholder="Passwort" autocomplete="off">
+      <div class="actions" style="justify-content:flex-start"><button class="primary">Verbinden</button>
+        <button class="btn2" type="button" id="mqNo">Abbrechen</button></div></form></div>`);
+  $("mqNo").onclick = () => dismiss();
+  $("mqForm").addEventListener("submit", (e) => {
+    e.preventDefault();
+    connectDevice(wish, d, { host: $("mqHost").value.trim(), username: $("mqUser").value.trim(), password: $("mqPass").value });
+  });
 }
 
 function showConfirmActions(wish, erklaerung, actions) {

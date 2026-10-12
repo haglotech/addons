@@ -38,7 +38,7 @@ SKIP_DOMAINS = {
     "zone", "persistent_notification", "assist_satellite", "ai_task",
 }
 
-ADDON_VERSION = "0.19.0"
+ADDON_VERSION = "0.19.1"
 MAX_VERSIONS = 30                      # so viele Dashboard-Versionen bleiben lokal gespeichert
 BAR_ENTITY = "input_text.haglo_assist"           # Eingabeleiste im Dashboard
 BAR_STATUS = "input_text.haglo_assist_status"    # Rückmeldung darunter
@@ -1299,8 +1299,17 @@ async def find_ha_device(session, mac: str, tries: int = 12) -> list[str]:
     return []
 
 
-async def add_device(session, address: str, name: str) -> str:
-    """Verbindet das Gerät mit Home Assistant. Gibt einen kurzen Bericht (Markdown) zurück."""
+class NeedMqtt(Exception):
+    """Die Zugangsdaten des MQTT-Dienstes sind nicht zu bekommen: Die Oberfläche fragt den Nutzer danach."""
+
+    def __init__(self, reason: str, ha_ip: str):
+        super().__init__(reason)
+        self.reason, self.ha_ip = reason, ha_ip
+
+
+async def add_device(session, address: str, name: str, manual: dict | None = None) -> str:
+    """Verbindet das Gerät mit Home Assistant. Gibt einen kurzen Bericht (Markdown) zurück.
+    manual: vom Nutzer eingegebene MQTT-Zugangsdaten (bleiben lokal, gehen nur an das Gerät)."""
     info = await probe_device(session, address)
     host, name = info["host"], re.sub(r"[;\"\\]", "", name).strip()[:40]
     if info["kind"] == "shelly":
@@ -1315,15 +1324,11 @@ async def add_device(session, address: str, name: str) -> str:
                 + "\n\n[Geräte öffnen](/config/devices/dashboard)")
 
     # Tasmota spricht über MQTT mit Home Assistant: Es braucht den MQTT-Dienst, die Integrationen und die Zugangsdaten.
+    mqtt, why_not = {}, ""
     try:
         mqtt = await supervisor_get(session, "/services/mqtt")
-    except Exception:
-        mqtt = {}
-    if not mqtt.get("host"):
-        return ("Für Tasmota braucht Home Assistant einen MQTT-Dienst, und der fehlt noch. So geht es weiter:\n\n"
-                "1. Öffne die App **Mosquitto broker**, installiere und starte sie.\n"
-                "2. Schick mir danach denselben Wunsch noch einmal – den Rest erledige ich.\n\n"
-                f"[Mosquitto broker öffnen]({MY_ADDON}core_mosquitto)")
+    except Exception as e:
+        why_not = str(e)
     ha_ip = ""
     try:
         for i in (await supervisor_get(session, "/network/info")).get("interfaces", []):
@@ -1333,11 +1338,29 @@ async def add_device(session, address: str, name: str) -> str:
                     ha_ip = str(net.ip)
     except Exception:
         pass
-    if not ha_ip:
+    status, entries = await core(session, "GET", "/config/config_entries/entry")
+    has_mqtt = status == 200 and any(e.get("domain") == "mqtt" for e in entries or [])
+    broker_ip = ha_ip
+    if manual and manual.get("username"):
+        mqtt = {"host": "core-mosquitto", "port": int(manual.get("port") or 1883), "username": str(manual["username"])[:60],
+                "password": str(manual.get("password") or "")[:120]}
+        broker_ip = str(manual.get("host") or "").strip() or ha_ip
+        if broker_ip != ha_ip:
+            broker_ip = device_host(broker_ip)
+    elif not mqtt.get("host"):
+        if not has_mqtt:
+            return ("Für Tasmota braucht Home Assistant einen MQTT-Dienst, und ich finde keinen. So geht es weiter:\n\n"
+                    "1. Öffne die App **Mosquitto broker**, installiere und starte sie.\n"
+                    "2. Schick mir danach denselben Wunsch noch einmal – den Rest erledige ich.\n\n"
+                    f"[Mosquitto broker öffnen]({MY_ADDON}core_mosquitto)")
+        # MQTT läuft, aber die App kommt nicht an die Zugangsdaten (fremder Dienst oder fehlende Berechtigung)
+        raise NeedMqtt("403" if "403" in why_not or "401" in why_not else "extern", ha_ip)
+    if not ha_ip and not (manual and manual.get("host")):
         raise RuntimeError("Ich konnte die Adresse deines Home Assistant im Heimnetz nicht ermitteln.")
     done = []
-    ok, why = await ensure_integration(session, "mqtt", {"broker": mqtt["host"], "port": mqtt.get("port", 1883),
-                                                        "username": mqtt.get("username", ""), "password": mqtt.get("password", "")})
+    ok, why = (True, "vorhanden") if has_mqtt else await ensure_integration(
+        session, "mqtt", {"broker": mqtt["host"], "port": mqtt.get("port", 1883),
+                          "username": mqtt.get("username", ""), "password": mqtt.get("password", "")})
     if not ok:
         raise RuntimeError(f"Die MQTT-Integration ließ sich nicht einrichten ({why}). Bitte füge sie unter Geräte & Dienste hinzu.")
     done.append("MQTT in Home Assistant: " + (why or "eingerichtet"))
@@ -1348,13 +1371,13 @@ async def add_device(session, address: str, name: str) -> str:
     cmds = [f"MqttUser {mqtt.get('username', '')}", f"MqttPassword {mqtt.get('password', '')}", f"MqttPort {mqtt.get('port', 1883)}", "SetOption19 0"]
     if name:
         cmds += [f"DeviceName {name}", f"FriendlyName1 {name}"]
-    cmds.append(f"MqttHost {ha_ip}")           # zuletzt: danach startet das Gerät neu
+    cmds.append(f"MqttHost {broker_ip}")       # zuletzt: danach startet das Gerät neu
     if any(";" in c for c in cmds):
         for c in cmds:
             await device_get(session, host, "cm?cmnd=" + quote(c))
     else:
         await device_get(session, host, "cm?cmnd=" + quote("Backlog " + "; ".join(cmds)))
-    done.append(f"Gerät eingestellt: meldet sich jetzt bei {ha_ip}" + (f", Name „{name}“" if name else ""))
+    done.append(f"Gerät eingestellt: meldet sich jetzt bei {broker_ip}" + (f", Name „{name}“" if name else ""))
     ents = await find_ha_device(session, info["mac"]) if info["mac"] else []
     steps = "\n".join(f"- {d}" for d in done)
     if not ents:
@@ -1837,7 +1860,10 @@ async def add_device_route(request):
     wish = str(body.get("wish") or "")
     request.app["job"] = {"wish": wish, "since": int(time.time())}
     try:
-        text = await add_device(request.app["session"], str(body.get("host") or ""), str(body.get("name") or ""))
+        text = await add_device(request.app["session"], str(body.get("host") or ""), str(body.get("name") or ""),
+                                body.get("mqtt") if isinstance(body.get("mqtt"), dict) else None)
+    except NeedMqtt as e:
+        return web.json_response({"ok": True, "need_mqtt": {"reason": e.reason, "host": e.ha_ip}})
     except Exception as e:
         return web.json_response({"ok": False, "error": str(e) or type(e).__name__}, status=500)
     finally:

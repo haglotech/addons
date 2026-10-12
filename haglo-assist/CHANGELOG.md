@@ -1,5 +1,10 @@
 # Änderungen
 
+## 0.19.1
+
+- Gerät verbinden: Läuft MQTT schon, kennt die App aber die Zugangsdaten nicht, fragt sie danach,
+  statt die Installation von Mosquitto vorzuschlagen
+
 ## 0.19.0
 
 - Neues Gerät verbinden: Nenn die Adresse eines Tasmota- oder Shelly-Geräts („Füge die Steckdose unter
