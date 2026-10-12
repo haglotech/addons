@@ -1,5 +1,12 @@
 # Änderungen
 
+## 0.19.0
+
+- Neues Gerät verbinden: Nenn die Adresse eines Tasmota- oder Shelly-Geräts („Füge die Steckdose unter
+  192.168.1.50 als Kühlschrank hinzu“) – Haglo Assist prüft es im Heimnetz und verbindet es nach deiner
+  Bestätigung mit Home Assistant
+- Dafür fragt die App Home Assistant nach dem MQTT-Dienst (neue Berechtigung „MQTT“)
+
 ## 0.18.9
 
 - Handy: kein seitliches Scrollen mehr, flacherer Kopf und Fuß, mehr Platz für das Gespräch

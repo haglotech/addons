@@ -760,6 +760,7 @@ async function generate(wish, label, keepDialog, allowStates) {
     if (r.need_consent) { showStateConsent(wish, label, r.need_consent); return; }
     if (r.need_dashboard_consent) { showDashboardConsent(wish, label, r.need_dashboard_consent); return; }
     if (r.confirm_actions) { showConfirmActions(wish, r.erklaerung, r.confirm_actions); return; }
+    if (r.confirm_device) { showConfirmDevice(wish, r.confirm_device); return; }
     dismiss(); await loadHistory();      // das Ergebnis steht jetzt als Eintrag im Verlauf, mit „Rückgängig“
   } catch (e) {
     if (e.code === "consent_required") { dismiss(); pending = [wish, label]; $("consent").classList.remove("hidden"); }
@@ -989,6 +990,30 @@ function showAutomations(wish, erklaerung, items) {
 }
 
 // Schlösser, Tore, Alarm: erst nach ausdrücklicher Bestätigung
+// Neues Gerät: erst zeigen, was gefunden wurde und was geändert wird – verbunden wird nach Bestätigung
+function showConfirmDevice(wish, d) {
+  const name = d.wanted_name || d.name;
+  const steps = d.kind === "tasmota"
+    ? `<li>MQTT und die Tasmota-Integration in Home Assistant einrichten, falls sie fehlen</li>
+       <li>Im Gerät die Verbindung zu deinem Home Assistant eintragen${d.wanted_name ? ` und es „${esc(d.wanted_name)}“ nennen` : ""}</li>
+       <li>Das Gerät startet dabei einmal neu</li>`
+    : `<li>Das Gerät in Home Assistant hinzufügen</li>`;
+  showResult(`<div class="ask-q"><p class="step">Gerät gefunden – noch nicht verbunden</p>
+    <h2>${esc(name)} verbinden?</h2>
+    <p style="color:var(--text)">Unter ${esc(d.host)} antwortet ein Gerät mit <b>${esc(d.label)}</b>${d.version ? " " + esc(d.version) : ""}${d.connected ? ". Es ist schon mit einem MQTT-Dienst verbunden; ich stelle es auf deinen Home Assistant um" : ""}.</p>
+    <ul style="margin:0 0 12px;padding-left:20px;color:var(--muted);font-size:14px">${steps}</ul>
+    <div class="actions" style="justify-content:flex-start"><button class="primary" id="devYes">Verbinden</button>
+      <button class="btn2" id="devNo">Abbrechen</button></div></div>`);
+  $("devNo").onclick = () => dismiss();
+  $("devYes").onclick = async () => {
+    typing("Ich verbinde das Gerät … das dauert bis zu einer Minute");
+    busy = true; setInputs(false);
+    try { await api("api/devices/add", { host: d.host, name: d.wanted_name || "", wish }); dismiss(); await loadHistory(); }
+    catch (e) { showResult(`<p class="err">Das hat nicht geklappt: ${esc(e.message)}</p>`); }
+    finally { busy = false; if (!(trial && trial.expired)) setInputs(true); }
+  };
+}
+
 function showConfirmActions(wish, erklaerung, actions) {
   showResult(`<div class="ask-q"><p class="step">Sicherheitsabfrage</p><h2>Wirklich ausführen?</h2>
     <p style="color:var(--text)">${esc(erklaerung)}</p>

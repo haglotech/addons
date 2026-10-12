@@ -10,12 +10,14 @@ Testphase, Zustimmung, Pläne und der KI-Aufruf liegen im Backend
 """
 
 import asyncio
+import ipaddress
 import json
 import os
 import re
 import secrets
 import time
 from pathlib import Path
+from urllib.parse import quote
 
 import aiohttp
 from aiohttp import web
@@ -36,7 +38,7 @@ SKIP_DOMAINS = {
     "zone", "persistent_notification", "assist_satellite", "ai_task",
 }
 
-ADDON_VERSION = "0.18.9"
+ADDON_VERSION = "0.19.0"
 MAX_VERSIONS = 30                      # so viele Dashboard-Versionen bleiben lokal gespeichert
 BAR_ENTITY = "input_text.haglo_assist"           # Eingabeleiste im Dashboard
 BAR_STATUS = "input_text.haglo_assist_status"    # Rückmeldung darunter
@@ -1190,6 +1192,186 @@ def state_text(st: dict) -> str:
     return (text + (" (" + ", ".join(extra) + ")" if extra else ""))[:120]
 
 
+# ---------------------------------------------------------------- Neues Gerät verbinden
+# Der Kunde nennt die Adresse eines Geräts im Heimnetz. Die App prüft es selbst (nichts davon geht
+# an den Server) und verbindet es erst nach Bestätigung mit Home Assistant.
+MY_ADDON = "https://my.home-assistant.io/redirect/supervisor_addon/?addon="
+
+
+def device_host(address: str) -> str:
+    """Nur Adressen im eigenen Heimnetz: private IPv4-Adresse, ohne Port und Pfad."""
+    host = re.sub(r"^https?://", "", address.strip(), flags=re.I).split("/")[0].split(":")[0]
+    try:
+        ip = ipaddress.ip_address(host)
+    except ValueError:
+        raise RuntimeError("Bitte nenne die IP-Adresse des Geräts, zum Beispiel 192.168.1.50.")
+    if ip.version != 4 or not ip.is_private or ip.is_loopback or ip.is_link_local:
+        raise RuntimeError("Ich verbinde nur Geräte in deinem Heimnetz (Adressen wie 192.168.x.x).")
+    return str(ip)
+
+
+async def device_get(session, host: str, path: str):
+    async with session.get(f"http://{host}/{path}", timeout=aiohttp.ClientTimeout(total=6)) as r:
+        if r.status != 200:
+            return None
+        try:
+            return json.loads(await r.text())
+        except ValueError:
+            return None
+
+
+async def probe_device(session, address: str) -> dict:
+    """Erkennt, was unter der Adresse antwortet. Gibt nur aus, was für die Rückfrage nötig ist."""
+    host = device_host(address)
+    try:
+        st = await device_get(session, host, "cm?cmnd=Status%200")
+    except Exception:
+        raise RuntimeError(f"Unter {host} antwortet kein Gerät. Ist es eingeschaltet und im selben Netz?")
+    if isinstance(st, dict) and "Status" in st and "StatusFWR" in st:
+        mqtt = st.get("StatusMQT") or {}
+        return {"kind": "tasmota", "host": host, "label": "Tasmota",
+                "name": str((st["Status"].get("DeviceName") or "Tasmota"))[:60],
+                "version": str(st["StatusFWR"].get("Version", "")).split("(")[0][:20],
+                "mac": str((st.get("StatusNET") or {}).get("Mac", "")).lower(),
+                "connected": bool(mqtt.get("MqttHost")) and int(mqtt.get("MqttCount") or 0) > 0}
+    if isinstance(st, dict) and "WARNING" in st:
+        raise RuntimeError("Das Gerät ist mit einem Passwort geschützt. Bitte entferne das Web-Passwort in Tasmota oder richte es von Hand ein.")
+    try:
+        sh = await device_get(session, host, "shelly")
+    except Exception:
+        sh = None
+    if isinstance(sh, dict) and ("type" in sh or "model" in sh or "app" in sh):
+        return {"kind": "shelly", "host": host, "label": "Shelly", "name": str(sh.get("name") or sh.get("app") or sh.get("type") or "Shelly")[:60],
+                "version": str(sh.get("ver") or sh.get("fw") or "")[:20], "mac": str(sh.get("mac", "")).lower(), "connected": False,
+                "auth": bool(sh.get("auth") or sh.get("auth_en"))}
+    raise RuntimeError(f"Unter {host} antwortet ein Gerät, das ich nicht selbst verbinden kann. "
+                       "Bisher geht das mit Tasmota und Shelly. Sag mir die Marke, dann zeige ich dir den Weg.")
+
+
+async def flow_finish(session, result: dict, answers: dict | None = None) -> tuple[bool, str]:
+    """Führt einen Einrichtungsdialog von Home Assistant zu Ende, soweit er keine Eingaben verlangt."""
+    for _ in range(4):
+        kind = result.get("type")
+        if kind == "create_entry":
+            return True, ""
+        if kind == "abort":
+            ok = result.get("reason") in ("already_configured", "single_instance_allowed", "already_in_progress")
+            return ok, str(result.get("reason") or "")
+        if kind != "form" or not result.get("flow_id"):
+            return False, str(result.get("message") or kind or "unbekannt")
+        if result.get("errors"):
+            return False, json.dumps(result["errors"], ensure_ascii=False)[:120]
+        fields = {f.get("name") for f in result.get("data_schema") or []}
+        body = {k: v for k, v in (answers or {}).items() if k in fields}
+        required = {f.get("name") for f in result.get("data_schema") or [] if f.get("required") and "default" not in f}
+        if required - set(body):
+            return False, "braucht Angaben: " + ", ".join(sorted(required - set(body)))
+        _, result = await core(session, "POST", f"/config/config_entries/flow/{result['flow_id']}", body)
+    return False, "zu viele Schritte"
+
+
+async def ensure_integration(session, domain: str, answers: dict | None = None) -> tuple[bool, str]:
+    status, entries = await core(session, "GET", "/config/config_entries/entry")
+    if status == 200 and any(e.get("domain") == domain for e in entries or []):
+        return True, "vorhanden"
+    # Hat Home Assistant die Integration schon entdeckt, wartet ein Dialog auf Bestätigung
+    _, flows = await core(session, "GET", "/config/config_entries/flow")
+    for f in flows if isinstance(flows, list) else []:
+        if f.get("handler") == domain:
+            _, step = await core(session, "GET", f"/config/config_entries/flow/{f['flow_id']}")
+            done, why = await flow_finish(session, step if isinstance(step, dict) else {}, answers)
+            if done:
+                return True, "bestätigt"
+    _, first = await core(session, "POST", "/config/config_entries/flow", {"handler": domain, "show_advanced_options": False})
+    return await flow_finish(session, first if isinstance(first, dict) else {}, answers)
+
+
+async def find_ha_device(session, mac: str, tries: int = 12) -> list[str]:
+    """Wartet, bis Home Assistant das Gerät kennt, und gibt dessen Entitäten zurück."""
+    for _ in range(tries):
+        async with HAClient(session) as ha:
+            devices = await ha.call("config/device_registry/list")
+            dev = next((d for d in devices or [] if any(c[0] == "mac" and c[1].lower() == mac for c in d.get("connections") or [])), None)
+            if dev:
+                ents = await ha.call("config/entity_registry/list")
+                return sorted(e["entity_id"] for e in ents or [] if e.get("device_id") == dev["id"]) or ["(noch keine Entitäten)"]
+        await asyncio.sleep(4)
+    return []
+
+
+async def add_device(session, address: str, name: str) -> str:
+    """Verbindet das Gerät mit Home Assistant. Gibt einen kurzen Bericht (Markdown) zurück."""
+    info = await probe_device(session, address)
+    host, name = info["host"], re.sub(r"[;\"\\]", "", name).strip()[:40]
+    if info["kind"] == "shelly":
+        if info.get("auth"):
+            raise RuntimeError("Die Shelly ist mit einem Passwort geschützt. Bitte füge sie von Hand hinzu.")
+        ok, why = await ensure_host_entry(session, "shelly", host)
+        if not ok:
+            raise RuntimeError(f"Home Assistant hat die Shelly nicht angenommen ({why}).")
+        ents = await find_ha_device(session, info["mac"], tries=6) if info["mac"] else []
+        return ("Die Shelly ist jetzt mit Home Assistant verbunden."
+                + (f" Neue Entitäten: {', '.join(f'`{e}`' for e in ents[:6])}." if ents else "")
+                + "\n\n[Geräte öffnen](/config/devices/dashboard)")
+
+    # Tasmota spricht über MQTT mit Home Assistant: Es braucht den MQTT-Dienst, die Integrationen und die Zugangsdaten.
+    try:
+        mqtt = await supervisor_get(session, "/services/mqtt")
+    except Exception:
+        mqtt = {}
+    if not mqtt.get("host"):
+        return ("Für Tasmota braucht Home Assistant einen MQTT-Dienst, und der fehlt noch. So geht es weiter:\n\n"
+                "1. Öffne die App **Mosquitto broker**, installiere und starte sie.\n"
+                "2. Schick mir danach denselben Wunsch noch einmal – den Rest erledige ich.\n\n"
+                f"[Mosquitto broker öffnen]({MY_ADDON}core_mosquitto)")
+    ha_ip = ""
+    try:
+        for i in (await supervisor_get(session, "/network/info")).get("interfaces", []):
+            for a in (i.get("ipv4") or {}).get("address") or []:
+                net = ipaddress.ip_interface(a)
+                if not ha_ip or ipaddress.ip_address(host) in net.network:
+                    ha_ip = str(net.ip)
+    except Exception:
+        pass
+    if not ha_ip:
+        raise RuntimeError("Ich konnte die Adresse deines Home Assistant im Heimnetz nicht ermitteln.")
+    done = []
+    ok, why = await ensure_integration(session, "mqtt", {"broker": mqtt["host"], "port": mqtt.get("port", 1883),
+                                                        "username": mqtt.get("username", ""), "password": mqtt.get("password", "")})
+    if not ok:
+        raise RuntimeError(f"Die MQTT-Integration ließ sich nicht einrichten ({why}). Bitte füge sie unter Geräte & Dienste hinzu.")
+    done.append("MQTT in Home Assistant: " + (why or "eingerichtet"))
+    ok, why = await ensure_integration(session, "tasmota")
+    if not ok:
+        raise RuntimeError(f"Die Tasmota-Integration ließ sich nicht einrichten ({why}). Bitte füge sie unter Geräte & Dienste hinzu.")
+    done.append("Tasmota-Integration: " + (why or "eingerichtet"))
+    cmds = [f"MqttUser {mqtt.get('username', '')}", f"MqttPassword {mqtt.get('password', '')}", f"MqttPort {mqtt.get('port', 1883)}", "SetOption19 0"]
+    if name:
+        cmds += [f"DeviceName {name}", f"FriendlyName1 {name}"]
+    cmds.append(f"MqttHost {ha_ip}")           # zuletzt: danach startet das Gerät neu
+    if any(";" in c for c in cmds):
+        for c in cmds:
+            await device_get(session, host, "cm?cmnd=" + quote(c))
+    else:
+        await device_get(session, host, "cm?cmnd=" + quote("Backlog " + "; ".join(cmds)))
+    done.append(f"Gerät eingestellt: meldet sich jetzt bei {ha_ip}" + (f", Name „{name}“" if name else ""))
+    ents = await find_ha_device(session, info["mac"]) if info["mac"] else []
+    steps = "\n".join(f"- {d}" for d in done)
+    if not ents:
+        return (f"Ich habe alles eingestellt, aber Home Assistant zeigt das Gerät noch nicht an:\n\n{steps}\n\n"
+                "Das dauert manchmal eine Minute. Erscheint es nicht, prüfe in der Weboberfläche des Geräts, ob MQTT verbunden ist.\n\n"
+                f"[Geräte & Dienste öffnen](/config/integrations/dashboard)\n\n[Weboberfläche des Geräts](http://{host}/)")
+    return (f"**{name or info['name']}** ist jetzt mit Home Assistant verbunden.\n\n{steps}\n- Neue Entitäten: "
+            + ", ".join(f"`{e}`" for e in ents[:8])
+            + "\n\nSchaltet die Steckdose nicht oder fehlen Messwerte, braucht sie in Tasmota noch die passende Gerätevorlage.\n\n"
+            f"[Geräte öffnen](/config/devices/dashboard)\n\n[Weboberfläche des Geräts](http://{host}/)")
+
+
+async def ensure_host_entry(session, domain: str, host: str) -> tuple[bool, str]:
+    _, first = await core(session, "POST", "/config/config_entries/flow", {"handler": domain, "show_advanced_options": False})
+    return await flow_finish(session, first if isinstance(first, dict) else {}, {"host": host})
+
+
 # ---------------------------------------------------------------- Dashboard bauen
 async def build_dashboard(app, wish: str, refine: bool, dialog: list, can_ask: bool,
                           dashboard: str | None = DASHBOARD_PATH, can_automate: bool = False, allow_states: bool = False) -> dict:
@@ -1225,7 +1407,7 @@ async def build_dashboard(app, wish: str, refine: bool, dialog: list, can_ask: b
         if can_automate:
             raw = await all_states(session)
             by_id = {x["entity_id"]: x for x in raw}
-            extra = {"kinds": KINDS, "can_control": True, "automations": await own_objects(session, raw)}
+            extra = {"kinds": KINDS, "can_control": True, "can_add_device": True, "automations": await own_objects(session, raw)}
         payload = {
             "wish": wish, "entities": entities,
             "previous": None if rebuild or locked else (strip_bar(before) if own else before),
@@ -1234,6 +1416,11 @@ async def build_dashboard(app, wish: str, refine: bool, dialog: list, can_ask: b
             **extra,
         }
         result = await backend(session, "POST", "/v1/generate", payload, timeout=300)
+        if result.get("type") == "add_device":
+            # Die KI hat nur Adresse und Namen herausgelesen. Geprüft wird hier, im Heimnetz.
+            want = result.get("device") or {}
+            info = await probe_device(session, str(want.get("adresse") or ""))
+            return {"confirm_device": {**info, "wanted_name": str(want.get("name") or "")[:40]}, "status": result["status"]}
         if locked and result.get("type") not in ("objects", "actions", "answer", "need_states", "question"):
             # Der Wunsch betrifft das Dashboard: Die Oberfläche fragt mit einer Karte nach der Freigabe.
             return {"need_dashboard_consent": {"id": dashboard, "label": label}, "status": result.get("status")}
@@ -1403,7 +1590,7 @@ async def generate(request):
         return web.json_response({"ok": False, "error": str(e)}, status=500)
     finally:
         request.app["job"] = None
-    for key in ("objects", "confirm_actions", "need_consent", "need_dashboard_consent", "done", "answer"):
+    for key in ("objects", "confirm_actions", "confirm_device", "need_consent", "need_dashboard_consent", "done", "answer"):
         if key in result:
             return web.json_response({"ok": True, key: result[key], "erklaerung": result.get("erklaerung", ""),
                                       "trial": trial_info(result["status"]) if result.get("status") else trial})
@@ -1637,6 +1824,25 @@ async def restore_automation(request):
     if status != 200:
         return web.json_response({"ok": False, "error": f"Wiederherstellen fehlgeschlagen ({status})."}, status=500)
     add_history("restore", "", "Automation wiederhergestellt: " + str(cfg.get("alias", "")))
+    return web.json_response({"ok": True})
+
+
+@routes.post("/api/devices/add")
+async def add_device_route(request):
+    """Verbindet ein Gerät, nachdem der Nutzer die Rückfrage bestätigt hat."""
+    try:
+        body = await request.json()
+    except Exception:
+        body = {}
+    wish = str(body.get("wish") or "")
+    request.app["job"] = {"wish": wish, "since": int(time.time())}
+    try:
+        text = await add_device(request.app["session"], str(body.get("host") or ""), str(body.get("name") or ""))
+    except Exception as e:
+        return web.json_response({"ok": False, "error": str(e) or type(e).__name__}, status=500)
+    finally:
+        request.app["job"] = None
+    add_history("answer", wish, text)
     return web.json_response({"ok": True})
 
 
