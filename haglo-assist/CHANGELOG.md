@@ -1,5 +1,10 @@
 # Änderungen
 
+## 0.20.2
+
+- Auf Geräten von Haglo: neue Begrüßung, die auf einen Blick zeigt, dass Lite 12 Monate dabei ist
+- Baut Haglo Assist deine Startseite, steht dort oben eine schmale Karte mit dem Hinweis und einem Knopf zu Haglo Assist
+
 ## 0.20.1
 
 - Fragen über einen Zeitraum („Wie viel habe ich diesen Monat erzeugt?“): Haglo Assist liest dafür die

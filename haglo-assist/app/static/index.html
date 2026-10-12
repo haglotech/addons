@@ -170,6 +170,18 @@
   .opts2 { margin-top: 18px; border-top: 1px solid var(--line); padding-top: 14px; display: flex; flex-direction: column; gap: 12px; }
   .opts2 label { display: flex; gap: 10px; align-items: flex-start; font-size: 13px; color: var(--muted); cursor: pointer; margin: 0; }
   .opts2 b { color: var(--text); font-size: 14px; }
+  .gift { display: flex; gap: 16px; align-items: stretch; margin: 2px 0 14px; }
+  .gift-n { flex: none; width: 118px; border-radius: 16px; background: linear-gradient(160deg, var(--brand), var(--brand-hover)); color: var(--brand-ink);
+            display: flex; flex-direction: column; align-items: center; justify-content: center; padding: 14px 8px; line-height: 1.1; text-align: center; }
+  .gift-n b { font-size: 46px; font-weight: 700; letter-spacing: -.03em; }
+  .gift-n span { font-size: 15px; font-weight: 600; }
+  .gift-n small { margin-top: 8px; font-size: 11.5px; opacity: .9; text-transform: uppercase; letter-spacing: .06em; }
+  .gift-t { flex: 1; min-width: 0; align-self: center; }
+  .gift-t h2 { margin: 0 0 8px; font-size: 18px; }
+  .gift-t ul { margin: 0; padding: 0; list-style: none; display: grid; gap: 4px; font-size: 14.5px; color: var(--text); }
+  .gift-t li { padding-left: 22px; position: relative; }
+  .gift-t li::before { content: "✓"; position: absolute; left: 0; color: var(--brand); font-weight: 700; }
+  @media (max-width: 460px) { .gift { flex-direction: column; } .gift-n { width: 100%; flex-direction: row; gap: 8px; align-items: baseline; padding: 10px; } .gift-n b { font-size: 30px; } .gift-n small { margin: 0 0 0 4px; } }
   .auto dl { margin: 6px 0 0; display: grid; grid-template-columns: auto 1fr; gap: 3px 10px; font-size: 14px; color: var(--text); }
   .auto dt { color: var(--muted); }
   .auto dd { margin: 0; }
@@ -875,14 +887,14 @@ function showWelcome(sure) {
       <dt>Dashboards</dt><dd>„Zeig mir alle Räume mit Licht und Heizung.“</dd>
       <dt>Automationen</dt><dd>„Wenn sich im Flur etwas bewegt, mach das Licht an.“</dd>
       <dt>Schalten</dt><dd>„Mach im Wohnzimmer das Licht aus.“</dd></dl></div>`;
-  showResult(sure ? `<p class="step" style="color:var(--brand);font-weight:600">✓ Gerät von Haglo</p>
-    <h2>Danke für deinen Kauf bei Haglo</h2>
-    <p style="color:var(--text)">Zu deinem Gerät gehört <b>Haglo Assist Lite – mindestens 12 Monate ohne Aufpreis</b>. Kein Abo, keine Zahlungsdaten, nichts läuft automatisch weiter.</p>
+  const gift = (head, lines) => `<div class="gift"><div class="gift-n"><b>12</b><span>Monate</span><small>Lite inklusive</small></div>
+      <div class="gift-t"><h2>${head}</h2><ul>${lines.map((l) => `<li>${l}</li>`).join("")}</ul></div></div>`;
+  showResult(sure ? `<p class="step" style="color:var(--brand);font-weight:600">✓ Gerät von Haglo erkannt</p>
+    ${gift("Danke für deinen Kauf bei Haglo", ["Haglo Assist <b>Lite</b> gehört zu deinem Gerät", "Mindestens 12 Monate ohne Aufpreis", "Kein Abo, keine Zahlungsdaten", "Nichts verlängert sich automatisch"])}
     ${examples}
     <div class="actions"><button class="primary" id="welcomeGo">Lite aktivieren</button></div>
     <p class="hint">Sobald du Geräte hinzugefügt hast, sag einfach in einem Satz, was du brauchst.</p>`
-  : `<h2>Willkommen bei Haglo Assist</h2>
-    <p style="color:var(--text)">Bei Haglo gekauft? Dann gehört <b>Lite für mindestens 12 Monate ohne Aufpreis</b> zu deinem Gerät. Das bestätigen wir, sobald du loslegst.</p>
+  : `${gift("Willkommen bei Haglo Assist", ["Bei Haglo gekauft? Dann gehört <b>Lite</b> zu deinem Gerät", "Mindestens 12 Monate ohne Aufpreis", "Kein Abo, keine Zahlungsdaten", "Das bestätigen wir, sobald du loslegst"])}
     ${examples}
     <div class="actions"><button class="primary" id="welcomeGo">Loslegen</button></div>`);
   $("welcomeGo").onclick = () => $("consent").classList.remove("hidden");

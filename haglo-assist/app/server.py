@@ -38,7 +38,7 @@ SKIP_DOMAINS = {
     "zone", "persistent_notification", "assist_satellite", "ai_task",
 }
 
-ADDON_VERSION = "0.20.1"
+ADDON_VERSION = "0.20.2"
 MAX_VERSIONS = 30                      # so viele Dashboard-Versionen bleiben lokal gespeichert
 BAR_ENTITY = "input_text.haglo_assist"           # Eingabeleiste im Dashboard
 BAR_STATUS = "input_text.haglo_assist_status"    # Rückmeldung darunter
@@ -935,6 +935,31 @@ def add_bar(config: dict) -> dict:
     return config
 
 
+# ---------------------------------------------------------------- Hinweis-Karte auf Haglo-Geräten
+CARD_MARK = "<!-- haglo-assist-karte -->"
+
+
+def has_haglo_card(config: dict | None) -> bool:
+    return CARD_MARK in json.dumps(config or {}, ensure_ascii=False)
+
+
+def add_haglo_card(config: dict, slug: str, until: int | None) -> dict:
+    """Schmale Karte ganz oben: Lite ist beim Gerät dabei, mit Knopf zu Haglo Assist. Der Kunde kann sie
+    wie jede Karte löschen – dann kommt sie nicht wieder."""
+    views = config.get("views") or []
+    if not views or has_haglo_card(config):
+        return config
+    bis = f" – mindestens bis {time.strftime('%d.%m.%Y', time.localtime(until))}" if until else " – mindestens 12 Monate"
+    card = {"type": "markdown", "content": (
+        f"{CARD_MARK}\n**Haglo Assist** · Lite ist bei deinem Gerät inklusive{bis}. Kein Abo.\n\n"
+        f"Sag in einem Satz, was du brauchst: Dashboards, Automationen, Schalten.\n\n[Haglo Assist öffnen](/{slug})")}
+    if views[0].get("type") == "sections":
+        views[0]["sections"] = [{"type": "grid", "cards": [card]}] + list(views[0].get("sections") or [])
+    else:
+        views[0]["cards"] = [card] + list(views[0].get("cards") or [])
+    return config
+
+
 async def ensure_bar_helpers(ha: HAClient):
     have = {i.get("id") for i in await ha.call("input_text/list")}
     if "haglo_assist" not in have:
@@ -1740,6 +1765,17 @@ async def build_dashboard(app, wish: str, refine: bool, dialog: list, can_ask: b
 
         if not config.get("views"):
             raise RuntimeError("Das Ergebnis war leer. Es wurde nichts gespeichert.")
+        # Auf Haglo-Geräten: Hinweis-Karte, sobald Haglo Assist die Seite baut – einmal. War sie schon da, bleibt sie.
+        st, prefs = result.get("status") or {}, load_prefs()
+        if st.get("haglo_device") and st.get("included_plan") and (
+                has_haglo_card(before) or (rebuild and (own or dashboard == "") and not prefs.get("haglo_card"))):
+            try:
+                slug = (await supervisor_get(session, "/addons/self/info")).get("slug")
+                if slug:
+                    config = add_haglo_card(config, slug, st.get("included_until"))
+                    write_prefs({**prefs, "haglo_card": True})
+            except Exception:
+                pass
         backup = write_backup(before, f"vor: {wish}", dashboard)
         await ha.call("lovelace/config/save", url_path=path, config=config)
         if not own and rebuild:
