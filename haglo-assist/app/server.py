@@ -38,7 +38,7 @@ SKIP_DOMAINS = {
     "zone", "persistent_notification", "assist_satellite", "ai_task",
 }
 
-ADDON_VERSION = "0.20.2"
+ADDON_VERSION = "0.20.3"
 MAX_VERSIONS = 30                      # so viele Dashboard-Versionen bleiben lokal gespeichert
 BAR_ENTITY = "input_text.haglo_assist"           # Eingabeleiste im Dashboard
 BAR_STATUS = "input_text.haglo_assist_status"    # Rückmeldung darunter
@@ -240,8 +240,8 @@ async def welcome_setup(session, prefs: dict) -> None:
             order = ["lovelace", slug] + [k for k in panels if k not in ("lovelace", slug)]
             await ha.call("frontend/set_system_data", key="sidebar", value={"panelOrder": order, "hiddenPanels": []})
         core_data = ((await ha.call("frontend/get_system_data", key="core")) or {}).get("value") or {}
-        if core_data.get("default_panel") in (None, "lovelace") and "default_panel_before" not in prefs:
-            prefs["default_panel_before"] = core_data.get("default_panel") or "lovelace"
+        if core_data.get("default_panel") in (None, "", "home", "lovelace") and "default_panel_before" not in prefs:
+            prefs["default_panel_before"] = core_data.get("default_panel") or ""
             prefs["default_panel_since"] = int(time.time())
             write_prefs(prefs)
             await ha.call("frontend/set_system_data", key="core", value={**core_data, "default_panel": slug})
@@ -262,8 +262,10 @@ async def welcome_done(session) -> str:
         async with HAClient(session) as ha:
             core_data = ((await ha.call("frontend/get_system_data", key="core")) or {}).get("value") or {}
             if core_data.get("default_panel") == slug:      # nur zurückstellen, wenn es noch unsere Einstellung ist
-                await ha.call("frontend/set_system_data", key="core",
-                              value={**core_data, "default_panel": prefs["default_panel_before"]})
+                value = {k: v for k, v in core_data.items() if k != "default_panel"}
+                if prefs["default_panel_before"]:
+                    value["default_panel"] = prefs["default_panel_before"]
+                await ha.call("frontend/set_system_data", key="core", value=value)
             await ha.call("call_service", domain="persistent_notification", service="dismiss",
                           service_data={"notification_id": WELCOME_ID})
     except Exception as e:
@@ -273,6 +275,66 @@ async def welcome_done(session) -> str:
     prefs.pop("default_panel_since", None)
     write_prefs(prefs)
     return "ok"
+
+
+# Neue Home-Assistant-Versionen (ab 2026.2) öffnen auf frischen Geräten das fest eingebaute „Home“ (/home).
+# Das lässt sich nicht bearbeiten, und die alte Übersicht (/lovelace) gibt es dort nicht mehr als Startseite.
+# Dort baut Haglo Assist die Startseite deshalb als eigenes Dashboard und stellt es als Startseite ein –
+# sonst sähe der Kunde sein Ergebnis nie. „Rückgängig“ bis zum Ursprung stellt das wieder zurück.
+START_PATH, START_TITLE = "mein-zuhause", "Mein Zuhause"
+BUILTIN_START = (None, "", "home", "lovelace")
+
+
+async def start_path(ha: HAClient, create: bool = False) -> str | None:
+    """url_path der Startseite, an der Haglo Assist arbeitet. None ist die klassische Übersicht."""
+    listed = await ha.call("lovelace/dashboards/list")
+    if not any(d.get("url_path") == START_PATH for d in listed):
+        if ((await ha.call("get_panels")).get("lovelace") or {}).get("config"):
+            return None
+        if create:
+            await ha.call("lovelace/dashboards/create", url_path=START_PATH, title=START_TITLE, icon="mdi:home-heart",
+                          mode="storage", require_admin=False, show_in_sidebar=True)
+    return START_PATH
+
+
+async def show_start_page(session, ha: HAClient, path: str | None) -> bool:
+    """Macht die gebaute Seite zur Startseite, falls bisher das eingebaute „Home“ geöffnet wurde."""
+    if path is None:
+        return False                # klassische Übersicht: ist schon die Startseite
+    prefs = load_prefs()
+    core_data = ((await ha.call("frontend/get_system_data", key="core")) or {}).get("value") or {}
+    current = core_data.get("default_panel")
+    if "default_panel_before" in prefs:
+        # Willkommens-Phase: Haglo Assist ist noch Startseite – danach geht es auf die gebaute Seite
+        if prefs["default_panel_before"] in BUILTIN_START:
+            prefs["start_before"] = prefs["default_panel_before"] or ""
+            prefs["default_panel_before"] = path
+            write_prefs(prefs)
+        return False
+    if current not in BUILTIN_START:
+        return False
+    prefs["start_before"] = current or ""
+    write_prefs(prefs)
+    await ha.call("frontend/set_system_data", key="core", value={**core_data, "default_panel": path})
+    return True
+
+
+async def reset_start_page(ha: HAClient) -> None:
+    """Übersicht ist wieder die automatische von Home Assistant: Startseite zurück auf den Stand davor."""
+    prefs = load_prefs()
+    if "start_before" not in prefs:
+        return
+    before = prefs.pop("start_before")
+    if prefs.get("default_panel_before") == START_PATH:
+        prefs["default_panel_before"] = before
+    else:
+        core_data = ((await ha.call("frontend/get_system_data", key="core")) or {}).get("value") or {}
+        if core_data.get("default_panel") == START_PATH:    # nur zurückstellen, wenn es noch unsere Einstellung ist
+            value = {k: v for k, v in core_data.items() if k != "default_panel"}
+            if before:
+                value["default_panel"] = before
+            await ha.call("frontend/set_system_data", key="core", value=value)
+    write_prefs(prefs)
 
 
 async def read_hardware(session) -> dict:
@@ -805,15 +867,15 @@ async def list_dashboards(ha: HAClient) -> list[dict]:
     listed = list(await ha.call("lovelace/dashboards/list"))
     # Neuere Home-Assistant-Versionen führen die Startseite selbst als „lovelace“ in der Liste – nicht doppelt zeigen
     items = [{"url_path": "", "title": "Übersicht", "mode": "storage"}] \
-        + [d for d in listed if d.get("url_path") not in (DASHBOARD_PATH, "lovelace", "", None)]
+        + [d for d in listed if d.get("url_path") not in (DASHBOARD_PATH, START_PATH, "lovelace", "", None)]
     items.append(next((d for d in listed if d.get("url_path") == DASHBOARD_PATH),
                       {"url_path": DASHBOARD_PATH, "title": DASHBOARD_TITLE, "mode": "storage"}))
-    out, seen = [], {}
+    out, seen, start = [], {}, await start_path(ha)
     for d in items:
         path = d.get("url_path") or ""
         editable = d.get("mode", "storage") == "storage"
         try:
-            cfg = await current_config(ha, path or None) if editable else None
+            cfg = await current_config(ha, path or start) if editable else None
         except Exception:
             cfg = None
         own, auto = path == DASHBOARD_PATH, is_auto(cfg)
@@ -845,7 +907,7 @@ async def pick_dashboard(ha: HAClient, wish: str) -> tuple[str, str]:
     except Exception:
         listed = []
     names = [(d.get("url_path") or "", d.get("title") or "") for d in listed
-             if d.get("url_path") not in ("lovelace", "", None) and d.get("mode", "storage") == "storage"]
+             if d.get("url_path") not in ("lovelace", START_PATH, "", None) and d.get("mode", "storage") == "storage"]
     if not any(p == DASHBOARD_PATH for p, _ in names):
         names.append((DASHBOARD_PATH, DASHBOARD_TITLE))
     for path, title in sorted(names, key=lambda n: -len(n[1])):
@@ -1642,7 +1704,7 @@ async def build_dashboard(app, wish: str, refine: bool, dialog: list, can_ask: b
             dashboard, label = await pick_dashboard(ha, wish)
             refine = not REBUILD_WORDS.search(wish)
         own = dashboard == DASHBOARD_PATH
-        path = dashboard or None
+        path = dashboard or await start_path(ha)
         entities = [e for e in await collect_entities(ha) if e["id"] not in (BAR_ENTITY, BAR_STATUS)]
         if not entities:
             raise RuntimeError("Keine Geräte gefunden.")
@@ -1777,7 +1839,15 @@ async def build_dashboard(app, wish: str, refine: bool, dialog: list, can_ask: b
             except Exception:
                 pass
         backup = write_backup(before, f"vor: {wish}", dashboard)
+        start_switched = False
+        if dashboard == "":
+            path = await start_path(ha, create=True)
         await ha.call("lovelace/config/save", url_path=path, config=config)
+        if dashboard == "":
+            try:
+                start_switched = await show_start_page(session, ha, path)
+            except Exception as e:
+                print(f"Startseite umstellen fehlgeschlagen: {e}")
         if not own and rebuild:
             # Von Haglo Assist gebaut: darf künftig ohne Rückfrage weiterbearbeitet werden
             prefs = load_prefs()
@@ -1785,11 +1855,13 @@ async def build_dashboard(app, wish: str, refine: bool, dialog: list, can_ask: b
             write_prefs(prefs)
             ALLOWED_FILE.parent.mkdir(parents=True, exist_ok=True)
             ALLOWED_FILE.write_text(json.dumps(sorted(allowed_dashboards() | {dashboard})))
-    add_history("dashboard", wish, result.get("erklaerung", ""), url=f"/{dashboard or 'lovelace'}", target=label,
+    if start_switched:
+        result["erklaerung"] = (result.get("erklaerung", "") + " Home Assistant öffnet jetzt diese Seite als Startseite.").strip()
+    add_history("dashboard", wish, result.get("erklaerung", ""), url=f"/{path or 'lovelace'}", target=label,
                 undo={"type": "version", "id": backup} if backup else None)
     return {"erklaerung": result.get("erklaerung", ""), "config": config, "removed": sorted(set(removed)),
             "backup": backup, "usage": result.get("usage", {}), "status": result["status"],
-            "dashboard_url": f"/{dashboard or 'lovelace'}"}
+            "dashboard_url": f"/{path or 'lovelace'}", "start_switched": start_switched}
 
 
 # ---------------------------------------------------------------- HTTP-Routen
@@ -2269,21 +2341,26 @@ async def restore_version(app, path: Path, keep: bool, log: bool = True) -> None
     version = read_backup(path)
     dashboard = version["dashboard"]
     async with HAClient(app["session"]) as ha:
+        path = dashboard or await start_path(ha, create=not version.get("auto"))
         if keep:
-            write_backup(await current_config(ha, dashboard or None), "vor Wiederherstellung", dashboard)
+            write_backup(await current_config(ha, path), "vor Wiederherstellung", dashboard)
         if dashboard == DASHBOARD_PATH:
             await ensure_dashboard(ha)
         if version.get("auto"):
             # zurück zur automatisch erzeugten Ansicht von Home Assistant
             try:
-                await ha.call("lovelace/config/delete", url_path=dashboard or None)
+                await ha.call("lovelace/config/delete", url_path=path)
             except HAError as e:
                 if e.code != "config_not_found":
                     raise
+            if dashboard == "":
+                await reset_start_page(ha)
         else:
-            await ha.call("lovelace/config/save", url_path=dashboard or None, config=version["config"])
+            await ha.call("lovelace/config/save", url_path=path, config=version["config"])
+            if dashboard == "":
+                await show_start_page(app["session"], ha, path)
     if log:
-        add_history("restore", "", "Frühere Version wiederhergestellt", url=f"/{dashboard or 'lovelace'}")
+        add_history("restore", "", "Frühere Version wiederhergestellt", url=f"/{path or 'lovelace'}")
 
 
 @routes.post("/api/restore")

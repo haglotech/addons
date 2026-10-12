@@ -1,5 +1,11 @@
 # Änderungen
 
+## 0.20.3
+
+- Behoben: Auf neuen Home-Assistant-Versionen blieb die Startseite scheinbar unverändert, obwohl Haglo Assist sie
+  gebaut hatte. Home Assistant öffnete weiter sein eingebautes „Home“. Jetzt wird die gebaute Übersicht zur
+  Startseite; „Rückgängig“ stellt das wieder zurück
+
 ## 0.20.2
 
 - Auf Geräten von Haglo: neue Begrüßung, die auf einen Blick zeigt, dass Lite 12 Monate dabei ist
