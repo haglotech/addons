@@ -556,7 +556,19 @@ async def selftest(app) -> None:
             items = await list_dashboards(ha)
         return " ; ".join(f"{d['label']}[{'auto' if d['auto'] else str(d['pages']) + ' Seiten'}{'' if d['editable'] else ',yaml'}{'' if d['allowed'] else ',fragt'}]" for d in items)
 
-    if job.get("dashlist"):
+    async def http_test():
+        """Genau der Weg der Oberfläche: Wunsch an /api/generate, gemeldet werden Status und Art der Antwort."""
+        async with app["session"].post("http://127.0.0.1:8099/api/generate", json={"wish": job["http"], "dialog": []}) as x:
+            text = await x.text()
+        try:
+            data = json.loads(text)
+            return f"status={x.status} json keys={sorted(data)[:6]} error={str(data.get('error'))[:80]}"
+        except ValueError:
+            return f"status={x.status} KEIN JSON: {text[:300]!r}"
+
+    if job.get("http"):
+        await step("oberflaeche", http_test())
+    elif job.get("dashlist"):
         await step("auswahl", dash_list())
     elif job.get("undo"):
         await step("rueckgaengig-im-faden", undo_test())
