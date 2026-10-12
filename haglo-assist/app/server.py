@@ -38,7 +38,7 @@ SKIP_DOMAINS = {
     "zone", "persistent_notification", "assist_satellite", "ai_task",
 }
 
-ADDON_VERSION = "0.19.3"
+ADDON_VERSION = "0.19.4"
 MAX_VERSIONS = 30                      # so viele Dashboard-Versionen bleiben lokal gespeichert
 BAR_ENTITY = "input_text.haglo_assist"           # Eingabeleiste im Dashboard
 BAR_STATUS = "input_text.haglo_assist_status"    # Rückmeldung darunter
@@ -1304,11 +1304,46 @@ async def find_ha_device(session, mac: str, domain: str, tries: int = 15) -> lis
     return found
 
 
+async def address_hints(session, wish: str) -> list[str]:
+    """Nennt der Wunsch eine Adresse im Heimnetz, sieht die App selbst nach, welches Gerät das in
+    Home Assistant ist – damit die KI nicht danach fragen muss."""
+    hints = []
+    for raw in list(dict.fromkeys(re.findall(r"\b(?:\d{1,3}\.){3}\d{1,3}\b", wish)))[:2]:
+        try:
+            host = device_host(raw)
+        except RuntimeError:
+            continue
+        mac = ""
+        try:
+            st = await device_get(session, host, "cm?cmnd=Status%205")
+            mac = str(((st or {}).get("StatusNET") or {}).get("Mac", "")).lower()
+            if not mac:
+                sh = await device_get(session, host, "shelly")
+                mac = ":".join(re.findall("..", str((sh or {}).get("mac", "")).lower())) if (sh or {}).get("mac") else ""
+        except Exception:
+            pass
+        async with HAClient(session) as ha:
+            devices = await ha.call("config/device_registry/list") or []
+            dev = next((d for d in devices if re.search(rf"//{re.escape(host)}(?:[:/]|$)", str(d.get("configuration_url") or ""))), None)
+            if not dev and mac:
+                dev = next((d for d in devices if any(c[0] == "mac" and c[1].lower() == mac for c in d.get("connections") or [])), None)
+            if not dev:
+                hints.append(f"Unter {host} ist in Home Assistant noch kein Gerät eingerichtet"
+                             + (" (dort antwortet aber ein Gerät – es lässt sich verbinden)." if mac else "."))
+                continue
+            ents = [e["entity_id"] for e in await ha.call("config/entity_registry/list") or []
+                    if e.get("device_id") == dev["id"] and not e.get("disabled_by") and not e["entity_id"].startswith("device_tracker.")]
+        name = dev.get("name_by_user") or dev.get("name") or "ohne Namen"
+        hints.append(f"Unter {host} ist das Gerät „{name}“ mit den Entitäten: {', '.join(ents[:10]) or 'keine'}.")
+    return hints
+
+
 def recent_context() -> list[dict]:
-    """Die letzten Wechsel des laufenden Gesprächs (höchstens 3, nicht älter als 20 Minuten), damit die KI
-    Bezüge wie „es“ versteht. Enthält nur, was der Nutzer geschrieben und die App geantwortet hat."""
-    since = time.time() - 20 * 60
-    items = [h for h in load_history() if h.get("ts", 0) >= since and h.get("wish") and not h.get("undone")][-3:]
+    """Die jüngsten Wechsel des laufenden Gesprächs (höchstens 10, aus den letzten 3 Stunden), damit die KI
+    Bezüge wie „es“ versteht und weiß, worum es ging. Enthält nur, was der Nutzer geschrieben und die
+    App geantwortet hat."""
+    since = time.time() - 3 * 3600
+    items = [h for h in load_history() if h.get("ts", 0) >= since and h.get("wish")][-10:]
     return [{"wunsch": str(h["wish"])[:300], "antwort": re.sub(r"\[([^\]]+)\]\([^)]*\)", r"\1", str(h.get("text") or ""))[:600]} for h in items]
 
 
@@ -1461,7 +1496,8 @@ async def build_dashboard(app, wish: str, refine: bool, dialog: list, can_ask: b
             raw = await all_states(session)
             by_id = {x["entity_id"]: x for x in raw}
             extra = {"kinds": KINDS, "can_control": True, "can_add_device": True, "can_rename": True,
-                     "context": recent_context(), "automations": await own_objects(session, raw)}
+                     "context": recent_context(), "hints": await address_hints(session, wish),
+                     "automations": await own_objects(session, raw)}
         payload = {
             "wish": wish, "entities": entities,
             "previous": None if rebuild or locked else (strip_bar(before) if own else before),

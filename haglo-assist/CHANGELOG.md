@@ -1,5 +1,10 @@
 # Änderungen
 
+## 0.19.4
+
+- Nennst du eine Adresse im Heimnetz (z. B. 192.168.1.50), sieht Haglo Assist selbst nach, welches
+  Gerät das ist, statt nachzufragen
+
 ## 0.19.3
 
 - Oben rechts steht jetzt „Feedback“ statt „Beratung buchen“: Schreib uns direkt aus der App
