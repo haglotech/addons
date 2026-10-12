@@ -293,8 +293,8 @@
     .tl { gap: 8px; }
     .minilogo { width: 64px; }
     .pill { font-size: 12px; padding: 5px 10px; }
-    #booking { padding: 6px 8px; }
-    #booking > span { display: none; }
+    #feedback { padding: 6px 8px; }
+    #feedback > span { display: none; }
     .devbar { order: 5; flex: 1 1 100%; min-width: 0; padding: 4px 8px; }
     .devbar select { flex: 1; min-width: 0; }
     main { padding: 6px 12px 4px; }
@@ -337,7 +337,7 @@
       <option value="lite">Lite inklusive (Haglo-Gerät)</option><option value="pro">Pro</option><option value="max">Max</option>
     </select>
     <button id="devReset">Limits zurücksetzen</button></div></div><a id="pill" class="pill hidden" role="button" tabindex="0"></a>
-    <a class="btn2" id="booking" href="https://haglotech.com/pages/termin" target="_blank" rel="noopener"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><rect x="3" y="5" width="18" height="16" rx="2"/><path d="M3 10h18M8 3v4M16 3v4"/></svg><span>Beratung<span class="long"> buchen</span></span></a></div>
+    <button class="btn2" id="feedback" type="button"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12a8 8 0 0 1-11.6 7.1L4 20l1-4.6A8 8 0 1 1 21 12z"/></svg><span>Feedback</span></button></div>
 
   <main id="main">
     <div class="brand">
@@ -414,6 +414,20 @@
     </div>
   </div>
 
+  <div class="sheet-bg hidden" id="fb">
+    <div class="sheet" style="position:relative">
+      <button class="close" id="fbClose" aria-label="Schließen">×</button>
+      <h3>Feedback geben</h3>
+      <p class="hint" style="margin-top:0">Was fehlt dir, was nervt, was sollte besser gehen? Deine Nachricht geht direkt an Haglo.</p>
+      <form id="fbForm" style="display:flex;flex-direction:column;gap:8px">
+        <textarea id="fbMsg" class="fld" maxlength="2000" rows="5" required placeholder="Dein Feedback …"></textarea>
+        <input id="fbMail" class="fld" type="email" maxlength="200" placeholder="E-Mail, falls wir antworten sollen (optional)">
+        <button class="primary">Senden</button>
+      </form>
+      <p class="hint hidden" id="fbDone">Danke! Dein Feedback ist angekommen.</p>
+    </div>
+  </div>
+
   <div class="sheet-bg hidden" id="plans">
     <div class="sheet wide">
       <button class="close" id="plansClose" aria-label="Schließen">×</button>
@@ -474,7 +488,6 @@ function setTrial(t) {
   trial = t;
   for (const id of ["terms", "termsLink"]) $(id).href = t.terms_url;
   for (const id of ["privacy", "privacyLink"]) $(id).href = t.privacy_url;
-  $("booking").href = t.booking_url;
   const p = $("pill");
   p.classList.remove("hidden", "warn", "end", "cta");
   const days = `${t.days_left} ${t.days_left === 1 ? "Tag" : "Tage"}`;
@@ -935,6 +948,19 @@ $("planLink").addEventListener("click", openPlans);
 $("planLink").addEventListener("keydown", (e) => { if (e.key === "Enter") openPlans(); });
 $("consent").addEventListener("click", (e) => { if (e.target === $("consent")) $("consent").classList.add("hidden"); });
 $("plansClose").addEventListener("click", () => $("plans").classList.add("hidden"));
+// Feedback: geht als Nachricht an Haglo (mit Hub-ID, ohne Gesprächsverlauf)
+$("feedback").addEventListener("click", () => { $("fbDone").classList.add("hidden"); $("fbForm").classList.remove("hidden"); $("fb").classList.remove("hidden"); $("fbMsg").focus(); });
+$("fbClose").addEventListener("click", () => $("fb").classList.add("hidden"));
+$("fb").addEventListener("click", (e) => { if (e.target === $("fb")) $("fb").classList.add("hidden"); });
+$("fbForm").addEventListener("submit", async (e) => {
+  e.preventDefault();
+  const btn = $("fbForm").querySelector("button"); btn.disabled = true;
+  try {
+    await api("api/request", { kind: "feedback", item: "Feedback", message: $("fbMsg").value.trim(), contact: $("fbMail").value.trim() });
+    $("fbForm").reset(); $("fbForm").classList.add("hidden"); $("fbDone").classList.remove("hidden");
+  } catch (err) { alert("Das hat nicht geklappt: " + err.message); }
+  finally { btn.disabled = false; }
+});
 $("plans").addEventListener("click", (e) => {
   if (e.target === $("plans")) return $("plans").classList.add("hidden");
   const plan = e.target.closest("[data-plan]");

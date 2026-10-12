@@ -1,5 +1,9 @@
 # Änderungen
 
+## 0.19.3
+
+- Oben rechts steht jetzt „Feedback“ statt „Beratung buchen“: Schreib uns direkt aus der App
+
 ## 0.19.2
 
 - Haglo Assist merkt sich die letzten Nachrichten des laufenden Gesprächs: „Benenn es um“ bezieht sich
