@@ -284,6 +284,45 @@
     .sheet-bg { align-items: center; }
     .sheet { border-radius: 12px; padding: 28px; }
   }
+  /* Handy: nichts läuft seitlich aus dem Bild, Kopf und Fuß sind flach, das Gespräch bekommt den Platz */
+  html, body { overflow-x: hidden; max-width: 100%; }
+  @media (max-width: 600px) {
+    .top { padding: 8px 12px; min-height: 0; gap: 8px; flex-wrap: wrap; }
+    .tl { gap: 8px; }
+    .minilogo { width: 64px; }
+    .pill { font-size: 12px; padding: 5px 10px; }
+    #booking { padding: 6px 8px; }
+    #booking > span { display: none; }
+    .devbar { order: 5; flex: 1 1 100%; min-width: 0; padding: 4px 8px; }
+    .devbar select { flex: 1; min-width: 0; }
+    main { padding: 6px 12px 4px; }
+    .brand { margin-bottom: 14px; }
+    .logo { width: 150px; }
+    .sub { font-size: 12px; margin-top: 7px; }
+    .tag { font-size: 14px; margin-top: 10px; }
+    .owner { font-size: 12.5px; margin-bottom: 8px; }
+    .chips { gap: 6px; margin-bottom: 8px; }
+    .chip { font-size: 13px; padding: 6px 11px 6px 9px; gap: 5px; }
+    .composer { padding: 4px 12px 0; }
+    .search { padding: 4px 4px 4px 16px; }
+    .search input { font-size: 16px; padding: 8px 0; }
+    .send { width: 38px; height: 38px; }
+    .crow { padding-top: 6px; }
+    .tools { gap: 5px; flex-wrap: nowrap; }
+    .tool { font-size: 12px; padding: 4px 9px; gap: 4px; }
+    .tool svg { width: 13px; height: 13px; }
+    footer { font-size: 10.5px; padding: 6px 12px 8px; }
+    footer #meta, footer #meta + .fsep { display: none; }
+    body.has-thread footer { display: none; }
+    body.has-thread .composer { padding-bottom: 8px; }
+    .thread { gap: 8px; }
+    .bub { font-size: 14.5px; padding: 10px 12px; max-width: 100%; border-radius: 16px; }
+    .msg.user .bub { padding: 8px 12px; max-width: 86%; }
+    .bub h2 { font-size: 15px; }
+    .opt { padding: 9px 12px; font-size: 14.5px; }
+    .mdx table { font-size: 13px; }
+    .mdx th, .mdx td { padding: 4px 7px; }
+  }
   @media (max-width: 520px) { .pill .long { display: none; } }
   @media (max-width: 380px) { .btn2 .long { display: none; } }
 </style>
@@ -665,6 +704,7 @@ async function init() {
       $("autosLink").classList.remove("hidden");
     }
     $("wish").value = mem.get("draft") || "";
+    if (innerWidth < 520) $("wish").placeholder = "Was brauchst du?";   // der lange Text passt am Handy nicht
     await loadHistory();
     if (s.busy) waitForJob(s.busy);
     else if (trial && !trial.accepted && (s.haglo_marker || s.preinstalled)) showWelcome(s.haglo_marker);
