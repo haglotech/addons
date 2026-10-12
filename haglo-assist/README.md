@@ -19,7 +19,7 @@ deine Geräte. Auf Deutsch, ohne YAML.
 
 Zum Erstellen eines Dashboards werden Gerätenamen, Räume, Gerätetypen und Einheiten
 an den Haglo-Server und von dort an unseren KI-Dienstleister Anthropic übertragen.
-Messwerte, Zustände und Verlaufsdaten werden nicht übertragen. Um den Kauf bei Haglo zu
+Messwerte, Zustände und Verlaufsdaten werden nur übertragen, wenn du einer einzelnen Frage dazu zustimmst. Um den Kauf bei Haglo zu
 bestätigen, werden Seriennummer und Netzwerkadresse des Geräts an Haglo gesendet – erst nach deiner
 Zustimmung. Vorher werden keine Daten aus deinem Zuhause übertragen; die App meldet sich nur mit einer
 zufälligen Kennung beim Haglo-Server an.
@@ -29,8 +29,7 @@ Aktuelle Werte einzelner Geräte (für Fragen wie „Wie warm ist es im Bad?“)
 Dashboards und eigene Automationen werden nur übertragen, wenn du dem in der App ausdrücklich zustimmst.
 
 [Datenschutz](https://haglotech.com/pages/haglo-assist-datenschutz) ·
-[Nutzungsbedingungen](https://haglotech.com/pages/haglo-assist-bedingungen) ·
-[Beratung buchen](https://haglotech.com/pages/termin)
+[Nutzungsbedingungen](https://haglotech.com/pages/haglo-assist-bedingungen)
 
 Lizenz: Apache-2.0. Mitgelieferte Open-Source-Bausteine und ihre Lizenzen:
 [THIRD-PARTY-LICENSES.txt](app/static/vendor/THIRD-PARTY-LICENSES.txt), Schrift Work Sans: [OFL](app/static/fonts/OFL-LICENSE.txt).

@@ -404,7 +404,7 @@
         <li id="consentBought">Bei Haglo gekauft? Dann ist Lite bei deinem Gerät mindestens 12 Monate ohne Aufpreis inklusive</li>
         <li>Dein Dashboard bleibt erhalten, frühere Versionen liegen nur lokal auf deinem Gerät</li>
         <li>Übertragen werden nur dein Wunsch sowie Namen, Räume und Typen deiner Geräte – an den Haglo-Server und unseren KI-Dienstleister Anthropic (USA)</li>
-        <li>Messwerte, Verläufe und Zustände verlassen dein Gerät nicht</li>
+        <li>Messwerte, Zustände und Verlaufsdaten verlassen dein Gerät nur, wenn du einer einzelnen Frage dazu zustimmst</li>
         <li>Nach deiner Zustimmung senden wir Seriennummer und Netzwerkadresse des Geräts an Haglo, um den Kauf zu bestätigen</li>
       </ul>
       <label><input type="checkbox" id="agree">
@@ -833,7 +833,10 @@ $("accept").addEventListener("click", async () => {
 });
 
 const steps = ["Ich überlege …", "Ich überlege, was am besten passt …", "Ich arbeite daran …", "Fast fertig …"];
+// granted: wozu der Nutzer für den laufenden Wunsch zugestimmt hat (Zustände, Systemmeldungen, Verlauf)
+let granted = {};
 async function generate(wish, label, keepDialog, allowStates) {
+  granted = allowStates ? { ...granted, ...(allowStates === true ? { states: true } : allowStates) } : (keepDialog ? granted : {});
   if (!keepDialog) dialog = [];
   asking = null; mem.set("question", null); mem.set("automations", null);
   busy = true; setInputs(false);
@@ -843,12 +846,13 @@ async function generate(wish, label, keepDialog, allowStates) {
   let i = 0; typing(steps[0]);
   const t = setInterval(() => { i = Math.min(i + 1, steps.length - 1); if ($("loadText")) $("loadText").textContent = steps[i]; }, 7000);
   try {
-    const r = await api("api/generate", { wish, dialog, allow_states: !!allowStates, allow_diagnose: !!allowStates });
+    const r = await api("api/generate", { wish, dialog, allow_states: !!granted.states, allow_diagnose: !!granted.diagnose, allow_history: !!granted.history });
     if (r.question) { showQuestion(wish, label, r.question); return; }
     dialog = []; mem.set("draft", null);
     if (r.objects) { showAutomations(wish, r.erklaerung, r.objects); return; }
     if (r.need_consent) { showStateConsent(wish, label, r.need_consent); return; }
     if (r.need_diagnose_consent) { showDiagnoseConsent(wish, label); return; }
+    if (r.need_history_consent) { showHistoryConsent(wish, label, r.need_history_consent); return; }
     if (r.need_dashboard_consent) { showDashboardConsent(wish, label, r.need_dashboard_consent); return; }
     if (r.confirm_actions) { showConfirmActions(wish, r.erklaerung, r.confirm_actions); return; }
     if (r.confirm_device) { showConfirmDevice(wish, r.confirm_device); return; }
@@ -856,8 +860,7 @@ async function generate(wish, label, keepDialog, allowStates) {
   } catch (e) {
     if (e.code === "consent_required") { dismiss(); pending = [wish, label]; $("consent").classList.remove("hidden"); }
     else if (e.code === "trial_expired") { /* die Limit-Karte steht schon da */ }
-    else showResult(`<p class="err">Das hat nicht geklappt: ${esc(e.message)}</p>
-      <div class="actions"><a class="btn2" href="${trial ? trial.booking_url : "#"}" target="_blank" rel="noopener">Lieber persönlich? Beratung buchen</a></div>`);
+    else showResult(`<p class="err">Das hat nicht geklappt: ${esc(e.message)}</p>`);
   } finally {
     clearInterval(t);
     if (cur && cur.querySelector(".typing")) dismiss();
@@ -876,14 +879,12 @@ function showWelcome(sure) {
     <h2>Danke für deinen Kauf bei Haglo</h2>
     <p style="color:var(--text)">Zu deinem Gerät gehört <b>Haglo Assist Lite – mindestens 12 Monate ohne Aufpreis</b>. Kein Abo, keine Zahlungsdaten, nichts läuft automatisch weiter.</p>
     ${examples}
-    <div class="actions"><button class="primary" id="welcomeGo">Lite aktivieren</button>
-      <a class="btn2" href="https://haglotech.com/pages/termin" target="_blank" rel="noopener">Lieber persönlich? Beratung buchen</a></div>
+    <div class="actions"><button class="primary" id="welcomeGo">Lite aktivieren</button></div>
     <p class="hint">Sobald du Geräte hinzugefügt hast, sag einfach in einem Satz, was du brauchst.</p>`
   : `<h2>Willkommen bei Haglo Assist</h2>
     <p style="color:var(--text)">Bei Haglo gekauft? Dann gehört <b>Lite für mindestens 12 Monate ohne Aufpreis</b> zu deinem Gerät. Das bestätigen wir, sobald du loslegst.</p>
     ${examples}
-    <div class="actions"><button class="primary" id="welcomeGo">Loslegen</button>
-      <a class="btn2" href="https://haglotech.com/pages/termin" target="_blank" rel="noopener">Lieber persönlich? Beratung buchen</a></div>`);
+    <div class="actions"><button class="primary" id="welcomeGo">Loslegen</button></div>`);
   $("welcomeGo").onclick = () => $("consent").classList.remove("hidden");
 }
 
@@ -934,8 +935,7 @@ function showExpired() {
     <h2>Limit erreicht</h2>
     <p>Dein Dashboard bleibt erhalten. ${weekly ? "Dein Wochenlimit ist aufgebraucht" : `Dein ${trial.window_hours || 5}-Stunden-Limit ist aufgebraucht`} –
       weiter geht es ${resetText(trial.reset_at)}.${top ? "" : " Mit einem größeren Plan kannst du sofort weitermachen."}</p>
-    <div class="actions">${top ? "" : '<button class="primary" data-plans>Pläne ansehen</button>'}
-    <a class="btn2" href="${trial.booking_url}" target="_blank" rel="noopener">Beratung buchen</a></div>`);
+    <div class="actions">${top ? "" : '<button class="primary" data-plans>Pläne ansehen</button>'}</div>`);
 }
 
 // ---------------------------------------------------------------- Plan & Abo
@@ -1173,6 +1173,20 @@ function showDashboardConsent(wish, label, d) {
 }
 
 // Aktuelle Zustände verlassen das Gerät nur mit Zustimmung
+// Verlaufsdaten verlassen das Gerät nur, wenn der Nutzer genau dieser Anfrage zustimmt – jedes Mal neu
+function showHistoryConsent(wish, label, h) {
+  const d = (s) => (s || "").split("-").reverse().join(".");
+  showResult(`<div class="ask-q"><p class="step">Deine Zustimmung ist nötig</p><h2>Verlaufsdaten übertragen?</h2>
+    <p style="color:var(--text)">Um das zu beantworten, braucht Haglo Assist die gespeicherten Werte von
+      <b>${esc((h.names || []).join(", ") || "den betroffenen Geräten")}</b> vom ${esc(d(h.von))} bis ${esc(d(h.bis))}.
+      Sie gehen als Tages- oder Monatswerte an den Haglo-Server und unseren KI-Dienstleister Anthropic (USA).</p>
+    <div class="actions" style="justify-content:flex-start"><button class="primary" id="hiYes">Für diese Frage erlauben</button>
+      <button class="btn2" id="hiNo">Abbrechen</button></div>
+    <p class="hint">Verlaufsdaten werden nie ohne diese Nachfrage übertragen.</p></div>`);
+  $("hiNo").onclick = () => dismiss();
+  $("hiYes").onclick = () => generate(wish, label, false, { history: true });
+}
+
 // Systemmeldungen (Reparaturen, Updates, gestoppte Apps) verlassen das Gerät nur mit Zustimmung
 function showDiagnoseConsent(wish, label) {
   showResult(`<div class="ask-q"><p class="step">Deine Zustimmung ist nötig</p><h2>Systemmeldungen übertragen?</h2>
@@ -1181,15 +1195,15 @@ function showDiagnoseConsent(wish, label) {
     <div class="actions" style="justify-content:flex-start"><button class="primary" id="dgOnce">Einmal erlauben</button>
       <button class="btn2" id="dgAlways">Immer erlauben</button><button class="btn2" id="dgNo">Abbrechen</button></div></div>`);
   $("dgNo").onclick = () => dismiss();
-  $("dgOnce").onclick = () => generate(wish, label, false, true);
-  $("dgAlways").onclick = async () => { try { await api("api/prefs", { diagnose_allowed: true }); } catch (e) {} generate(wish, label, false, true); };
+  $("dgOnce").onclick = () => generate(wish, label, false, { diagnose: true });
+  $("dgAlways").onclick = async () => { try { await api("api/prefs", { diagnose_allowed: true }); } catch (e) {} generate(wish, label, false, { diagnose: true }); };
 }
 
 function showStateConsent(wish, label, items) {
   showResult(`<div class="ask-q"><p class="step">Deine Zustimmung ist nötig</p><h2>Aktuelle Werte übertragen?</h2>
     <p style="color:var(--text)">Um das zu beantworten, braucht Haglo Assist den aktuellen Zustand von:
       <b>${esc(items.map((i) => i.name).join(", ") || "den betroffenen Geräten")}</b>.
-      Diese Werte gehen an den Haglo-Server und unseren KI-Dienstleister Anthropic (USA). Verläufe werden nie übertragen.</p>
+      Diese Werte gehen an den Haglo-Server und unseren KI-Dienstleister Anthropic (USA). Verlaufsdaten gehen dabei nicht mit.</p>
     <div class="actions" style="justify-content:flex-start"><button class="primary" id="stOnce">Einmal erlauben</button>
       <button class="btn2" id="stAlways">Immer erlauben</button><button class="btn2" id="stNo">Abbrechen</button></div>
     <p class="hint">„Immer erlauben“ kannst du unter „Automationen“ wieder abschalten.</p></div>`);

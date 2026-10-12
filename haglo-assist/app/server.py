@@ -38,7 +38,7 @@ SKIP_DOMAINS = {
     "zone", "persistent_notification", "assist_satellite", "ai_task",
 }
 
-ADDON_VERSION = "0.20.0"
+ADDON_VERSION = "0.20.1"
 MAX_VERSIONS = 30                      # so viele Dashboard-Versionen bleiben lokal gespeichert
 BAR_ENTITY = "input_text.haglo_assist"           # Eingabeleiste im Dashboard
 BAR_STATUS = "input_text.haglo_assist_status"    # Rückmeldung darunter
@@ -1345,6 +1345,47 @@ async def system_messages(session) -> list[str]:
     return lines[:40]
 
 
+async def history_lines(session, req: dict, by_id: dict) -> list[str]:
+    """Langzeitdaten aus Home Assistant für die gewünschten Entitäten und den Zeitraum, je Entität eine
+    kurze Zeile. Verlässt das Gerät nur nach ausdrücklicher Zustimmung zu genau dieser Anfrage."""
+    from datetime import date, datetime, timedelta, timezone
+    start, end = date.fromisoformat(req["von"]), min(date.fromisoformat(req["bis"]), date.today()) + timedelta(days=1)
+    if end <= start:
+        start = end - timedelta(days=1)
+    days = (end - start).days
+    step = req.get("schritt") or "tag"
+    step = "monat" if days > 92 else "tag" if (step == "stunde" and days > 3) else step     # nie mehr als ~90 Werte
+    period = {"stunde": "hour", "tag": "day", "monat": "month"}[step]
+    ids = [e for e in req.get("entity_ids") or [] if e in by_id][:6]
+    async with HAClient(session) as ha:
+        data = await ha.call("recorder/statistics_during_period", statistic_ids=ids, period=period,
+                             start_time=datetime(start.year, start.month, start.day, tzinfo=timezone.utc).isoformat(),
+                             end_time=datetime(end.year, end.month, end.day, tzinfo=timezone.utc).isoformat(),
+                             types=["change", "mean", "min", "max"]) or {}
+    fmt = {"hour": "%d.%m. %Hh", "day": "%d.%m.", "month": "%Y-%m"}[period]
+    num = lambda v: f"{v:.2f}".rstrip("0").rstrip(".") if abs(v) < 100 else f"{v:.0f}"
+    lines = []
+    for e in ids:
+        a = by_id[e].get("attributes", {})
+        name, unit, rows = a.get("friendly_name", e), a.get("unit_of_measurement", ""), data.get(e) or []
+        if not rows:
+            lines.append(f"{e} „{name}“: dafür speichert Home Assistant keine Langzeitdaten.")
+            continue
+        when = lambda r: datetime.fromtimestamp(r["start"] / 1000).strftime(fmt)
+        if any(r.get("change") is not None for r in rows):
+            vals = [(when(r), r.get("change") or 0) for r in rows]
+            lines.append(f"{e} „{name}“ ({unit}, Summe je {step.capitalize()}, {req['von']} bis {req['bis']}): "
+                         + "; ".join(f"{w}: {num(v)}" for w, v in vals) + f" | Gesamt: {num(sum(v for _, v in vals))} {unit}")
+        else:
+            vals = [(when(r), r.get("mean")) for r in rows if r.get("mean") is not None]
+            lo = min((r["min"] for r in rows if r.get("min") is not None), default=None)
+            hi = max((r["max"] for r in rows if r.get("max") is not None), default=None)
+            lines.append(f"{e} „{name}“ ({unit}, Mittelwert je {step.capitalize()}, {req['von']} bis {req['bis']}): "
+                         + "; ".join(f"{w}: {num(v)}" for w, v in vals)
+                         + (f" | kleinster Wert: {num(lo)} {unit}, größter Wert: {num(hi)} {unit}" if lo is not None and hi is not None else ""))
+    return [l[:3000] for l in lines]
+
+
 TALK_GAP = 5 * 60
 
 
@@ -1562,7 +1603,7 @@ async def ensure_host_entry(session, domain: str, host: str) -> tuple[bool, str]
 # ---------------------------------------------------------------- Dashboard bauen
 async def build_dashboard(app, wish: str, refine: bool, dialog: list, can_ask: bool,
                           dashboard: str | None = DASHBOARD_PATH, can_automate: bool = False, allow_states: bool = False,
-                          allow_diagnose: bool = False) -> dict:
+                          allow_diagnose: bool = False, allow_history: bool = False) -> dict:
     """Holt das Dashboard vom Backend und speichert es. Gibt entweder eine Rückfrage
     ({"question": …}) oder das Ergebnis zurück. Wirft BackendError bei Backend-Fehlern.
 
@@ -1595,7 +1636,7 @@ async def build_dashboard(app, wish: str, refine: bool, dialog: list, can_ask: b
         if can_automate:
             raw = await all_states(session)
             by_id = {x["entity_id"]: x for x in raw}
-            extra = {"kinds": KINDS, "can_control": True, "can_add_device": True, "can_rename": True, "can_diagnose": True,
+            extra = {"kinds": KINDS, "can_control": True, "can_add_device": True, "can_rename": True, "can_diagnose": True, "can_history": True,
                      "context": recent_context(), "hints": await address_hints(session, wish),
                      "automations": await own_objects(session, raw)}
         payload = {
@@ -1629,9 +1670,17 @@ async def build_dashboard(app, wish: str, refine: bool, dialog: list, can_ask: b
             want = result.get("device") or {}
             info = await probe_device(session, str(want.get("adresse") or ""))
             return {"confirm_device": {**info, "wanted_name": str(want.get("name") or "")[:40]}, "status": result["status"]}
-        if locked and result.get("type") not in ("objects", "actions", "answer", "need_states", "need_diagnose", "question"):
+        if locked and result.get("type") not in ("objects", "actions", "answer", "need_states", "need_diagnose", "need_history", "question"):
             # Der Wunsch betrifft das Dashboard: Die Oberfläche fragt mit einer Karte nach der Freigabe.
             return {"need_dashboard_consent": {"id": dashboard, "label": label}, "status": result.get("status")}
+        if result.get("type") == "need_history" and can_automate:
+            # Verlaufsdaten gehen nur raus, wenn der Nutzer genau dieser Anfrage zugestimmt hat – jedes Mal neu.
+            req = result.get("request") or {}
+            if not allow_history:
+                names = [by_id[e].get("attributes", {}).get("friendly_name", e) for e in req.get("entity_ids") or [] if e in by_id]
+                return {"need_history_consent": {"names": names, "von": req.get("von"), "bis": req.get("bis")}, "status": result["status"]}
+            payload["history"] = await history_lines(session, req, by_id)
+            result = await backend(session, "POST", "/v1/generate", payload, timeout=300)
         if result.get("type") == "need_diagnose" and can_automate:
             # Systemmeldungen sind eine eigene Art von Daten: Sie gehen nur mit Zustimmung raus.
             if not (allow_diagnose or load_prefs().get("diagnose_allowed")):
@@ -1798,14 +1847,15 @@ async def generate(request):
     try:
         result = await build_dashboard(request.app, wish, refine, dialog, can_ask=True, dashboard=dashboard,
                                        can_automate=True, allow_states=bool(body.get("allow_states")),
-                                       allow_diagnose=bool(body.get("allow_diagnose")))
+                                       allow_diagnose=bool(body.get("allow_diagnose")),
+                                       allow_history=bool(body.get("allow_history")))
     except BackendError as e:
         return backend_failure(e)
     except Exception as e:
         return web.json_response({"ok": False, "error": str(e)}, status=500)
     finally:
         request.app["job"] = None
-    for key in ("objects", "confirm_actions", "confirm_device", "need_consent", "need_diagnose_consent", "need_dashboard_consent", "done", "answer"):
+    for key in ("objects", "confirm_actions", "confirm_device", "need_consent", "need_history_consent", "need_diagnose_consent", "need_dashboard_consent", "done", "answer"):
         if key in result:
             return web.json_response({"ok": True, key: result[key], "erklaerung": result.get("erklaerung", ""),
                                       "trial": trial_info(result["status"]) if result.get("status") else trial})

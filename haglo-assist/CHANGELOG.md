@@ -1,5 +1,11 @@
 # Änderungen
 
+## 0.20.1
+
+- Fragen über einen Zeitraum („Wie viel habe ich diesen Monat erzeugt?“): Haglo Assist liest dafür die
+  Langzeitdaten aus Home Assistant – jedes Mal erst nach deiner Zustimmung
+- „Beratung buchen“ ist vorerst aus der App entfernt
+
 ## 0.20.0
 
 - „Gibt es Probleme?“: Haglo Assist sieht nach offenen Reparaturhinweisen, Updates und gestoppten Apps
