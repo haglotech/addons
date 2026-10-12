@@ -38,7 +38,7 @@ SKIP_DOMAINS = {
     "zone", "persistent_notification", "assist_satellite", "ai_task",
 }
 
-ADDON_VERSION = "0.19.1"
+ADDON_VERSION = "0.19.2"
 MAX_VERSIONS = 30                      # so viele Dashboard-Versionen bleiben lokal gespeichert
 BAR_ENTITY = "input_text.haglo_assist"           # Eingabeleiste im Dashboard
 BAR_STATUS = "input_text.haglo_assist_status"    # Rückmeldung darunter
@@ -1286,17 +1286,47 @@ async def ensure_integration(session, domain: str, answers: dict | None = None) 
     return await flow_finish(session, first if isinstance(first, dict) else {}, answers)
 
 
-async def find_ha_device(session, mac: str, tries: int = 12) -> list[str]:
-    """Wartet, bis Home Assistant das Gerät kennt, und gibt dessen Entitäten zurück."""
+async def find_ha_device(session, mac: str, domain: str, tries: int = 15) -> list[str]:
+    """Wartet, bis die Integration das Gerät angelegt hat, und gibt dessen Entitäten zurück.
+    Dieselbe MAC-Adresse kann Home Assistant schon vom Router kennen (Anwesenheit im Netz) –
+    das zählt nicht: Gewartet wird auf Entitäten der Integration selbst."""
+    found: list[str] = []
     for _ in range(tries):
         async with HAClient(session) as ha:
             devices = await ha.call("config/device_registry/list")
             dev = next((d for d in devices or [] if any(c[0] == "mac" and c[1].lower() == mac for c in d.get("connections") or [])), None)
             if dev:
                 ents = await ha.call("config/entity_registry/list")
-                return sorted(e["entity_id"] for e in ents or [] if e.get("device_id") == dev["id"]) or ["(noch keine Entitäten)"]
+                found = sorted(e["entity_id"] for e in ents or [] if e.get("device_id") == dev["id"] and e.get("platform") == domain)
+                if found:
+                    return found
         await asyncio.sleep(4)
-    return []
+    return found
+
+
+def recent_context() -> list[dict]:
+    """Die letzten Wechsel des laufenden Gesprächs (höchstens 3, nicht älter als 20 Minuten), damit die KI
+    Bezüge wie „es“ versteht. Enthält nur, was der Nutzer geschrieben und die App geantwortet hat."""
+    since = time.time() - 20 * 60
+    items = [h for h in load_history() if h.get("ts", 0) >= since and h.get("wish") and not h.get("undone")][-3:]
+    return [{"wunsch": str(h["wish"])[:300], "antwort": re.sub(r"\[([^\]]+)\]\([^)]*\)", r"\1", str(h.get("text") or ""))[:600]} for h in items]
+
+
+async def rename_items(session, items: list) -> list[str]:
+    """Benennt Geräte oder einzelne Entitäten in Home Assistant um. Die entity_id bleibt gleich."""
+    done = []
+    async with HAClient(session) as ha:
+        registry = {e["entity_id"]: e for e in await ha.call("config/entity_registry/list") or []}
+        for it in items[:5]:
+            ent, name = registry.get(str(it.get("entity_id"))), str(it.get("name") or "").strip()[:60]
+            if not ent or not name:
+                raise RuntimeError("Dieses Gerät kenne ich nicht – nenn mir bitte seinen bisherigen Namen.")
+            if it.get("geraet") is not False and ent.get("device_id"):
+                await ha.call("config/device_registry/update", device_id=ent["device_id"], name_by_user=name)
+            else:
+                await ha.call("config/entity_registry/update", entity_id=ent["entity_id"], name=name)
+            done.append(name)
+    return done
 
 
 class NeedMqtt(Exception):
@@ -1318,7 +1348,7 @@ async def add_device(session, address: str, name: str, manual: dict | None = Non
         ok, why = await ensure_host_entry(session, "shelly", host)
         if not ok:
             raise RuntimeError(f"Home Assistant hat die Shelly nicht angenommen ({why}).")
-        ents = await find_ha_device(session, info["mac"], tries=6) if info["mac"] else []
+        ents = await find_ha_device(session, info["mac"], "shelly", tries=6) if info["mac"] else []
         return ("Die Shelly ist jetzt mit Home Assistant verbunden."
                 + (f" Neue Entitäten: {', '.join(f'`{e}`' for e in ents[:6])}." if ents else "")
                 + "\n\n[Geräte öffnen](/config/devices/dashboard)")
@@ -1378,7 +1408,7 @@ async def add_device(session, address: str, name: str, manual: dict | None = Non
     else:
         await device_get(session, host, "cm?cmnd=" + quote("Backlog " + "; ".join(cmds)))
     done.append(f"Gerät eingestellt: meldet sich jetzt bei {broker_ip}" + (f", Name „{name}“" if name else ""))
-    ents = await find_ha_device(session, info["mac"]) if info["mac"] else []
+    ents = await find_ha_device(session, info["mac"], "tasmota") if info["mac"] else []
     steps = "\n".join(f"- {d}" for d in done)
     if not ents:
         return (f"Ich habe alles eingestellt, aber Home Assistant zeigt das Gerät noch nicht an:\n\n{steps}\n\n"
@@ -1430,7 +1460,8 @@ async def build_dashboard(app, wish: str, refine: bool, dialog: list, can_ask: b
         if can_automate:
             raw = await all_states(session)
             by_id = {x["entity_id"]: x for x in raw}
-            extra = {"kinds": KINDS, "can_control": True, "can_add_device": True, "automations": await own_objects(session, raw)}
+            extra = {"kinds": KINDS, "can_control": True, "can_add_device": True, "can_rename": True,
+                     "context": recent_context(), "automations": await own_objects(session, raw)}
         payload = {
             "wish": wish, "entities": entities,
             "previous": None if rebuild or locked else (strip_bar(before) if own else before),
@@ -1439,6 +1470,10 @@ async def build_dashboard(app, wish: str, refine: bool, dialog: list, can_ask: b
             **extra,
         }
         result = await backend(session, "POST", "/v1/generate", payload, timeout=300)
+        if result.get("type") == "rename":
+            done = await rename_items(session, result.get("items") or [])
+            add_history("control", wish, result.get("erklaerung") or "Umbenannt: " + ", ".join(done))
+            return {"done": result.get("erklaerung", ""), "status": result["status"]}
         if result.get("type") == "add_device":
             # Die KI hat nur Adresse und Namen herausgelesen. Geprüft wird hier, im Heimnetz.
             want = result.get("device") or {}

@@ -1,5 +1,12 @@
 # Änderungen
 
+## 0.19.2
+
+- Haglo Assist merkt sich die letzten Nachrichten des laufenden Gesprächs: „Benenn es um“ bezieht sich
+  auf das Gerät von eben
+- Geräte und Entitäten lassen sich umbenennen
+- Gerät verbinden: wartet jetzt auf die echten Entitäten des Geräts, nicht auf den Netzwerk-Eintrag vom Router
+
 ## 0.19.1
 
 - Gerät verbinden: Läuft MQTT schon, kennt die App aber die Zugangsdaten nicht, fragt sie danach,
