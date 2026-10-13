@@ -677,13 +677,22 @@ async function renderDiagrams(root) {
   scrollDown();
 }
 
-// Ein Gespräch endet nach 5 Minuten ohne Nachricht. Danach zählt das Frühere nicht mehr mit – die Linie zeigt das.
-const TALK_GAP = 300, SEP = '<div class="sep"><span>Neues Gespräch</span></div>';
-let lastTs = 0;
-function threadHtml(items) {
-  lastTs = items.length ? items[items.length - 1].ts : 0;
-  return items.map((h, i) => (i && h.ts - items[i - 1].ts > TALK_GAP ? SEP : "") + historyMsg(h)).join("");
+// Ein Gespräch endet nach 5 Minuten, in denen du nichts tust (tippen, klicken, scrollen) – nicht schon
+// 5 Minuten nach der letzten Nachricht. Danach zählt das Frühere nicht mehr mit.
+const TALK_GAP = 300;
+let lastTs = 0, lastPing = 0;
+function threadHtml(items, active) {
+  lastTs = items.length ? Math.max(items[items.length - 1].ts, active || 0, lastTs) : 0;
+  return items.map(historyMsg).join("");
 }
+// Jede Regung hält das Gespräch am Leben; dem Gerät wird das höchstens alle 20 Sekunden gemeldet.
+function talkAlive() {
+  const now = Date.now() / 1000;
+  if (!lastTs || now - lastTs > TALK_GAP) return;      // kein Gespräch oder schon abgelaufen
+  lastTs = now;
+  if (now - lastPing > 20) { lastPing = now; api("api/talk/touch", {}).catch(() => {}); }
+}
+["pointerdown", "keydown", "wheel", "touchmove", "input"].forEach((ev) => document.addEventListener(ev, talkAlive, { passive: true, capture: true }));
 // Anzeige unter der Eingabe: wie lange sich Haglo Assist das Gespräch noch merkt. Ein Klick beginnt ein neues.
 function talkTick() {
   const left = lastTs ? Math.ceil(TALK_GAP - (Date.now() / 1000 - lastTs)) : 0, b = $("talk");
@@ -691,7 +700,7 @@ function talkTick() {
   if (!lastTs) return;
   if (busy) { $("talkText").textContent = "Gespräch läuft"; b.classList.remove("done"); return; }
   if (left > 0) {
-    $("talkText").innerHTML = `<span class="long">Gespräch merkt sich noch </span>${Math.floor(left / 60)}:${String(left % 60).padStart(2, "0")}`;
+    $("talkText").innerHTML = `<span class="long">Gespräch bleibt noch </span>${Math.floor(left / 60)}:${String(left % 60).padStart(2, "0")}`;
     b.classList.remove("done"); b.style.setProperty("--p", `${Math.round((left / TALK_GAP) * 100)}%`);
     return;
   }
@@ -738,9 +747,9 @@ function historyMsg(h) {
 
 // Baut den Faden aus dem Verlauf neu auf. Was gerade offen ist (cur), bleibt am Ende stehen.
 async function loadHistory(open) {
-  let items = [];
+  let items = [], active = 0;
   try {
-    const r = await api("api/history"); items = r.history;
+    const r = await api("api/history"); items = r.history; active = r.talk_active || 0;
     // Läuft noch ein Gespräch (letzte Nachricht jünger als 5 Minuten), steht es beim Öffnen wieder da
     if (!started && r.talk_since) { started = true; sessionStart = r.talk_since; }
   } catch (e) { return; }
@@ -750,7 +759,7 @@ async function loadHistory(open) {
   const wasOpen = open || ($("foldOld") && $("foldOld").open);
   $("result").innerHTML = (old.length ? `<details class="fold" id="foldOld"${wasOpen ? " open" : ""}><summary>Frühere Änderungen anzeigen (${old.length})</summary>
       <div class="thread">${old.map(historyMsg).join("")}</div>
-      <p class="clearrow"><a data-clear role="button" tabindex="0">Verlauf leeren</a></p></details>` : "") + threadHtml(fresh)
+      <p class="clearrow"><a data-clear role="button" tabindex="0">Verlauf leeren</a></p></details>` : "") + threadHtml(fresh, active)
     + (!items.length && !live ? `<p class="clearrow">Noch kein Verlauf. Hier steht, was Haglo Assist für dich gemacht hat.</p>` : "");
   if (live) $("result").append(live);
   hasThread(); scrollDown(); renderDiagrams($("result"));

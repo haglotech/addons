@@ -38,7 +38,7 @@ SKIP_DOMAINS = {
     "zone", "persistent_notification", "assist_satellite", "ai_task",
 }
 
-ADDON_VERSION = "0.20.4"
+ADDON_VERSION = "0.20.5"
 MAX_VERSIONS = 30                      # so viele Dashboard-Versionen bleiben lokal gespeichert
 BAR_ENTITY = "input_text.haglo_assist"           # Eingabeleiste im Dashboard
 BAR_STATUS = "input_text.haglo_assist_status"    # Rückmeldung darunter
@@ -1510,20 +1510,45 @@ async def address_hints(session, wish: str) -> list[str]:
     return hints
 
 
+def talk_active(prefs: dict, history: list[dict]) -> float:
+    """Wann der Nutzer zuletzt im Gespräch aktiv war: letzte Nachricht oder letzte Regung in der Oberfläche."""
+    return max(prefs.get("talk_active", 0), history[-1].get("ts", 0) if history else 0)
+
+
+def talk_touch() -> int:
+    """Der Nutzer ist gerade aktiv. War er länger als TALK_GAP weg, beginnt damit ein neues Gespräch.
+    Gibt zurück, seit wann er durchgehend aktiv ist."""
+    prefs, now = load_prefs(), int(time.time())
+    if now - talk_active(prefs, load_history()) > TALK_GAP:
+        prefs["talk_reset"] = now
+    prefs["talk_active"] = now
+    write_prefs(prefs)
+    return now
+
+
 def talk_items() -> list[dict]:
-    """Die Einträge des laufenden Gesprächs: höchstens TALK_GAP Sekunden Pause dazwischen und bis jetzt."""
-    items, last, reset = [], time.time(), load_prefs().get("talk_reset", 0)
-    for h in reversed(load_history()):
-        if last - h.get("ts", 0) > TALK_GAP or h.get("ts", 0) <= reset:
+    """Die Einträge des laufenden Gesprächs. Es endet nach TALK_GAP Sekunden ohne Regung des Nutzers –
+    nicht schon nach TALK_GAP Sekunden ohne Nachricht: Wer liest, tippt oder scrollt, bleibt im Gespräch."""
+    prefs, history, now = load_prefs(), load_history(), time.time()
+    reset = prefs.get("talk_reset", 0)
+    if now - talk_active(prefs, history) > TALK_GAP:
+        return []
+    items, last = [], now
+    for h in reversed(history):
+        ts = h.get("ts", 0)
+        if ts <= reset:
+            break
+        # Ohne gemerkte Regung (ältere Version) gilt wie früher: höchstens TALK_GAP zwischen zwei Nachrichten
+        if "talk_active" not in prefs and last - ts > TALK_GAP:
             break
         items.insert(0, h)
-        last = h.get("ts", 0)
+        last = ts
     return items
 
 
 def recent_context() -> list[dict]:
     """Die Wechsel des laufenden Gesprächs (höchstens 10), damit die KI Bezüge wie „es“ versteht.
-    Ein Gespräch endet nach TALK_GAP Sekunden ohne Nachricht – danach beginnt ein neues, und das
+    Ein Gespräch endet nach TALK_GAP Sekunden ohne Regung des Nutzers – danach beginnt ein neues, und das
     Frühere wird nicht mehr mitgeschickt. Die Oberfläche zeigt diese Grenze an."""
     items = [h for h in talk_items() if h.get("wish")][-10:]
     return [{"wunsch": str(h["wish"])[:300], "antwort": re.sub(r"\[([^\]]+)\]\([^)]*\)", r"\1", str(h.get("text") or ""))[:600]} for h in items]
@@ -1940,6 +1965,7 @@ async def generate(request):
     dialog = body.get("dialog") if isinstance(body.get("dialog"), list) else []
     if not wish:
         return web.json_response({"ok": False, "error": "Bitte einen Wunsch eingeben."}, status=400)
+    talk_touch()        # eine Nachricht ist auch eine Regung; nach langer Pause beginnt hier das neue Gespräch
     try:
         # Vorab prüfen, damit ohne Zustimmung oder Kontingent keine Gerätedaten gesendet werden.
         trial = trial_info((await backend(session, "GET", "/v1/status"))["status"])
@@ -1992,7 +2018,8 @@ async def history(_):
               "can_undo": can_undo(h, reg)} for h in load_history()]
     talk = talk_items()
     # talk_since: ab wann das laufende Gespräch geht – die Oberfläche zeigt es beim Öffnen wieder an
-    return web.json_response({"ok": True, "history": items, "talk_since": talk[0].get("ts") if talk else None})
+    return web.json_response({"ok": True, "history": items, "talk_since": talk[0].get("ts") if talk else None,
+                              "talk_active": talk_active(load_prefs(), load_history()) if talk else None})
 
 
 @routes.post("/api/history/undo")
@@ -2200,6 +2227,12 @@ async def restore_automation(request):
         return web.json_response({"ok": False, "error": f"Wiederherstellen fehlgeschlagen ({status})."}, status=500)
     add_history("restore", "", "Automation wiederhergestellt: " + str(cfg.get("alias", "")))
     return web.json_response({"ok": True})
+
+
+@routes.post("/api/talk/touch")
+async def talk_touch_route(_):
+    """Die Oberfläche meldet, dass der Nutzer gerade etwas tut (tippen, scrollen, klicken)."""
+    return web.json_response({"ok": True, "active": talk_touch()})
 
 
 @routes.post("/api/talk/reset")

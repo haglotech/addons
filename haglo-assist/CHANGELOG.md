@@ -1,5 +1,10 @@
 # Änderungen
 
+## 0.20.5
+
+- Ein Gespräch endet erst nach 5 Minuten, in denen du nichts tust – nicht mehr 5 Minuten nach der letzten
+  Nachricht. Wer liest, tippt oder scrollt, bleibt im Gespräch
+
 ## 0.20.4
 
 - Behoben: 0.20.3 startete nicht
