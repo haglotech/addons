@@ -27,6 +27,9 @@ Frühere Dashboard-Versionen bleiben nur lokal auf deinem Gerät.
 
 Aktuelle Werte einzelner Geräte (für Fragen wie „Wie warm ist es im Bad?“), der Aufbau eigener
 Dashboards und eigene Automationen werden nur übertragen, wenn du dem in der App ausdrücklich zustimmst.
+Soll Haglo Assist die Einstellungen einer Integration ändern, werden die Namen deiner Integrationen und die
+Einstellungen der betroffenen Integration übertragen – ebenfalls erst nach deiner Zustimmung, und ohne
+Passwörter, Schlüssel oder andere Zugangsdaten.
 
 [Datenschutz](https://haglotech.com/pages/haglo-assist-datenschutz) ·
 [Nutzungsbedingungen](https://haglotech.com/pages/haglo-assist-bedingungen)

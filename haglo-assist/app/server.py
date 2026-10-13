@@ -38,7 +38,7 @@ SKIP_DOMAINS = {
     "zone", "persistent_notification", "assist_satellite", "ai_task",
 }
 
-ADDON_VERSION = "0.20.5"
+ADDON_VERSION = "0.21.0"
 MAX_VERSIONS = 30                      # so viele Dashboard-Versionen bleiben lokal gespeichert
 BAR_ENTITY = "input_text.haglo_assist"           # Eingabeleiste im Dashboard
 BAR_STATUS = "input_text.haglo_assist_status"    # Rückmeldung darunter
@@ -1432,6 +1432,227 @@ async def system_messages(session) -> list[str]:
     return lines[:40]
 
 
+# ---------------------------------------------------------------- Einstellungen von Integrationen
+# Haglo Assist kann die Optionen einer Integration (Geräte & Dienste -> Konfigurieren) lesen und nach
+# Bestätigung ändern. Gelesen wird nur nach Zustimmung des Nutzers; Felder mit Zugangsdaten verlassen
+# das Gerät nie (nur ihr Name, als "geheim" markiert). Geht nur bei Integrationen, deren Optionen aus
+# einem einzigen Formular bestehen – alles andere wird ehrlich als "nicht änderbar" gemeldet.
+SECRET_FIELD = re.compile(r"pass|token|secret|key|credential|auth|api|pin$|code$", re.I)
+OPT = "/config/config_entries/options/flow"
+
+
+def option_field(f: dict) -> dict:
+    """Ein Feld des Options-Formulars in einer einfachen Form: art, aktueller Wert, erlaubte Werte."""
+    name, sel = str(f.get("name")), f.get("selector") if isinstance(f.get("selector"), dict) else {}
+    cur = (f.get("description") or {}).get("suggested_value", f.get("default"))
+    out = {"name": name, "art": "fest", "cur": cur, "required": bool(f.get("required")), "raw": f}
+    kind, cfg = (next(iter(sel.items())) if sel else (f.get("type"), {}))
+    cfg = cfg if isinstance(cfg, dict) else {}
+    if kind in ("boolean",):
+        out["art"] = "ja/nein"
+    elif kind in ("integer", "float", "number"):
+        out["art"] = "zahl"
+        out["int"] = kind == "integer" or (kind == "number" and float(cfg.get("step") or 1).is_integer() and cfg.get("step") != "any")
+        out["min"] = cfg.get("min", f.get("valueMin")); out["max"] = cfg.get("max", f.get("valueMax"))
+    elif kind in ("select", "multi_select"):
+        raw = cfg.get("options") if sel else f.get("options")
+        raw = list(raw.items()) if isinstance(raw, dict) else raw or []
+        opts = [(o.get("value"), o.get("label")) if isinstance(o, dict) else (o[0], o[1]) if isinstance(o, (list, tuple)) else (o, o) for o in raw]
+        out["art"], out["options"] = "auswahl", [str(v) for v, _ in opts]
+        out["labels"] = {str(v): str(l) for v, l in opts if l is not None and str(l) != str(v)}
+        out["multi"] = kind == "multi_select" or bool(cfg.get("multiple"))
+    elif kind in ("string", "text"):
+        out["art"] = "text"
+        if cfg.get("type") == "password":
+            out["secret"] = True
+    elif kind == "entity":
+        out["art"], out["multi"] = "entitaet", bool(cfg.get("multiple"))
+    elif kind == "expandable":
+        out["sub"] = [option_field(x) for x in f.get("schema") or [] if isinstance(x, dict) and x.get("name")]
+    if SECRET_FIELD.search(name):
+        out["secret"] = True
+    return out
+
+
+async def read_options(session, entry: dict) -> dict:
+    """Öffnet das Options-Formular einer Integration, liest die Felder und schließt es wieder (ändert nichts)."""
+    info = {"entry": entry["entry_id"], "domain": entry.get("domain"), "title": entry.get("title") or entry.get("domain"),
+            "fields": [], "why": ""}
+    if not entry.get("supports_options"):
+        info["why"] = "hat keine Einstellungen zum Ändern"
+        return info
+    status, step = await core(session, "POST", OPT, {"handler": entry["entry_id"], "show_advanced_options": False})
+    step = step if isinstance(step, dict) else {}
+    try:
+        if status != 200 or step.get("type") != "form":
+            info["why"] = ("hat mehrere Einstellungsbereiche (Menü)" if step.get("type") == "menu"
+                           else "lässt sich gerade nicht öffnen")
+            return info
+        info["step"] = step.get("step_id")
+        info["fields"] = [option_field(f) for f in step.get("data_schema") or [] if isinstance(f, dict) and f.get("name")]
+        if not info["fields"]:
+            info["why"] = "hat keine Einstellungen zum Ändern"
+    finally:
+        if step.get("flow_id"):
+            await core(session, "DELETE", f"{OPT}/{step['flow_id']}")
+    # Verständliche Feldnamen aus den Übersetzungen der Integration (Deutsch, sonst Englisch)
+    for lang in ("de", "en"):
+        if not info["fields"] or all(f.get("label") for f in info["fields"]):
+            break
+        try:
+            async with HAClient(session) as ha:
+                res = (await ha.call("frontend/get_translations", language=lang, category="options",
+                                     integration=[info["domain"]])).get("resources", {})
+            for f in info["fields"]:
+                f.setdefault("label", res.get(f"component.{info['domain']}.options.step.{info.get('step')}.data.{f['name']}"))
+                if not f["label"]:
+                    f.pop("label")
+        except Exception:
+            pass
+    return info
+
+
+def option_line(f: dict) -> str:
+    label = f" „{f['label']}“" if f.get("label") else ""
+    if f.get("secret"):
+        return f"  {f['name']}{label} (geheim – nicht änderbar)"
+    if f["art"] == "fest":
+        return f"  {f['name']}{label} (nicht änderbar)"
+    bits = [f["art"] + (", mehrere möglich" if f.get("multi") else "")]
+    if f["art"] == "zahl":
+        bits[0] = "ganze Zahl" if f.get("int") else "Zahl"
+        if f.get("min") is not None or f.get("max") is not None:
+            bits.append(f"von {f.get('min', '–')} bis {f.get('max', '–')}")
+    if f["art"] == "auswahl":
+        bits.append("erlaubt: " + ", ".join(f"{o} ({f['labels'][o]})" if o in f.get("labels", {}) else o for o in f["options"][:40]))
+    bits.append("aktuell: " + (json.dumps(f["cur"], ensure_ascii=False)[:160] if f["cur"] is not None else "leer"))
+    return f"  {f['name']}{label} ({'; '.join(bits)})"
+
+
+def squash(t: str) -> str:
+    return re.sub(r"[^a-z0-9äöüß]", "", str(t).lower())
+
+
+async def integration_lines(session, query: str) -> list[str]:
+    """Die Einstellungen der Integrationen, die zum genannten Namen passen – als Textblöcke für die KI."""
+    status, entries = await core(session, "GET", "/config/config_entries/entry")
+    entries = [e for e in entries if isinstance(e, dict) and e.get("entry_id")] if status == 200 and isinstance(entries, list) else []
+    q, words = squash(query), [squash(w) for w in re.split(r"[\W_]+", query) if len(squash(w)) > 3]
+    def score(e):
+        names = [squash(e.get("title")), squash(e.get("domain"))]
+        if q and any(q in n or (n and n in q) for n in names):
+            return 2
+        # ein Wort reicht („adaptive Beleuchtung“ findet adaptive_lighting); die KI wählt dann den passenden Eintrag
+        return 1 if any(w in n for n in names for w in words) else 0
+    hits = sorted((e for e in entries if score(e)), key=lambda e: (-score(e), not e.get("supports_options")))[:4]
+    out = []
+    for e in hits:
+        info = await read_options(session, e)
+        head = f"Eintrag {info['entry']} | Integration {info['domain']} | Name „{info['title']}“"
+        if info["why"]:
+            out.append(f"{head}: {info['why']} – nicht über Haglo Assist änderbar.")
+        else:
+            out.append(head + "\n" + "\n".join(option_line(f) for f in info["fields"][:60]))
+    if not out:
+        have = sorted({f"{e.get('domain')} („{e.get('title')}“)" for e in entries if e.get("supports_options")})[:50]
+        out.append(f"Keine Integration passt zu „{query}“. Integrationen mit Einstellungen: " + (", ".join(have) or "keine"))
+    return out
+
+
+def option_value(f: dict, v):
+    """Prüft einen neuen Wert gegen das Feld und bringt ihn in die richtige Form. Fehler als ValueError."""
+    name = f.get("label") or f["name"]
+    if f.get("secret") or f["art"] == "fest":
+        raise ValueError(f"„{name}“ lässt sich über Haglo Assist nicht ändern.")
+    if f["art"] == "ja/nein":
+        if isinstance(v, bool):
+            return v
+        if str(v).lower() in ("true", "ja", "an", "1", "false", "nein", "aus", "0"):
+            return str(v).lower() in ("true", "ja", "an", "1")
+        raise ValueError(f"„{name}“ braucht ja oder nein.")
+    if f["art"] == "zahl":
+        try:
+            n = float(str(v).replace(",", "."))
+        except ValueError:
+            raise ValueError(f"„{name}“ braucht eine Zahl.")
+        if (f.get("min") is not None and n < float(f["min"])) or (f.get("max") is not None and n > float(f["max"])):
+            raise ValueError(f"„{name}“ muss zwischen {f.get('min', '–')} und {f.get('max', '–')} liegen.")
+        return int(n) if f.get("int") or (n.is_integer() and isinstance(f.get("cur"), int) and not isinstance(f.get("cur"), bool)) else n
+    if f["art"] == "auswahl":
+        vals = [str(x) for x in (v if isinstance(v, list) else [v])]
+        if any(x not in f["options"] for x in vals) or (not f.get("multi") and len(vals) != 1):
+            raise ValueError(f"„{name}“ erlaubt nur: {', '.join(f['options'][:20])}.")
+        return vals if f.get("multi") else vals[0]
+    if f["art"] == "entitaet":
+        vals = [str(x) for x in (v if isinstance(v, list) else [v])]
+        if any(not re.fullmatch(r"[a-z0-9_]+\.[a-z0-9_]+", x) for x in vals):
+            raise ValueError(f"„{name}“ braucht ein Gerät aus der Liste.")
+        return vals if f.get("multi") else vals[0]
+    return str(v)[:500]
+
+
+def option_defaults(fields: list[dict]) -> dict:
+    """Alle Felder mit ihrem aktuellen Wert – das Formular will immer alles zurück, nicht nur die Änderung."""
+    out = {}
+    for f in fields:
+        if f.get("sub") is not None:
+            out[f["name"]] = option_defaults(f["sub"])
+        elif f["cur"] is not None:
+            out[f["name"]] = f["cur"]
+    return out
+
+
+async def integration_change(session, entry_id: str, values: dict) -> dict:
+    """Prüft eine vorgeschlagene Änderung vor Ort und beschreibt sie für die Bestätigung (ändert nichts)."""
+    status, entries = await core(session, "GET", "/config/config_entries/entry")
+    entry = next((e for e in entries if isinstance(e, dict) and e.get("entry_id") == entry_id), None) if isinstance(entries, list) else None
+    if not entry:
+        raise RuntimeError("Diese Integration habe ich nicht gefunden. Bitte versuche es noch einmal.")
+    info = await read_options(session, entry)
+    if info["why"]:
+        raise RuntimeError(f"„{info['title']}“ {info['why']} – das geht nur direkt in Home Assistant.")
+    by = {f["name"]: f for f in info["fields"]}
+    changes, clean = [], {}
+    for k, v in values.items():
+        if k not in by:
+            raise RuntimeError(f"Die Einstellung „{k}“ gibt es bei „{info['title']}“ nicht.")
+        try:
+            new = option_value(by[k], v)
+        except ValueError as e:
+            raise RuntimeError(str(e))
+        if new == by[k]["cur"]:
+            continue
+        clean[k] = new
+        show = lambda x, f=by[k]: ("ja" if x is True else "nein" if x is False else "leer" if x is None
+                                   else ", ".join(f.get("labels", {}).get(str(i), str(i)) for i in x) if isinstance(x, list)
+                                   else f.get("labels", {}).get(str(x), str(x)))
+        changes.append({"field": k, "label": by[k].get("label") or k.replace("_", " "), "old": show(by[k]["cur"]), "new": show(new)})
+    return {"entry": entry_id, "title": info["title"], "domain": info["domain"], "changes": changes, "values": clean,
+            "defaults": option_defaults(info["fields"])}
+
+
+async def integration_apply(session, entry_id: str, values: dict) -> dict:
+    """Speichert die Änderung über das Options-Formular von Home Assistant. Gibt die Beschreibung zurück."""
+    plan = await integration_change(session, entry_id, values)
+    if not plan["changes"]:
+        return plan
+    status, step = await core(session, "POST", OPT, {"handler": entry_id, "show_advanced_options": False})
+    step = step if isinstance(step, dict) else {}
+    if status != 200 or step.get("type") != "form" or not step.get("flow_id"):
+        raise RuntimeError("Die Einstellungen ließen sich nicht öffnen.")
+    status, res = await core(session, "POST", f"{OPT}/{step['flow_id']}", {**plan["defaults"], **plan["values"]})
+    res = res if isinstance(res, dict) else {}
+    if status == 200 and res.get("type") == "create_entry":
+        return plan
+    # nicht gespeichert: Formular wieder schließen, damit nichts offen bleibt
+    await core(session, "DELETE", f"{OPT}/{res.get('flow_id') or step['flow_id']}")
+    if res.get("type") == "form" and res.get("errors"):
+        raise RuntimeError("Home Assistant hat die Werte abgelehnt: " + ", ".join(f"{k}: {v}" for k, v in res["errors"].items()))
+    if res.get("type") in ("form", "menu"):
+        raise RuntimeError("Diese Integration fragt weitere Schritte ab. Das geht nur direkt in Home Assistant – es wurde nichts geändert.")
+    raise RuntimeError(f"Speichern fehlgeschlagen ({status}). Es wurde nichts geändert.")
+
+
 async def history_lines(session, req: dict, by_id: dict) -> list[str]:
     """Langzeitdaten aus Home Assistant für die gewünschten Entitäten und den Zeitraum, je Entität eine
     kurze Zeile. Verlässt das Gerät nur nach ausdrücklicher Zustimmung zu genau dieser Anfrage."""
@@ -1715,7 +1936,8 @@ async def ensure_host_entry(session, domain: str, host: str) -> tuple[bool, str]
 # ---------------------------------------------------------------- Dashboard bauen
 async def build_dashboard(app, wish: str, refine: bool, dialog: list, can_ask: bool,
                           dashboard: str | None = DASHBOARD_PATH, can_automate: bool = False, allow_states: bool = False,
-                          allow_diagnose: bool = False, allow_history: bool = False) -> dict:
+                          allow_diagnose: bool = False, allow_history: bool = False,
+                          allow_integrations: bool = False) -> dict:
     """Holt das Dashboard vom Backend und speichert es. Gibt entweder eine Rückfrage
     ({"question": …}) oder das Ergebnis zurück. Wirft BackendError bei Backend-Fehlern.
 
@@ -1748,7 +1970,7 @@ async def build_dashboard(app, wish: str, refine: bool, dialog: list, can_ask: b
         if can_automate:
             raw = await all_states(session)
             by_id = {x["entity_id"]: x for x in raw}
-            extra = {"kinds": KINDS, "can_control": True, "can_add_device": True, "can_rename": True, "can_diagnose": True, "can_history": True,
+            extra = {"kinds": KINDS, "can_control": True, "can_add_device": True, "can_rename": True, "can_diagnose": True, "can_history": True, "can_integrations": True,
                      "context": recent_context(), "hints": await address_hints(session, wish),
                      "automations": await own_objects(session, raw)}
         payload = {
@@ -1782,7 +2004,7 @@ async def build_dashboard(app, wish: str, refine: bool, dialog: list, can_ask: b
             want = result.get("device") or {}
             info = await probe_device(session, str(want.get("adresse") or ""))
             return {"confirm_device": {**info, "wanted_name": str(want.get("name") or "")[:40]}, "status": result["status"]}
-        if locked and result.get("type") not in ("objects", "actions", "answer", "need_states", "need_diagnose", "need_history", "question"):
+        if locked and result.get("type") not in ("objects", "actions", "answer", "need_states", "need_diagnose", "need_history", "question", "need_integrations", "integration_set"):
             # Der Wunsch betrifft das Dashboard: Die Oberfläche fragt mit einer Karte nach der Freigabe.
             return {"need_dashboard_consent": {"id": dashboard, "label": label}, "status": result.get("status")}
         if result.get("type") == "need_history" and can_automate:
@@ -1793,6 +2015,21 @@ async def build_dashboard(app, wish: str, refine: bool, dialog: list, can_ask: b
                 return {"need_history_consent": {"names": names, "von": req.get("von"), "bis": req.get("bis")}, "status": result["status"]}
             payload["history"] = await history_lines(session, req, by_id)
             result = await backend(session, "POST", "/v1/generate", payload, timeout=300)
+        if result.get("type") == "need_integrations" and can_automate:
+            # Namen und Einstellungen von Integrationen sind eine eigene Art von Daten: nur mit Zustimmung.
+            if not (allow_integrations or load_prefs().get("integrations_allowed")):
+                return {"need_integrations_consent": {"query": str(result.get("query") or "")}, "status": result["status"]}
+            payload["integrations"] = await integration_lines(session, str(result.get("query") or ""))
+            result = await backend(session, "POST", "/v1/generate", payload, timeout=300)
+        if result.get("type") == "integration_set":
+            change = result.get("change") or {}
+            plan = await integration_change(session, str(change.get("eintrag") or ""), change.get("werte") or {})
+            if not plan["changes"]:
+                text = f"„{plan['title']}“ ist schon so eingestellt."
+                add_history("answer", wish, text)
+                return {"answer": text, "status": result["status"]}
+            plan.pop("defaults")
+            return {"confirm_integration": plan, "erklaerung": result.get("erklaerung", ""), "status": result["status"]}
         if result.get("type") == "need_diagnose" and can_automate:
             # Systemmeldungen sind eine eigene Art von Daten: Sie gehen nur mit Zustimmung raus.
             if not (allow_diagnose or load_prefs().get("diagnose_allowed")):
@@ -1982,6 +2219,7 @@ async def generate(request):
         result = await build_dashboard(request.app, wish, refine, dialog, can_ask=True, dashboard=dashboard,
                                        can_automate=True, allow_states=bool(body.get("allow_states")),
                                        allow_diagnose=bool(body.get("allow_diagnose")),
+                                       allow_integrations=bool(body.get("allow_integrations")),
                                        allow_history=bool(body.get("allow_history")))
     except BackendError as e:
         return backend_failure(e)
@@ -1989,7 +2227,7 @@ async def generate(request):
         return web.json_response({"ok": False, "error": str(e)}, status=500)
     finally:
         request.app["job"] = None
-    for key in ("objects", "confirm_actions", "confirm_device", "need_consent", "need_history_consent", "need_diagnose_consent", "need_dashboard_consent", "done", "answer"):
+    for key in ("objects", "confirm_actions", "confirm_device", "need_consent", "need_history_consent", "need_diagnose_consent", "need_integrations_consent", "confirm_integration", "need_dashboard_consent", "done", "answer"):
         if key in result:
             return web.json_response({"ok": True, key: result[key], "erklaerung": result.get("erklaerung", ""),
                                       "trial": trial_info(result["status"]) if result.get("status") else trial})
@@ -2229,6 +2467,22 @@ async def restore_automation(request):
     return web.json_response({"ok": True})
 
 
+@routes.post("/api/integrations/apply")
+async def integrations_apply(request):
+    """Der Nutzer hat die angezeigte Änderung bestätigt: Einstellungen der Integration speichern."""
+    body = await request.json()
+    values = body.get("values") if isinstance(body.get("values"), dict) else {}
+    try:
+        plan = await integration_apply(request.app["session"], str(body.get("entry") or ""), values)
+    except Exception as e:
+        return web.json_response({"ok": False, "error": str(e)}, status=400)
+    url = f"/config/integrations/integration/{plan['domain']}"
+    add_history("control", str(body.get("wish") or ""), str(body.get("erklaerung") or "Einstellungen geändert."),
+                steps=[{"icon": "action", "title": f"{plan['title']}: {c['label']}", "sub": f"{c['old']} → {c['new']}", "url": url}
+                       for c in plan["changes"]])
+    return web.json_response({"ok": True})
+
+
 @routes.post("/api/talk/touch")
 async def talk_touch_route(_):
     """Die Oberfläche meldet, dass der Nutzer gerade etwas tut (tippen, scrollen, klicken)."""
@@ -2311,7 +2565,7 @@ async def prefs_route(request):
     if body.get("owner_hint_dismissed") is True:
         prefs["owner_hint_dismissed"] = True
     # Zustimmungen: Zustände für Fragen übertragen; eigene Automationen bearbeiten (und dafür übertragen)
-    for key in ("states_allowed", "foreign_automations", "diagnose_allowed"):
+    for key in ("states_allowed", "foreign_automations", "diagnose_allowed", "integrations_allowed"):
         if isinstance(body.get(key), bool):
             prefs[key] = body[key]
     if isinstance(body.get("dashboard"), str) and len(body["dashboard"]) <= 100:

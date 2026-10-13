@@ -1,5 +1,11 @@
 # Änderungen
 
+## 0.21.0
+
+- Neu: Haglo Assist kann die Einstellungen einer Integration ändern („Stell Adaptive Lighting so ein, dass …“).
+  Die Einstellungen werden erst nach deiner Zustimmung gelesen, Zugangsdaten nie übertragen, und gespeichert wird
+  erst, wenn du die angezeigte Änderung bestätigst. Geht bei Integrationen mit einem einfachen Einstellungs-Formular
+
 ## 0.20.5
 
 - Ein Gespräch endet erst nach 5 Minuten, in denen du nichts tust – nicht mehr 5 Minuten nach der letzten

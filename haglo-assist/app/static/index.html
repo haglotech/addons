@@ -867,12 +867,14 @@ async function generate(wish, label, keepDialog, allowStates) {
   let i = 0; typing(steps[0]);
   const t = setInterval(() => { i = Math.min(i + 1, steps.length - 1); if ($("loadText")) $("loadText").textContent = steps[i]; }, 7000);
   try {
-    const r = await api("api/generate", { wish, dialog, allow_states: !!granted.states, allow_diagnose: !!granted.diagnose, allow_history: !!granted.history });
+    const r = await api("api/generate", { wish, dialog, allow_states: !!granted.states, allow_diagnose: !!granted.diagnose, allow_history: !!granted.history, allow_integrations: !!granted.integrations });
     if (r.question) { showQuestion(wish, label, r.question); return; }
     dialog = []; mem.set("draft", null);
     if (r.objects) { showAutomations(wish, r.erklaerung, r.objects); return; }
     if (r.need_consent) { showStateConsent(wish, label, r.need_consent); return; }
     if (r.need_diagnose_consent) { showDiagnoseConsent(wish, label); return; }
+    if (r.need_integrations_consent) { showIntegrationsConsent(wish, label, r.need_integrations_consent.query); return; }
+    if (r.confirm_integration) { showConfirmIntegration(wish, r.erklaerung, r.confirm_integration); return; }
     if (r.need_history_consent) { showHistoryConsent(wish, label, r.need_history_consent); return; }
     if (r.need_dashboard_consent) { showDashboardConsent(wish, label, r.need_dashboard_consent); return; }
     if (r.confirm_actions) { showConfirmActions(wish, r.erklaerung, r.confirm_actions); return; }
@@ -1164,6 +1166,32 @@ function showMqttForm(wish, d, m) {
   });
 }
 
+function showIntegrationsConsent(wish, label, query) {
+  showResult(`<div class="ask-q"><p class="step">Deine Zustimmung ist nötig</p><h2>Einstellungen der Integration übertragen?</h2>
+    <p style="color:var(--text)">Um das zu ändern, braucht Haglo Assist die <b>Namen deiner Integrationen und die Einstellungen von „${esc(query)}“</b>.
+      Sie gehen an den Haglo-Server und unseren KI-Dienstleister Anthropic (USA). Passwörter, Schlüssel und andere Zugangsdaten werden nicht übertragen.
+      Geändert wird erst, wenn du die Änderung danach bestätigst.</p>
+    <div class="actions" style="justify-content:flex-start"><button class="primary" id="igOnce">Einmal erlauben</button>
+      <button class="btn2" id="igAlways">Immer erlauben</button><button class="btn2" id="igNo">Abbrechen</button></div></div>`);
+  $("igNo").onclick = () => dismiss();
+  $("igOnce").onclick = () => generate(wish, label, false, { integrations: true });
+  $("igAlways").onclick = async () => { try { await api("api/prefs", { integrations_allowed: true }); } catch (e) {} generate(wish, label, false, { integrations: true }); };
+}
+// Vorher/Nachher der Einstellungen einer Integration – gespeichert wird erst nach „Ja, ändern“
+function showConfirmIntegration(wish, erklaerung, plan) {
+  showResult(`<div class="ask-q"><p class="step">Bitte bestätigen</p><h2>„${esc(plan.title)}“ so einstellen?</h2>
+    ${erklaerung ? `<p style="color:var(--text)">${esc(erklaerung)}</p>` : ""}
+    <div class="steps">${plan.changes.map((c) => `<div class="stp action"><span class="ic">${STEP_ICON.action}</span>
+      <span class="tx"><b>${esc(c.label)}</b><small>${esc(c.old)} → ${esc(c.new)}</small></span></div>`).join("")}</div>
+    <div class="actions" style="justify-content:flex-start"><button class="primary" id="igYes">Ja, ändern</button>
+      <button class="btn2" id="igCancel">Abbrechen</button></div></div>`);
+  $("igCancel").onclick = () => dismiss();
+  $("igYes").onclick = async () => {
+    $("igYes").disabled = true;
+    try { await api("api/integrations/apply", { entry: plan.entry, values: plan.values, wish, erklaerung }); dismiss(); await loadHistory(); }
+    catch (e) { showResult(`<p class="err">Das hat nicht geklappt: ${esc(e.message)}</p>`); }
+  };
+}
 function showConfirmActions(wish, erklaerung, actions) {
   showResult(`<div class="ask-q"><p class="step">Sicherheitsabfrage</p><h2>Wirklich ausführen?</h2>
     <p style="color:var(--text)">${esc(erklaerung)}</p>
