@@ -38,7 +38,7 @@ SKIP_DOMAINS = {
     "zone", "persistent_notification", "assist_satellite", "ai_task",
 }
 
-ADDON_VERSION = "0.21.0"
+ADDON_VERSION = "0.22.0"
 MAX_VERSIONS = 30                      # so viele Dashboard-Versionen bleiben lokal gespeichert
 BAR_ENTITY = "input_text.haglo_assist"           # Eingabeleiste im Dashboard
 BAR_STATUS = "input_text.haglo_assist_status"    # Rückmeldung darunter
@@ -1432,6 +1432,109 @@ async def system_messages(session) -> list[str]:
     return lines[:40]
 
 
+# ---------------------------------------------------------------- Fehlerprotokolle und Reparaturen
+# Nach Zustimmung liest die App die aktuellen Fehler und Warnungen von Home Assistant (system_log),
+# die Integrationen, die nicht laufen, und die Systemmeldungen. Bevor etwas das Gerät verlässt, werden
+# Zugangsdaten geschwärzt. Reparieren kann die App nur wenige, harmlose Schritte – und erst nach Bestätigung.
+REDACT = [
+    # nur Werte hinter "Bearer " oder "passwort=" / "token: " – "Token expired" bleibt lesbar
+    (re.compile(r"(?i)(bearer\s+|(?:access_token|token|api[_-]?key|apikey|password|passwort|passwd|secret|pin)[\"']?\s*[:=]\s*[\"']?)([^\s'\",;&]+)"), r"\1[geschwärzt]"),
+    (re.compile(r"(?i)(://)[^/\s:@]+:[^/\s@]+@"), r"\1[Zugang]@"),
+    (re.compile(r"[\w.+-]+@[\w-]+\.[\w.-]+"), "[E-Mail]"),
+    (re.compile(r"\b(?=[A-Za-z0-9_\-]*\d)(?=[A-Za-z0-9_\-]*[A-Za-z])[A-Za-z0-9_\-]{28,}\b"), "[Schlüssel]"),
+    (re.compile(r"\b(?!(?:10|127)\.)(?!192\.168\.)(?!172\.(?:1[6-9]|2\d|3[01])\.)(?!169\.254\.)\d{1,3}(?:\.\d{1,3}){3}\b"), "[öffentliche IP]"),
+]
+
+
+def redact(text: str) -> str:
+    """Schwärzt Passwörter, Schlüssel, Zugangsdaten in Adressen, E-Mail-Adressen und öffentliche IP-Adressen."""
+    for pat, sub in REDACT:
+        text = pat.sub(sub, text)
+    return text
+
+
+async def log_lines(session) -> list[str]:
+    """Fehler und Warnungen, nicht laufende Integrationen und Systemmeldungen – geschwärzt, als kurze Zeilen."""
+    lines: list[str] = []
+    try:
+        status, entries = await core(session, "GET", "/config/config_entries/entry")
+        for e in entries if status == 200 and isinstance(entries, list) else []:
+            if e.get("disabled_by"):
+                lines.append(f"Integration ausgeschaltet: {e.get('domain')} „{e.get('title')}“ (Eintrag {e.get('entry_id')}, von {e.get('disabled_by')})")
+            elif e.get("state") not in ("loaded", None):
+                why = f": {e.get('reason')}" if e.get("reason") else ""
+                lines.append(f"Integration läuft nicht: {e.get('domain')} „{e.get('title')}“ (Eintrag {e.get('entry_id')}, Zustand {e.get('state')}{why})")
+    except Exception as e:
+        lines.append(f"Integrationen konnten nicht gelesen werden ({type(e).__name__}).")
+    try:
+        async with HAClient(session) as ha:
+            logs = await ha.call("system_log/list") or []
+        logs = [x for x in logs if x.get("level") in ("ERROR", "CRITICAL", "WARNING")]
+        # Fehler vor Warnungen, dann die neuesten zuerst
+        logs.sort(key=lambda x: (x.get("level") == "WARNING", -(x.get("timestamp") or 0)))
+        for x in logs[:30]:
+            when = time.strftime("%d.%m. %H:%M", time.localtime(x.get("timestamp") or 0))
+            msg = " | ".join(str(m) for m in (x.get("message") or [])[:2])
+            exc = str(x.get("exception") or "").strip().splitlines()
+            tail = f" | {exc[-1]}" if exc else ""
+            lines.append(f"[{x.get('level')}] {x.get('count', 1)}×, zuletzt {when}, {x.get('name')}: {msg}{tail}"[:600])
+    except Exception as e:
+        lines.append(f"Protokoll konnte nicht gelesen werden ({type(e).__name__}).")
+    lines += await system_messages(session)
+    return [redact(l) for l in lines][:60]
+
+
+async def entry_by_id(session, entry_id: str) -> dict | None:
+    status, entries = await core(session, "GET", "/config/config_entries/entry")
+    return next((e for e in entries if isinstance(e, dict) and e.get("entry_id") == entry_id), None) if isinstance(entries, list) else None
+
+
+async def repair_plan(session, steps: list[dict]) -> list[dict]:
+    """Prüft die vorgeschlagenen Schritte vor Ort und beschreibt sie für die Bestätigung (ändert nichts)."""
+    out = []
+    for st in steps[:5]:
+        art = st.get("art")
+        if art == "home_assistant_neu_starten":
+            out.append({"art": art, "title": "Home Assistant neu starten", "sub": "Die Konfiguration wird vorher geprüft. Dauert 1–3 Minuten."})
+            continue
+        e = await entry_by_id(session, str(st.get("eintrag") or ""))
+        if not e or art not in ("integration_neu_laden", "integration_einschalten"):
+            raise RuntimeError("Den Reparaturvorschlag konnte ich nicht zuordnen. Es wurde nichts geändert.")
+        name = f"{e.get('title') or e.get('domain')} ({e.get('domain')})"
+        out.append({"art": art, "eintrag": e["entry_id"], "domain": e.get("domain"),
+                    "title": ("Integration neu laden: " if art == "integration_neu_laden" else "Integration einschalten: ") + name,
+                    "sub": f"Zustand jetzt: {'ausgeschaltet' if e.get('disabled_by') else e.get('state')}"})
+    return out
+
+
+async def repair_apply(session, steps: list[dict]) -> list[dict]:
+    """Führt die bestätigten Schritte aus. Gibt je Schritt eine Zeile für den Verlauf zurück."""
+    done = []
+    for st in await repair_plan(session, steps):
+        if st["art"] == "integration_neu_laden":
+            status, res = await core(session, "POST", f"/config/config_entries/entry/{st['eintrag']}/reload")
+            ok = status == 200
+            sub = ("neu geladen" + (" – Home Assistant braucht danach einen Neustart" if isinstance(res, dict) and res.get("require_restart") else "")) if ok else f"fehlgeschlagen ({status})"
+        elif st["art"] == "integration_einschalten":
+            async with HAClient(session) as ha:
+                res = await ha.call("config_entries/disable", entry_id=st["eintrag"], disabled_by=None)
+            ok, sub = True, "eingeschaltet" + (" – Home Assistant braucht danach einen Neustart" if isinstance(res, dict) and res.get("require_restart") else "")
+        else:
+            status, res = await core(session, "POST", "/config/core/check_config")
+            if status != 200 or not isinstance(res, dict) or res.get("result") != "valid":
+                errors = redact(str((res or {}).get("errors") or "unbekannter Fehler"))[:300] if isinstance(res, dict) else ""
+                done.append({"icon": "action", "title": st["title"], "sub": f"nicht ausgeführt – die Konfiguration hat Fehler: {errors}",
+                             "url": "/config/logs"})
+                break
+            status, _ = await core(session, "POST", "/services/homeassistant/restart", {})
+            ok, sub = status in (200, 201, 502, 504), "Neustart läuft – in 1–3 Minuten ist alles wieder da"
+        done.append({"icon": "action", "title": st["title"], "sub": sub,
+                     "url": f"/config/integrations/integration/{st['domain']}" if st.get("domain") else None})
+        if not ok:
+            break
+    return done
+
+
 # ---------------------------------------------------------------- Einstellungen von Integrationen
 # Haglo Assist kann die Optionen einer Integration (Geräte & Dienste -> Konfigurieren) lesen und nach
 # Bestätigung ändern. Gelesen wird nur nach Zustimmung des Nutzers; Felder mit Zugangsdaten verlassen
@@ -1937,7 +2040,7 @@ async def ensure_host_entry(session, domain: str, host: str) -> tuple[bool, str]
 async def build_dashboard(app, wish: str, refine: bool, dialog: list, can_ask: bool,
                           dashboard: str | None = DASHBOARD_PATH, can_automate: bool = False, allow_states: bool = False,
                           allow_diagnose: bool = False, allow_history: bool = False,
-                          allow_integrations: bool = False) -> dict:
+                          allow_integrations: bool = False, allow_logs: bool = False) -> dict:
     """Holt das Dashboard vom Backend und speichert es. Gibt entweder eine Rückfrage
     ({"question": …}) oder das Ergebnis zurück. Wirft BackendError bei Backend-Fehlern.
 
@@ -1970,7 +2073,7 @@ async def build_dashboard(app, wish: str, refine: bool, dialog: list, can_ask: b
         if can_automate:
             raw = await all_states(session)
             by_id = {x["entity_id"]: x for x in raw}
-            extra = {"kinds": KINDS, "can_control": True, "can_add_device": True, "can_rename": True, "can_diagnose": True, "can_history": True, "can_integrations": True,
+            extra = {"kinds": KINDS, "can_control": True, "can_add_device": True, "can_rename": True, "can_diagnose": True, "can_history": True, "can_integrations": True, "can_logs": True,
                      "context": recent_context(), "hints": await address_hints(session, wish),
                      "automations": await own_objects(session, raw)}
         payload = {
@@ -2004,7 +2107,7 @@ async def build_dashboard(app, wish: str, refine: bool, dialog: list, can_ask: b
             want = result.get("device") or {}
             info = await probe_device(session, str(want.get("adresse") or ""))
             return {"confirm_device": {**info, "wanted_name": str(want.get("name") or "")[:40]}, "status": result["status"]}
-        if locked and result.get("type") not in ("objects", "actions", "answer", "need_states", "need_diagnose", "need_history", "question", "need_integrations", "integration_set"):
+        if locked and result.get("type") not in ("objects", "actions", "answer", "need_states", "need_diagnose", "need_history", "question", "need_integrations", "integration_set", "need_logs", "repair"):
             # Der Wunsch betrifft das Dashboard: Die Oberfläche fragt mit einer Karte nach der Freigabe.
             return {"need_dashboard_consent": {"id": dashboard, "label": label}, "status": result.get("status")}
         if result.get("type") == "need_history" and can_automate:
@@ -2015,6 +2118,17 @@ async def build_dashboard(app, wish: str, refine: bool, dialog: list, can_ask: b
                 return {"need_history_consent": {"names": names, "von": req.get("von"), "bis": req.get("bis")}, "status": result["status"]}
             payload["history"] = await history_lines(session, req, by_id)
             result = await backend(session, "POST", "/v1/generate", payload, timeout=300)
+        if result.get("type") == "need_logs" and can_automate:
+            # Fehlerprotokolle sind eine eigene Art von Daten: nur mit Zustimmung, und geschwärzt.
+            if not (allow_logs or load_prefs().get("logs_allowed")):
+                return {"need_logs_consent": True, "status": result["status"]}
+            payload["logs"] = await log_lines(session)
+            result = await backend(session, "POST", "/v1/generate", payload, timeout=300)
+        if result.get("type") == "repair":
+            plan = await repair_plan(session, result.get("steps") or [])
+            return {"confirm_repair": {"steps": [{"art": p["art"], **({"eintrag": p["eintrag"]} if p.get("eintrag") else {})} for p in plan],
+                                       "show": [{"title": p["title"], "sub": p["sub"]} for p in plan]},
+                    "erklaerung": result.get("erklaerung", ""), "status": result["status"]}
         if result.get("type") == "need_integrations" and can_automate:
             # Namen und Einstellungen von Integrationen sind eine eigene Art von Daten: nur mit Zustimmung.
             if not (allow_integrations or load_prefs().get("integrations_allowed")):
@@ -2220,6 +2334,7 @@ async def generate(request):
                                        can_automate=True, allow_states=bool(body.get("allow_states")),
                                        allow_diagnose=bool(body.get("allow_diagnose")),
                                        allow_integrations=bool(body.get("allow_integrations")),
+                                       allow_logs=bool(body.get("allow_logs")),
                                        allow_history=bool(body.get("allow_history")))
     except BackendError as e:
         return backend_failure(e)
@@ -2227,7 +2342,7 @@ async def generate(request):
         return web.json_response({"ok": False, "error": str(e)}, status=500)
     finally:
         request.app["job"] = None
-    for key in ("objects", "confirm_actions", "confirm_device", "need_consent", "need_history_consent", "need_diagnose_consent", "need_integrations_consent", "confirm_integration", "need_dashboard_consent", "done", "answer"):
+    for key in ("objects", "confirm_actions", "confirm_device", "need_consent", "need_history_consent", "need_diagnose_consent", "need_integrations_consent", "confirm_integration", "need_logs_consent", "confirm_repair", "need_dashboard_consent", "done", "answer"):
         if key in result:
             return web.json_response({"ok": True, key: result[key], "erklaerung": result.get("erklaerung", ""),
                                       "trial": trial_info(result["status"]) if result.get("status") else trial})
@@ -2467,6 +2582,19 @@ async def restore_automation(request):
     return web.json_response({"ok": True})
 
 
+@routes.post("/api/repair/apply")
+async def repair_apply_route(request):
+    """Der Nutzer hat die angezeigten Reparaturschritte bestätigt."""
+    body = await request.json()
+    steps = [x for x in body.get("steps") or [] if isinstance(x, dict)]
+    try:
+        done = await repair_apply(request.app["session"], steps)
+    except Exception as e:
+        return web.json_response({"ok": False, "error": str(e)}, status=400)
+    add_history("control", str(body.get("wish") or ""), str(body.get("erklaerung") or "Reparatur ausgeführt."), steps=done)
+    return web.json_response({"ok": True})
+
+
 @routes.post("/api/integrations/apply")
 async def integrations_apply(request):
     """Der Nutzer hat die angezeigte Änderung bestätigt: Einstellungen der Integration speichern."""
@@ -2565,7 +2693,7 @@ async def prefs_route(request):
     if body.get("owner_hint_dismissed") is True:
         prefs["owner_hint_dismissed"] = True
     # Zustimmungen: Zustände für Fragen übertragen; eigene Automationen bearbeiten (und dafür übertragen)
-    for key in ("states_allowed", "foreign_automations", "diagnose_allowed", "integrations_allowed"):
+    for key in ("states_allowed", "foreign_automations", "diagnose_allowed", "integrations_allowed", "logs_allowed"):
         if isinstance(body.get(key), bool):
             prefs[key] = body[key]
     if isinstance(body.get("dashboard"), str) and len(body["dashboard"]) <= 100:

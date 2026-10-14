@@ -30,6 +30,8 @@ Dashboards und eigene Automationen werden nur übertragen, wenn du dem in der Ap
 Soll Haglo Assist die Einstellungen einer Integration ändern, werden die Namen deiner Integrationen und die
 Einstellungen der betroffenen Integration übertragen – ebenfalls erst nach deiner Zustimmung, und ohne
 Passwörter, Schlüssel oder andere Zugangsdaten.
+Bei Fehlern kann Haglo Assist die Fehlerprotokolle von Home Assistant lesen – nur nach deiner Zustimmung; Passwörter,
+Schlüssel, E-Mail-Adressen und öffentliche IP-Adressen werden vorher geschwärzt.
 
 [Datenschutz](https://haglotech.com/pages/haglo-assist-datenschutz) ·
 [Nutzungsbedingungen](https://haglotech.com/pages/haglo-assist-bedingungen)

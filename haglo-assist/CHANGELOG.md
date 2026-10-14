@@ -1,5 +1,12 @@
 # Änderungen
 
+## 0.22.0
+
+- Neu: Haglo Assist liest bei Fehlern die Fehlerprotokolle von Home Assistant – erst nach deiner Zustimmung,
+  Passwörter, Schlüssel und E-Mail-Adressen werden vorher geschwärzt – und sagt, was zu tun ist
+- Neu: Einfache Reparaturen führt Haglo Assist nach Bestätigung selbst aus: Integration neu laden oder
+  einschalten, Home Assistant neu starten (mit vorheriger Prüfung der Konfiguration)
+
 ## 0.21.0
 
 - Neu: Haglo Assist kann die Einstellungen einer Integration ändern („Stell Adaptive Lighting so ein, dass …“).

@@ -867,12 +867,14 @@ async function generate(wish, label, keepDialog, allowStates) {
   let i = 0; typing(steps[0]);
   const t = setInterval(() => { i = Math.min(i + 1, steps.length - 1); if ($("loadText")) $("loadText").textContent = steps[i]; }, 7000);
   try {
-    const r = await api("api/generate", { wish, dialog, allow_states: !!granted.states, allow_diagnose: !!granted.diagnose, allow_history: !!granted.history, allow_integrations: !!granted.integrations });
+    const r = await api("api/generate", { wish, dialog, allow_states: !!granted.states, allow_diagnose: !!granted.diagnose, allow_history: !!granted.history, allow_integrations: !!granted.integrations, allow_logs: !!granted.logs });
     if (r.question) { showQuestion(wish, label, r.question); return; }
     dialog = []; mem.set("draft", null);
     if (r.objects) { showAutomations(wish, r.erklaerung, r.objects); return; }
     if (r.need_consent) { showStateConsent(wish, label, r.need_consent); return; }
     if (r.need_diagnose_consent) { showDiagnoseConsent(wish, label); return; }
+    if (r.need_logs_consent) { showLogsConsent(wish, label); return; }
+    if (r.confirm_repair) { showConfirmRepair(wish, r.erklaerung, r.confirm_repair); return; }
     if (r.need_integrations_consent) { showIntegrationsConsent(wish, label, r.need_integrations_consent.query); return; }
     if (r.confirm_integration) { showConfirmIntegration(wish, r.erklaerung, r.confirm_integration); return; }
     if (r.need_history_consent) { showHistoryConsent(wish, label, r.need_history_consent); return; }
@@ -1166,6 +1168,32 @@ function showMqttForm(wish, d, m) {
   });
 }
 
+function showLogsConsent(wish, label) {
+  showResult(`<div class="ask-q"><p class="step">Deine Zustimmung ist nötig</p><h2>Fehlerprotokolle übertragen?</h2>
+    <p style="color:var(--text)">Um den Fehler zu finden, braucht Haglo Assist die <b>aktuellen Fehler und Warnungen</b> aus dem Protokoll deines Home Assistant,
+      die Integrationen, die gerade nicht laufen, und die offenen Systemmeldungen. Sie gehen an den Haglo-Server und unseren KI-Dienstleister Anthropic (USA).
+      Passwörter, Schlüssel, E-Mail-Adressen und öffentliche IP-Adressen werden vorher geschwärzt. Repariert wird erst, wenn du die Schritte danach bestätigst.</p>
+    <div class="actions" style="justify-content:flex-start"><button class="primary" id="lgOnce">Einmal erlauben</button>
+      <button class="btn2" id="lgAlways">Immer erlauben</button><button class="btn2" id="lgNo">Abbrechen</button></div></div>`);
+  $("lgNo").onclick = () => dismiss();
+  $("lgOnce").onclick = () => generate(wish, label, false, { logs: true });
+  $("lgAlways").onclick = async () => { try { await api("api/prefs", { logs_allowed: true }); } catch (e) {} generate(wish, label, false, { logs: true }); };
+}
+// Reparaturschritte anzeigen – ausgeführt wird erst nach „Ja, reparieren“
+function showConfirmRepair(wish, erklaerung, plan) {
+  showResult(`<div class="ask-q"><p class="step">Bitte bestätigen</p><h2>So reparieren?</h2>
+    ${erklaerung ? `<p style="color:var(--text)">${esc(erklaerung)}</p>` : ""}
+    <div class="steps">${plan.show.map((c) => `<div class="stp action"><span class="ic">${STEP_ICON.action}</span>
+      <span class="tx"><b>${esc(c.title)}</b><small>${esc(c.sub || "")}</small></span></div>`).join("")}</div>
+    <div class="actions" style="justify-content:flex-start"><button class="primary" id="rpYes">Ja, reparieren</button>
+      <button class="btn2" id="rpNo">Abbrechen</button></div></div>`);
+  $("rpNo").onclick = () => dismiss();
+  $("rpYes").onclick = async () => {
+    $("rpYes").disabled = true;
+    try { await api("api/repair/apply", { steps: plan.steps, wish, erklaerung }); dismiss(); await loadHistory(); }
+    catch (e) { showResult(`<p class="err">Das hat nicht geklappt: ${esc(e.message)}</p>`); }
+  };
+}
 function showIntegrationsConsent(wish, label, query) {
   showResult(`<div class="ask-q"><p class="step">Deine Zustimmung ist nötig</p><h2>Einstellungen der Integration übertragen?</h2>
     <p style="color:var(--text)">Um das zu ändern, braucht Haglo Assist die <b>Namen deiner Integrationen und die Einstellungen von „${esc(query)}“</b>.
