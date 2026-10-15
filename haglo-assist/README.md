@@ -17,7 +17,7 @@ deine Geräte. Auf Deutsch, ohne YAML.
 - **Schalten und fragen:** „Mach im Wohnzimmer das Licht aus“ oder „Wie warm ist es im Bad?“
 - Free für alle. Bei Geräten von Haglo ist Lite mindestens 12 Monate inklusive.
 
-Zum Erstellen eines Dashboards werden Gerätenamen, Räume, Gerätetypen und Einheiten
+Zum Erstellen eines Dashboards werden Gerätenamen, Räume, Gerätetypen, Einheiten und die Integration je Gerät
 an den Haglo-Server und von dort an unseren KI-Dienstleister Anthropic übertragen.
 Messwerte, Zustände und Verlaufsdaten werden nur übertragen, wenn du einer einzelnen Frage dazu zustimmst. Um den Kauf bei Haglo zu
 bestätigen, werden Seriennummer und Netzwerkadresse des Geräts an Haglo gesendet – erst nach deiner

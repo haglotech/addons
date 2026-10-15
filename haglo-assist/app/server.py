@@ -38,7 +38,7 @@ SKIP_DOMAINS = {
     "zone", "persistent_notification", "assist_satellite", "ai_task",
 }
 
-ADDON_VERSION = "0.22.0"
+ADDON_VERSION = "0.22.1"
 MAX_VERSIONS = 30                      # so viele Dashboard-Versionen bleiben lokal gespeichert
 BAR_ENTITY = "input_text.haglo_assist"           # Eingabeleiste im Dashboard
 BAR_STATUS = "input_text.haglo_assist_status"    # Rückmeldung darunter
@@ -772,6 +772,8 @@ async def collect_entities(ha: HAClient) -> list[dict]:
             "area": area_names.get(area_id, ""),
             "device_class": attrs.get("device_class", ""),
             "unit": attrs.get("unit_of_measurement", ""),
+            # aus welcher Integration die Entität stammt – damit die KI "ist das doppelt?" beantworten kann
+            "integration": str(r.get("platform") or "")[:40],
         })
     out.sort(key=lambda e: (e["area"] == "", e["area"], e["id"]))
     return out[:MAX_ENTITIES]
@@ -2361,6 +2363,52 @@ async def generate(request):
         "usage": result["usage"],
         "trial": trial_info(result["status"]),
     })
+
+
+# Symbole für Knöpfe zu Integrationen und Apps. Der Browser lädt sie über die App, nicht von fremden
+# Servern: Integrationen holt die App einmal aus dem offiziellen Symbol-Verzeichnis von Home Assistant
+# (brands.home-assistant.io, wie Home Assistant selbst) und merkt sie sich, App-Symbole kommen vom Supervisor.
+ICON_DIR = Path("/data/icons")
+
+
+async def icon_response(data: bytes | None, ctype: str = "image/png"):
+    if not data:
+        return web.Response(status=404)
+    return web.Response(body=data, content_type=ctype, headers={"Cache-Control": "max-age=604800"})
+
+
+@routes.get("/api/icon/integration/{domain}")
+async def icon_integration(request):
+    domain = request.match_info["domain"]
+    if not re.fullmatch(r"[a-z0-9_]{2,64}", domain):
+        return web.Response(status=404)
+    f = ICON_DIR / f"i_{domain}.png"
+    if f.exists():
+        return await icon_response(f.read_bytes() or None)
+    data = None
+    try:
+        async with request.app["session"].get(f"https://brands.home-assistant.io/{domain}/icon.png",
+                                              timeout=aiohttp.ClientTimeout(total=8)) as r:
+            if r.status == 200 and r.content_type == "image/png":
+                data = (await r.read())[:300000]
+    except Exception:
+        return web.Response(status=404)
+    ICON_DIR.mkdir(parents=True, exist_ok=True)
+    f.write_bytes(data or b"")      # auch "gibt es nicht" merken, damit nicht jedes Mal gefragt wird
+    return await icon_response(data)
+
+
+@routes.get("/api/icon/app/{slug}")
+async def icon_app(request):
+    slug = request.match_info["slug"]
+    if not re.fullmatch(r"[a-z0-9_]{2,64}", slug):
+        return web.Response(status=404)
+    try:
+        async with request.app["session"].get(f"http://supervisor/addons/{slug}/icon", headers={"Authorization": f"Bearer {TOKEN}"},
+                                              timeout=aiohttp.ClientTimeout(total=8)) as r:
+            return await icon_response((await r.read())[:300000] if r.status == 200 else None)
+    except Exception:
+        return web.Response(status=404)
 
 
 @routes.get("/api/history")

@@ -1,5 +1,13 @@
 # Änderungen
 
+## 0.22.1
+
+- Haglo Assist weiß jetzt, aus welcher Integration ein Gerät stammt – und kann z. B. sagen, ob met.no doppelt eingerichtet ist
+- Knöpfe zu Integrationen und Apps zeigen deren Symbol
+- Behoben: Eine Rückfrage wie „Wieso nicht?“ wurde als Zustimmung verstanden und änderte die Startseite
+- Einstellungen einer Integration (z. B. Adaptive Lighting) werden dauerhaft gespeichert statt über einen Dienst,
+  der nur bis zum nächsten Neustart wirkt; genannte Lampen werden der Integration zugeordnet
+
 ## 0.22.0
 
 - Neu: Haglo Assist liest bei Fehlern die Fehlerprotokolle von Home Assistant – erst nach deiner Zustimmung,

@@ -112,6 +112,8 @@
   .mdx a.go { display: inline-block; margin: 2px 0; padding: 7px 14px; border: 1px solid var(--brand); border-radius: 20px;
               font-weight: 600; font-size: 14px; text-decoration: none; }
   .mdx a.go:hover { background: var(--brand); color: var(--bg); }
+  .mdx a.go.ico { display: inline-flex; align-items: center; gap: 8px; padding-left: 8px; }
+  .mdx a.go.ico img { width: 22px; height: 22px; border-radius: 6px; background: #fff; padding: 2px; object-fit: contain; }
   .mdx .tw { overflow-x: auto; margin: 0 0 8px; }
   .mdx table { border-collapse: collapse; font-size: 14px; }
   .mdx th, .mdx td { border: 1px solid var(--line); padding: 5px 10px; text-align: left; }
@@ -632,7 +634,15 @@ function md(src) {
     // Links in Home Assistant hinein (beginnen mit /) werden Knöpfe und öffnen sich im selben Fenster
     .replace(/\[([^\]]+)\]\((\/(?!\/)[^\s)]*)\)/g, '<a class="go" href="$2" target="_top">$1 <span aria-hidden="true">›</span></a>')
     .replace(/\[([^\]]+)\]\((https:\/\/my\.home-assistant\.io\/[^\s)]+)\)/g, '<a class="go" href="$2" target="_blank" rel="noopener">$1 <span aria-hidden="true">›</span></a>')
-    .replace(/\[([^\]]+)\]\((https?:\/\/[^\s)]+)\)/g, '<a href="$2" target="_blank" rel="noopener">$1</a>');
+    .replace(/\[([^\]]+)\]\((https?:\/\/[^\s)]+)\)/g, '<a href="$2" target="_blank" rel="noopener">$1</a>')
+    // Knöpfe zu einer Integration oder App bekommen deren Symbol (fehlt es, verschwindet das Bild)
+    .replace(/<a class="go" href="([^"]+)"([^>]*)>/g, (m, href, rest) => {
+      const h = href.replace(/&amp;/g, "&");
+      const dom = (h.match(/[?&]domain=([a-z0-9_]+)/) || h.match(/^\/config\/integrations\/integration\/([a-z0-9_]+)/) || [])[1];
+      const app = (h.match(/[?&]addon=([a-z0-9_]+)/) || [])[1];
+      const src = dom ? `api/icon/integration/${dom}` : app ? `api/icon/app/${app}` : "";
+      return src ? `<a class="go ico" href="${href}"${rest}><img src="${src}" alt="" onerror="this.remove()">` : m;
+    });
   const out = []; let list = null, rows = null;
   const flush = () => {
     if (list) { out.push(`<${list.t}>${list.i.map((i) => `<li>${i}</li>`).join("")}</${list.t}>`); list = null; }
