@@ -38,7 +38,7 @@ SKIP_DOMAINS = {
     "zone", "persistent_notification", "assist_satellite", "ai_task",
 }
 
-ADDON_VERSION = "0.23.1"
+ADDON_VERSION = "0.23.2"
 MAX_VERSIONS = 30                      # so viele Dashboard-Versionen bleiben lokal gespeichert
 BAR_ENTITY = "input_text.haglo_assist"           # Eingabeleiste im Dashboard
 BAR_STATUS = "input_text.haglo_assist_status"    # Rückmeldung darunter
@@ -1427,7 +1427,8 @@ async def system_messages(session) -> list[str]:
                 fix = ""
                 if i.get("is_fixable"):
                     opts = await repair_options(session, i.get("domain"), i.get("issue_id"))
-                    fix = ", behebbar" + (f" mit den Optionen {', '.join(opts)}" if opts else "")
+                    labels = (await issue_texts(session, i))[1] if opts else {}
+                    fix = ", behebbar" + (" mit den Optionen " + ", ".join(f"{o} ({labels[o]})" if o in labels else o for o in opts) if opts else "")
                 lines.append(f"Reparatur ({ {'error': 'Fehler', 'critical': 'kritisch'}.get(i.get('severity'), 'Hinweis') }, "
                              f"Integration {i.get('domain')}, seit {str(i.get('created') or '')[:10]}, "
                              f"Kennung domain={i.get('domain')} issue_id={i.get('issue_id')}{fix}): {title}"[:400])
@@ -1505,6 +1506,27 @@ async def log_lines(session) -> list[str]:
 FIX = "/repairs/issues/fix"
 
 
+async def issue_texts(session, issue: dict) -> tuple[str, dict]:
+    """Verständlicher Titel eines Reparaturhinweises und die Beschriftungen seiner Lösungswege – aus den
+    Übersetzungen von Home Assistant (z. B. „Netzwerkspeicher-Gerät ausgefallen“, „Neu laden“, „Entfernen“)."""
+    domain, key = issue.get("domain"), issue.get("translation_key") or issue.get("issue_id")
+    res = {}
+    for lang in ("de", "en"):
+        try:
+            async with HAClient(session) as ha:
+                res = (await ha.call("frontend/get_translations", language=lang, category="issues", integration=[domain])).get("resources", {})
+        except Exception:
+            res = {}
+        if res.get(f"component.{domain}.issues.{key}.title"):
+            break
+    title = res.get(f"component.{domain}.issues.{key}.title") or str(key).replace("_", " ")
+    for k, v in (issue.get("translation_placeholders") or {}).items():
+        title = title.replace("{" + k + "}", str(v))
+    prefix = f"component.{domain}.issues.{key}.fix_flow.step."
+    labels = {k.rsplit(".", 1)[1]: v for k, v in res.items() if k.startswith(prefix) and ".menu_options." in k}
+    return title, labels
+
+
 async def repair_options(session, domain: str, issue_id: str) -> list[str]:
     """Welche Wahl die eingebaute Reparatur anbietet (z. B. Netzwerkspeicher neu verbinden / entfernen).
     Öffnet den Reparatur-Dialog nur zum Lesen und schließt ihn sofort wieder."""
@@ -1537,7 +1559,11 @@ async def repair_fix(session, domain: str, issue_id: str, option: str = "") -> s
         if kind == "create_entry":
             return "erledigt"
         if kind == "abort":
-            return f"abgebrochen: {step.get('reason') or 'ohne Grund'}"
+            why = step.get("reason") or ""
+            text = {"apply_suggestion_fail": "Home Assistant konnte das nicht erledigen. Ist das Gerät (z. B. der Netzwerkspeicher) "
+                                             "weiterhin nicht erreichbar, klappt „Neu laden“ erst, wenn es wieder läuft – sonst „Entfernen“ wählen.",
+                    "issue_not_found": "Den Hinweis gibt es nicht mehr – vermutlich hat er sich schon erledigt."}.get(why)
+            return f"nicht geklappt: {text or why or 'ohne Angabe eines Grundes'}"
         if status != 200 or not step.get("flow_id"):
             raise RuntimeError("Die Reparatur ließ sich nicht starten.")
         fid = step["flow_id"]
@@ -1639,11 +1665,15 @@ async def repair_plan(session, steps: list[dict]) -> list[dict]:
             issue = await repair_issue(session, str(st.get("domain")), str(st.get("issue_id")))
             if not issue:
                 raise RuntimeError("Diesen Reparaturhinweis gibt es nicht mehr. Es wurde nichts geändert.")
-            name = str(issue.get("translation_key") or issue.get("issue_id")).replace("_", " ")
-            out.append({"art": art, "domain": issue["domain"], "issue_id": issue["issue_id"], "option": str(st.get("option") or ""),
-                        "title": ("Hinweis ausblenden: " if art == "reparatur_ignorieren" else "Reparatur ausführen: ") + f"{name} ({issue['domain']})",
-                        "sub": (f"Weg: {str(st.get('option')).replace('_', ' ')}" if st.get("option") else
-                                "Home Assistant führt seine eingebaute Reparatur aus") if art == "reparatur_beheben" else "Der Hinweis erscheint nicht mehr unter Reparaturen"})
+            name, labels = await issue_texts(session, issue)
+            opt = str(st.get("option") or "")
+            if art == "reparatur_ignorieren":
+                title, sub = f"Hinweis ausblenden: {name}", "erscheint nicht mehr unter Reparaturen"
+            else:
+                how = labels.get(opt) or (opt.rsplit("_", 1)[-1].capitalize() if opt else "")
+                title = f"{name} beheben" + (f": {how}" if how else "")
+                sub = "mit der eingebauten Reparatur von Home Assistant"
+            out.append({"art": art, "domain": issue["domain"], "issue_id": issue["issue_id"], "option": opt, "title": title, "sub": sub})
             continue
         if art == "yaml_aendern":
             yaml_check(st)
@@ -1703,13 +1733,13 @@ async def repair_apply(session, steps: list[dict]) -> list[dict]:
             if status != 200 or not isinstance(res, dict) or res.get("result") != "valid":
                 errors = redact(str((res or {}).get("errors") or "unbekannter Fehler"))[:300] if isinstance(res, dict) else ""
                 done.append({"icon": "action", "title": st["title"], "sub": f"nicht ausgeführt – die Konfiguration hat Fehler: {errors}",
-                             "url": "/config/logs"})
+                             "url": "/config/logs", "failed": True})
                 break
             status, _ = await core(session, "POST", "/services/homeassistant/restart", {})
             ok, sub = status in (200, 201, 502, 504), "Neustart läuft – in 1–3 Minuten ist alles wieder da"
         url = "/config/repairs" if st["art"].startswith("reparatur_") else "/config/logs" if st["art"] == "yaml_aendern" \
             else f"/config/integrations/integration/{st['domain']}" if st.get("domain") else None
-        done.append({"icon": "action", "title": st["title"], "sub": sub, "url": url})
+        done.append({"icon": "action", "title": st["title"], "sub": sub, "url": url, **({"failed": True} if not ok else {})})
         if not ok:
             break
     return done
@@ -2828,7 +2858,9 @@ async def repair_apply_route(request):
     except Exception as e:
         return web.json_response({"ok": False, "error": str(e)}, status=400)
     add_history("control", str(body.get("wish") or ""), str(body.get("erklaerung") or "Reparatur ausgeführt."), steps=done)
-    return web.json_response({"ok": True})
+    # Hat ein Schritt nicht geklappt, sagt die Oberfläche das deutlich statt still den Verlauf zu zeigen
+    failed = [d for d in done if d.get("failed")]
+    return web.json_response({"ok": True, "failed": [f"{d['title']}: {d['sub']}" for d in failed]})
 
 
 @routes.post("/api/integrations/apply")

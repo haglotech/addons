@@ -1,5 +1,11 @@
 # Änderungen
 
+## 0.23.2
+
+- Reparaturen sind verständlich beschriftet („Netzwerkspeicher-Gerät ausgefallen beheben: Neu laden“) statt mit technischen Namen
+- Links in Erklärungen erscheinen als Knöpfe statt als Text in eckigen Klammern
+- Klappt eine Reparatur nicht (z. B. weil das NAS weiter nicht erreichbar ist), sagt die App das deutlich und warum
+
 ## 0.23.1
 
 - Behoben: Folgte auf die Systemmeldungen ein Reparaturvorschlag, brach die App mit „'config'“ ab

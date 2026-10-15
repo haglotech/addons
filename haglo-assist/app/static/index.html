@@ -1204,7 +1204,7 @@ function showYamlConsent(wish, label, files) {
 // Reparaturschritte anzeigen – ausgeführt wird erst nach „Ja, reparieren“
 function showConfirmRepair(wish, erklaerung, plan) {
   showResult(`<div class="ask-q"><p class="step">Bitte bestätigen</p><h2>So reparieren?</h2>
-    ${erklaerung ? `<p style="color:var(--text)">${esc(erklaerung)}</p>` : ""}
+    ${erklaerung ? md(erklaerung) : ""}
     <div class="steps">${plan.show.map((c) => `<div class="stp action"><span class="ic">${STEP_ICON.action}</span>
       <span class="tx"><b>${esc(c.title)}</b><small>${esc(c.sub || "")}</small></span></div>`).join("")}</div>
     <div class="actions" style="justify-content:flex-start"><button class="primary" id="rpYes">Ja, reparieren</button>
@@ -1212,7 +1212,11 @@ function showConfirmRepair(wish, erklaerung, plan) {
   $("rpNo").onclick = () => dismiss();
   $("rpYes").onclick = async () => {
     $("rpYes").disabled = true;
-    try { await api("api/repair/apply", { steps: plan.steps, wish, erklaerung }); dismiss(); await loadHistory(); }
+    try {
+      const r = await api("api/repair/apply", { steps: plan.steps, wish, erklaerung });
+      dismiss(); await loadHistory();
+      if ((r.failed || []).length) showResult(`<p class="err">Nicht alles hat geklappt:</p>${md(r.failed.map((f) => "- " + f).join("\n"))}`);
+    }
     catch (e) { showResult(`<p class="err">Das hat nicht geklappt: ${esc(e.message)}</p>`); }
   };
 }
@@ -1230,7 +1234,7 @@ function showIntegrationsConsent(wish, label, query) {
 // Vorher/Nachher der Einstellungen einer Integration – gespeichert wird erst nach „Ja, ändern“
 function showConfirmIntegration(wish, erklaerung, plan) {
   showResult(`<div class="ask-q"><p class="step">Bitte bestätigen</p><h2>„${esc(plan.title)}“ so einstellen?</h2>
-    ${erklaerung ? `<p style="color:var(--text)">${esc(erklaerung)}</p>` : ""}
+    ${erklaerung ? md(erklaerung) : ""}
     <div class="steps">${plan.changes.map((c) => `<div class="stp action"><span class="ic">${STEP_ICON.action}</span>
       <span class="tx"><b>${esc(c.label)}</b><small>${esc(c.old)} → ${esc(c.new)}</small></span></div>`).join("")}</div>
     <div class="actions" style="justify-content:flex-start"><button class="primary" id="igYes">Ja, ändern</button>
@@ -1244,7 +1248,7 @@ function showConfirmIntegration(wish, erklaerung, plan) {
 }
 function showConfirmActions(wish, erklaerung, actions) {
   showResult(`<div class="ask-q"><p class="step">Sicherheitsabfrage</p><h2>Wirklich ausführen?</h2>
-    <p style="color:var(--text)">${esc(erklaerung)}</p>
+    ${md(erklaerung)}
     <div class="actions" style="justify-content:flex-start"><button class="primary" id="actYes">Ja, ausführen</button>
       <button class="btn2" id="actNo">Abbrechen</button></div></div>`);
   $("actNo").onclick = () => dismiss();
