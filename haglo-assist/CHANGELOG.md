@@ -1,5 +1,10 @@
 # Änderungen
 
+## 0.24.0
+
+- Neu: Haglo Assist spielt Updates ein („mach alle Updates“) – nach deiner Bestätigung, wo möglich mit Sicherung vorher,
+  im Hintergrund nacheinander; Home Assistant selbst und Haglo Assist kommen zuletzt, weil danach neu gestartet wird
+
 ## 0.23.7
 
 - Die kleine Zeile nach einer Zustimmung zeigt richtig an, ob einmal oder immer erlaubt wurde

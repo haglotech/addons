@@ -38,7 +38,7 @@ SKIP_DOMAINS = {
     "zone", "persistent_notification", "assist_satellite", "ai_task",
 }
 
-ADDON_VERSION = "0.23.7"
+ADDON_VERSION = "0.24.0"
 MAX_VERSIONS = 30                      # so viele Dashboard-Versionen bleiben lokal gespeichert
 BAR_ENTITY = "input_text.haglo_assist"           # Eingabeleiste im Dashboard
 BAR_STATUS = "input_text.haglo_assist_status"    # Rückmeldung darunter
@@ -1449,7 +1449,9 @@ async def system_messages(session) -> list[str]:
         for st in await all_states(session):
             if st["entity_id"].startswith("update.") and st.get("state") == "on":
                 a = st.get("attributes", {})
-                lines.append(f"Update verfügbar: {a.get('friendly_name') or st['entity_id']} {a.get('installed_version')} → {a.get('latest_version')}"[:200])
+                lines.append(f"Update verfügbar: {a.get('friendly_name') or st['entity_id']} {a.get('installed_version')} → {a.get('latest_version')} "
+                             f"(Kennung {st['entity_id']}{', installiert gerade' if a.get('in_progress') else ''}"
+                             f"{'' if int(a.get('supported_features') or 0) & 1 else ', nur von Hand installierbar'})"[:260])
     except Exception:
         pass
     try:
@@ -1677,8 +1679,10 @@ async def entry_by_id(session, entry_id: str) -> dict | None:
 async def repair_plan(session, steps: list[dict]) -> list[dict]:
     """Prüft die vorgeschlagenen Schritte vor Ort und beschreibt sie für die Bestätigung (ändert nichts)."""
     out = []
-    for st in steps[:8]:
+    for st in steps[:15]:
         art = st.get("art")
+        if art == "hinweis":
+            continue
         if art == "home_assistant_neu_starten":
             out.append({"art": art, "title": "Home Assistant neu starten", "sub": "Die Konfiguration wird vorher geprüft. Dauert 1–3 Minuten."})
             continue
@@ -1695,6 +1699,23 @@ async def repair_plan(session, steps: list[dict]) -> list[dict]:
                 title = f"{name} beheben" + (f": {how}" if how else "")
                 sub = "mit der eingebauten Reparatur von Home Assistant"
             out.append({"art": art, "domain": issue["domain"], "issue_id": issue["issue_id"], "option": opt, "title": title, "sub": sub})
+            continue
+        if art == "update_installieren":
+            eid = str(st.get("entity_id") or "")
+            status, ent = await core(session, "GET", f"/states/{eid}") if eid.startswith("update.") else (404, {})
+            if status != 200 or not isinstance(ent, dict) or ent.get("state") != "on":
+                raise RuntimeError(f"Für „{eid}“ gibt es kein offenes Update. Es wurde nichts geändert.")
+            a = ent.get("attributes", {})
+            if not int(a.get("supported_features") or 0) & 1:           # UpdateEntityFeature.INSTALL fehlt
+                out.append({"art": "hinweis", "title": f"Update: {a.get('friendly_name') or eid}",
+                            "sub": "lässt sich nicht automatisch installieren – bitte unter Einstellungen → Updates"})
+                continue
+            backup = bool(int(a.get("supported_features") or 0) & 8)     # UpdateEntityFeature.BACKUP
+            out.append({"art": art, "entity_id": eid, "backup": backup,
+                        "title": f"Update: {a.get('friendly_name') or eid} {a.get('installed_version')} → {a.get('latest_version')}",
+                        "sub": ("mit Sicherung vorher" if backup else "ohne eigene Sicherung (bietet dieses Update nicht an)")
+                               + (" · Home Assistant startet danach neu" if eid.endswith("home_assistant_core_update") else "")
+                               + (" · Haglo Assist startet danach neu" if "haglo" in eid else "")})
             continue
         if art == "yaml_aendern":
             yaml_check(st)
@@ -1716,12 +1737,18 @@ async def repair_plan(session, steps: list[dict]) -> list[dict]:
 
 async def repair_apply(session, steps: list[dict]) -> list[dict]:
     """Führt die bestätigten Schritte aus. Gibt je Schritt eine Zeile für den Verlauf zurück."""
-    done = []
+    done, updates = [], []
     for st in await repair_plan(session, steps):
         if st["art"] == "integration_neu_laden":
             status, res = await core(session, "POST", f"/config/config_entries/entry/{st['eintrag']}/reload")
             ok = status == 200
             sub = ("neu geladen" + (" – Home Assistant braucht danach einen Neustart" if isinstance(res, dict) and res.get("require_restart") else "")) if ok else f"fehlgeschlagen ({status})"
+        elif st["art"] == "hinweis":
+            ok, sub = True, st["sub"]
+        elif st["art"] == "update_installieren":
+            # Updates dauern Minuten: im Hintergrund nacheinander einspielen, die Oberfläche wartet nicht darauf
+            updates.append(st)
+            ok, sub = True, "wird installiert – den Fortschritt siehst du unter Einstellungen → Updates"
         elif st["art"] == "reparatur_ignorieren":
             async with HAClient(session) as ha:
                 await ha.call("repairs/ignore_issue", domain=st["domain"], issue_id=st["issue_id"], ignore=True)
@@ -1759,11 +1786,28 @@ async def repair_apply(session, steps: list[dict]) -> list[dict]:
             status, _ = await core(session, "POST", "/services/homeassistant/restart", {})
             ok, sub = status in (200, 201, 502, 504), "Neustart läuft – in 1–3 Minuten ist alles wieder da"
         url = "/config/repairs" if st["art"].startswith("reparatur_") else "/config/logs" if st["art"] == "yaml_aendern" \
+            else "/config/updates" if st["art"] == "update_installieren" \
             else f"/config/integrations/integration/{st['domain']}" if st.get("domain") else None
         done.append({"icon": "action", "title": st["title"], "sub": sub, "url": url, **({"failed": True} if not ok else {})})
         if not ok:
             break
+    if updates:
+        asyncio.create_task(install_updates(session, updates))
     return done
+
+
+async def install_updates(session, steps: list[dict]) -> None:
+    """Spielt Updates nacheinander ein. Home Assistant selbst und Haglo Assist zuletzt – danach wird neu gestartet."""
+    last = lambda st: ("haglo" in st["entity_id"], st["entity_id"].endswith("home_assistant_core_update"))
+    for st in sorted(steps, key=last):
+        body = {"entity_id": st["entity_id"], **({"backup": True} if st.get("backup") else {})}
+        try:
+            status, res = await core(session, "POST", "/services/update/install", body, timeout=1800)
+            print(f"Update {st['entity_id']}: {status}")
+        except Exception as e:
+            # beim Update von Home Assistant selbst oder dieser App bricht die Verbindung ab – das ist der Neustart
+            print(f"Update {st['entity_id']}: {type(e).__name__} {e}")
+
 
 
 # ---------------------------------------------------------------- Einstellungen von Integrationen
@@ -2390,8 +2434,8 @@ async def build_dashboard(app, wish: str, refine: bool, dialog: list, can_ask: b
             return {"need_dashboard_consent": {"id": dashboard, "label": label}, "status": result.get("status")}
         if result.get("type") == "repair":
             plan = await repair_plan(session, result.get("steps") or [])
-            keys = ("art", "eintrag", "domain", "issue_id", "option", "datei", "alt", "neu")
-            return {"confirm_repair": {"steps": [{k: p[k] for k in keys if k in p} for p in plan],
+            keys = ("art", "eintrag", "domain", "issue_id", "option", "datei", "alt", "neu", "entity_id")
+            return {"confirm_repair": {"steps": [{k: p[k] for k in keys if k in p} for p in plan if p["art"] != "hinweis"],
                                        "show": [{"title": p["title"], "sub": p["sub"]} for p in plan]},
                     "erklaerung": result.get("erklaerung", ""), "status": result["status"]}
         if result.get("type") == "integration_set":
