@@ -38,7 +38,7 @@ SKIP_DOMAINS = {
     "zone", "persistent_notification", "assist_satellite", "ai_task",
 }
 
-ADDON_VERSION = "0.23.3"
+ADDON_VERSION = "0.23.4"
 MAX_VERSIONS = 30                      # so viele Dashboard-Versionen bleiben lokal gespeichert
 BAR_ENTITY = "input_text.haglo_assist"           # Eingabeleiste im Dashboard
 BAR_STATUS = "input_text.haglo_assist_status"    # Rückmeldung darunter
@@ -547,7 +547,7 @@ async def selftest(app) -> None:
 
     async def probe():
         """Nur lesen: Wie heißt unser Eintrag in der Seitenleiste, und lässt sich die Startseite vorgeben?"""
-        out = []
+        out = [f"config-ordner={HA_CONFIG.exists()} configuration.yaml={(HA_CONFIG / 'configuration.yaml').exists()}"]
         async with HAClient(app["session"]) as ha:
             panels = await ha.call("get_panels")
             mine = [k for k, v in panels.items() if "haglo" in k.lower() or "haglo" in str(v.get("title", "")).lower()]
@@ -560,6 +560,7 @@ async def selftest(app) -> None:
                     out.append(f"{cmd.split('/')[1]}[{kw['key']}]=FEHLER {str(e)[:50]}")
         info = await supervisor_get(app["session"], "/addons/self/info")
         out.append(f"slug={info.get('slug')} ingress_url={info.get('ingress_url')} panel={info.get('ingress_panel')}")
+        out.append(f"version={info.get('version')} config-ordner={HA_CONFIG.exists()} configuration.yaml={(HA_CONFIG / 'configuration.yaml').exists()}")
         return " ".join(out)
 
     async def sidebar_test():
@@ -2305,7 +2306,11 @@ async def build_dashboard(app, wish: str, refine: bool, dialog: list, can_ask: b
             raw = await all_states(session)
             by_id = {x["entity_id"]: x for x in raw}
             extra = {"kinds": KINDS, "can_control": True, "can_add_device": True, "can_rename": True, "can_diagnose": True, "can_history": True, "can_integrations": True, "can_logs": True, "can_yaml": HA_CONFIG.exists(),
-                     "context": recent_context(), "hints": await address_hints(session, wish),
+                     "context": recent_context(), "hints": (await address_hints(session, wish))[:2] + ([] if HA_CONFIG.exists() else [
+                         "Die App hat noch keinen Zugriff auf die Konfigurationsdateien (configuration.yaml) – sie wurde vor dem Update "
+                         "installiert, das diesen Zugriff mitbringt. Muss eine YAML-Datei geändert werden, schreib nicht, du dürftest sie "
+                         "nicht lesen, sondern: Einmal Haglo Assist aktualisieren (Einstellungen → Apps → Haglo Assist → Aktualisieren), "
+                         "danach erledige ich das selbst."]),
                      "automations": await own_objects(session, raw)}
         payload = {
             "wish": wish, "entities": entities,

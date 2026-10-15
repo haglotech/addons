@@ -1,5 +1,9 @@
 # Änderungen
 
+## 0.23.4
+
+- Fehlt der App noch der Zugriff auf die Konfigurationsdateien, erklärt Haglo Assist, wie man ihn per Update bekommt
+
 ## 0.23.3
 
 - Beim Bestätigen einer Reparatur, Einstellung oder Aktion zeigt der Knopf sofort „Wird repariert …“ bzw. „Wird gespeichert …“
