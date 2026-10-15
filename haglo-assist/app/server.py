@@ -38,7 +38,7 @@ SKIP_DOMAINS = {
     "zone", "persistent_notification", "assist_satellite", "ai_task",
 }
 
-ADDON_VERSION = "0.23.4"
+ADDON_VERSION = "0.23.5"
 MAX_VERSIONS = 30                      # so viele Dashboard-Versionen bleiben lokal gespeichert
 BAR_ENTITY = "input_text.haglo_assist"           # Eingabeleiste im Dashboard
 BAR_STATUS = "input_text.haglo_assist_status"    # Rückmeldung darunter
@@ -2885,7 +2885,27 @@ async def repair_apply_route(request):
     add_history("control", str(body.get("wish") or ""), str(body.get("erklaerung") or "Reparatur ausgeführt."), steps=done)
     # Hat ein Schritt nicht geklappt, sagt die Oberfläche das deutlich statt still den Verlauf zu zeigen
     failed = [d for d in done if d.get("failed")]
-    return web.json_response({"ok": True, "failed": [f"{d['title']}: {d['sub']}" for d in failed]})
+    # Klappte eine eingebaute Reparatur nicht, gleich die anderen Wege anbieten (z. B. „Entfernen“ statt „Neu laden“)
+    alternatives = []
+    if failed:
+        for st in steps:
+            if st.get("art") != "reparatur_beheben":
+                continue
+            try:
+                issue = await repair_issue(request.app["session"], str(st.get("domain")), str(st.get("issue_id")))
+                if not issue:
+                    continue
+                opts = await repair_options(request.app["session"], issue["domain"], issue["issue_id"])
+                name, labels = await issue_texts(request.app["session"], issue)
+            except Exception:
+                continue
+            base = {"domain": issue["domain"], "issue_id": issue["issue_id"]}
+            for o in opts:
+                if o != st.get("option"):
+                    alternatives.append({"label": f"Stattdessen: {labels.get(o) or o.rsplit('_', 1)[-1].capitalize()}", "hint": name,
+                                         "step": {"art": "reparatur_beheben", **base, "option": o}})
+            alternatives.append({"label": "Hinweis ausblenden", "hint": name, "step": {"art": "reparatur_ignorieren", **base}})
+    return web.json_response({"ok": True, "failed": [f"{d['title']}: {d['sub']}" for d in failed], "alternatives": alternatives[:6]})
 
 
 @routes.post("/api/integrations/apply")

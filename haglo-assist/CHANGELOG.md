@@ -1,5 +1,9 @@
 # Änderungen
 
+## 0.23.5
+
+- Klappt eine Reparatur nicht, bietet Haglo Assist die anderen Wege direkt als Knopf an (z. B. „Stattdessen: Entfernen“ oder „Hinweis ausblenden“)
+
 ## 0.23.4
 
 - Fehlt der App noch der Zugriff auf die Konfigurationsdateien, erklärt Haglo Assist, wie man ihn per Update bekommt

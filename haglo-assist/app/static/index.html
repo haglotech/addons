@@ -1212,17 +1212,26 @@ function showConfirmRepair(wish, erklaerung, plan) {
     <div class="actions" style="justify-content:flex-start"><button class="primary" id="rpYes">Ja, reparieren</button>
       <button class="btn2" id="rpNo">Abbrechen</button></div></div>`);
   $("rpNo").onclick = () => dismiss();
-  $("rpYes").onclick = async () => {
-    // sofort sichtbar, dass etwas passiert – manche Reparaturen brauchen ein bis zwei Minuten
-    $("rpYes").disabled = true; $("rpNo").disabled = true;
-    $("rpYes").innerHTML = '<span class="spin" aria-hidden="true"></span> Wird repariert …';
-    try {
-      const r = await api("api/repair/apply", { steps: plan.steps, wish, erklaerung });
-      dismiss(); await loadHistory();
-      if ((r.failed || []).length) showResult(`<p class="err">Nicht alles hat geklappt:</p>${md(r.failed.map((f) => "- " + f).join("\n"))}`);
-    }
-    catch (e) { showResult(`<p class="err">Das hat nicht geklappt: ${esc(e.message)}</p>`); }
-  };
+  $("rpYes").onclick = () => runRepair(plan.steps, wish, erklaerung, $("rpYes"), $("rpNo"));
+}
+// Führt bestätigte Reparaturschritte aus. Klappt etwas nicht, stehen andere Wege direkt als Knöpfe darunter.
+async function runRepair(steps, wish, erklaerung, btn, other) {
+  // sofort sichtbar, dass etwas passiert – manche Reparaturen brauchen ein bis zwei Minuten
+  btn.disabled = true; if (other) other.disabled = true;
+  btn.innerHTML = '<span class="spin" aria-hidden="true"></span> Wird repariert …';
+  try {
+    const r = await api("api/repair/apply", { steps, wish, erklaerung });
+    dismiss(); await loadHistory();
+    if (!(r.failed || []).length) return;
+    const alts = r.alternatives || [];
+    showResult(`<p class="err">Nicht alles hat geklappt:</p>${md(r.failed.map((f) => "- " + f).join("\n"))}
+      ${alts.length ? `<p style="color:var(--text);margin-top:10px">Was soll ich stattdessen tun?</p>
+      <div class="actions" style="justify-content:flex-start;flex-wrap:wrap">${alts.map((a, i) =>
+        `<button class="${i ? "btn2" : "primary"}" data-alt="${i}" title="${esc(a.hint || "")}">${esc(a.label)}</button>`).join("")}</div>` : ""}`);
+    document.querySelectorAll("[data-alt]").forEach((b) => {
+      b.onclick = () => runRepair([alts[+b.dataset.alt].step], wish, alts[+b.dataset.alt].label + " – " + (alts[+b.dataset.alt].hint || ""), b);
+    });
+  } catch (e) { showResult(`<p class="err">Das hat nicht geklappt: ${esc(e.message)}</p>`); }
 }
 function showIntegrationsConsent(wish, label, query) {
   showResult(`<div class="ask-q"><p class="step">Deine Zustimmung ist nötig</p><h2>Einstellungen der Integration übertragen?</h2>
