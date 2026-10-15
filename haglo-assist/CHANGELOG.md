@@ -1,5 +1,9 @@
 # Änderungen
 
+## 0.23.6
+
+- Erteilte Zustimmungen schrumpfen im Gespräch zu einer kleinen Zeile („✓ Konfigurationsdateien – erlaubt“) statt als große Karte stehen zu bleiben
+
 ## 0.23.5
 
 - Klappt eine Reparatur nicht, bietet Haglo Assist die anderen Wege direkt als Knopf an (z. B. „Stattdessen: Entfernen“ oder „Hinweis ausblenden“)

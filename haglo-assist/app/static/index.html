@@ -79,6 +79,8 @@
   .bub .undo:hover { color: var(--text); }
   .bub .gone { font-size: 13px; color: var(--muted); }
   .msg.was .bub { opacity: .6; }
+  .msg.tiny .bub { padding: 4px 12px; font-size: 13px; color: var(--muted); background: transparent; border: 1px dashed var(--line); box-shadow: none; }
+  .msg.tiny .ok-dot { color: var(--brand); font-weight: 700; }
   .talk { display: inline-flex; align-items: center; gap: 7px; font: inherit; font-size: 12px; color: var(--muted); background: transparent;
           border: 0; padding: 4px 2px; cursor: pointer; white-space: nowrap; }
   .talk i { width: 14px; height: 14px; border-radius: 50%; flex: none;
@@ -607,6 +609,14 @@ function addUser(text) {
 // Eine beantwortete Karte bleibt stehen, lässt sich aber nicht mehr bedienen
 function freeze() {
   if (!cur) return;
+  // Erteilte Zustimmungen schrumpfen zu einer kleinen Zeile – wie in einem Chat, die große Karte ist erledigt
+  const step = cur.querySelector(".ask-q .step"), head = cur.querySelector(".ask-q h2");
+  if (step && head && /Zustimmung/.test(step.textContent)) {
+    const how = /Immer/.test((document.activeElement || {}).textContent || "") ? "immer erlaubt" : "erlaubt";
+    cur.classList.add("tiny");
+    cur.firstChild.innerHTML = `<span class="ok-dot">✓</span> ${esc(head.textContent.replace(/\?$/, "").replace(/ übertragen$/, ""))} – ${how}`;
+    cur = null; return;
+  }
   cur.querySelectorAll("button:not([data-undo]), input").forEach((b) => { b.disabled = true; });
   cur.querySelectorAll("[id]").forEach((e) => e.removeAttribute("id"));
   cur.classList.add("was"); cur = null;
