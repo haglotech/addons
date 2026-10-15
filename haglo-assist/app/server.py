@@ -38,7 +38,7 @@ SKIP_DOMAINS = {
     "zone", "persistent_notification", "assist_satellite", "ai_task",
 }
 
-ADDON_VERSION = "0.23.2"
+ADDON_VERSION = "0.23.3"
 MAX_VERSIONS = 30                      # so viele Dashboard-Versionen bleiben lokal gespeichert
 BAR_ENTITY = "input_text.haglo_assist"           # Eingabeleiste im Dashboard
 BAR_STATUS = "input_text.haglo_assist_status"    # Rückmeldung darunter
@@ -642,13 +642,23 @@ async def selftest(app) -> None:
         await step("seitenleiste-reihenfolge", sidebar_test())
     elif job.get("probe"):
         await step("probe", probe())
+    elif job.get("selbst_update"):
+        async def self_update():
+            """Nur Entwickler-Variante: Supervisor die geänderte config.yaml einlesen lassen und sich selbst aktualisieren."""
+            res = []
+            for path in ("/store/reload", "/addons/self/update", "/addons/self/rebuild"):
+                async with app["session"].post(f"http://supervisor{path}", headers={"Authorization": f"Bearer {TOKEN}"},
+                                               timeout=aiohttp.ClientTimeout(total=120)) as r:
+                    res.append(f"{path}={r.status}:{(await r.text())[:60]}")
+            return " ".join(res)
+        await step("selbst-update", self_update())
     elif job.get("full"):
         await step("alles", everything())
     elif job.get("auto"):
         await step("automation-ablauf", automation_flow())
     else:
         await step("automation", automation_api())
-    if not any(job.get(k) for k in ("full", "probe", "sidebar", "welcome", "undo", "dashlist")):
+    if not any(job.get(k) for k in ("full", "probe", "sidebar", "welcome", "undo", "dashlist", "selbst_update")):
         await step("seitenleiste", panel())
         await step("hw", hw())
         await step("dashboards", dashes())
@@ -1158,10 +1168,10 @@ def save_automations(reg: dict) -> None:
     AUTOMATIONS_FILE.write_text(json.dumps(reg, ensure_ascii=False))
 
 
-async def core(session, method: str, path: str, body=None):
+async def core(session, method: str, path: str, body=None, timeout: int = 30):
     """Aufruf der Home-Assistant-API. Gibt (Status, Antwort) zurück."""
     async with session.request(method, CORE_API + path, json=body, headers={"Authorization": f"Bearer {TOKEN}"},
-                               timeout=aiohttp.ClientTimeout(total=30)) as r:
+                               timeout=aiohttp.ClientTimeout(total=timeout)) as r:
         try:
             data = await r.json()
         except Exception:
@@ -1549,6 +1559,16 @@ async def repair_issue(session, domain: str, issue_id: str) -> dict | None:
     return next((i for i in issues if i.get("domain") == domain and i.get("issue_id") == issue_id), None)
 
 
+async def fix_post(session, fid: str, body: dict):
+    """Einen Schritt der eingebauten Reparatur absenden. Manche Reparaturen dauern (z. B. Netzwerkspeicher neu
+    verbinden, wenn er nicht antwortet) – dann nicht still hängen, sondern ehrlich sagen, dass es noch läuft."""
+    try:
+        return await core(session, "POST", f"{FIX}/{fid}", body, timeout=90)
+    except asyncio.TimeoutError:
+        raise RuntimeError("Home Assistant arbeitet nach 90 Sekunden noch daran – meist, weil das Gerät (z. B. der Netzwerkspeicher) "
+                           "nicht antwortet. Schau in ein paar Minuten unter Reparaturen nach, ob der Hinweis weg ist.")
+
+
 async def repair_fix(session, domain: str, issue_id: str, option: str = "") -> str:
     """Führt die eingebaute Reparatur aus: Menüpunkt wählen, Bestätigungen absenden. Fragt der Dialog nach
     Eingaben, die die App nicht kennt, wird er abgebrochen – dann ist nichts geändert."""
@@ -1574,14 +1594,14 @@ async def repair_fix(session, domain: str, issue_id: str, option: str = "") -> s
             if not pick:
                 await core(session, "DELETE", f"{FIX}/{fid}")
                 raise RuntimeError(f"Die Reparatur bietet mehrere Wege an ({', '.join(opts)}) – bitte sag, welcher.")
-            status, step = await core(session, "POST", f"{FIX}/{fid}", {"next_step_id": pick})
+            status, step = await fix_post(session, fid, {"next_step_id": pick})
         elif kind == "form":
             # nur reine Bestätigungen: Felder ohne Vorgabe kann die App nicht ausfüllen
             missing = [f.get("name") for f in step.get("data_schema") or [] if f.get("required") and "default" not in f]
             if missing:
                 await core(session, "DELETE", f"{FIX}/{fid}")
                 raise RuntimeError("Die Reparatur braucht Angaben, die nur du machen kannst – bitte direkt unter Reparaturen erledigen.")
-            status, step = await core(session, "POST", f"{FIX}/{fid}", {})
+            status, step = await fix_post(session, fid, {})
         else:
             await core(session, "DELETE", f"{FIX}/{fid}")
             raise RuntimeError("Die Reparatur lief anders als erwartet. Es wurde nichts geändert.")

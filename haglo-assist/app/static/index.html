@@ -363,6 +363,8 @@
   }
   @media (max-width: 520px) { .pill .long { display: none; } }
   @media (max-width: 380px) { .btn2 .long { display: none; } }
+  .spin { display: inline-block; width: 14px; height: 14px; margin-right: 6px; vertical-align: -2px; border: 2px solid currentColor; border-right-color: transparent; border-radius: 50%; animation: spin .8s linear infinite; }
+  @keyframes spin { to { transform: rotate(360deg); } }
 </style>
 </head>
 <body>
@@ -1211,7 +1213,9 @@ function showConfirmRepair(wish, erklaerung, plan) {
       <button class="btn2" id="rpNo">Abbrechen</button></div></div>`);
   $("rpNo").onclick = () => dismiss();
   $("rpYes").onclick = async () => {
-    $("rpYes").disabled = true;
+    // sofort sichtbar, dass etwas passiert – manche Reparaturen brauchen ein bis zwei Minuten
+    $("rpYes").disabled = true; $("rpNo").disabled = true;
+    $("rpYes").innerHTML = '<span class="spin" aria-hidden="true"></span> Wird repariert …';
     try {
       const r = await api("api/repair/apply", { steps: plan.steps, wish, erklaerung });
       dismiss(); await loadHistory();
@@ -1241,7 +1245,7 @@ function showConfirmIntegration(wish, erklaerung, plan) {
       <button class="btn2" id="igCancel">Abbrechen</button></div></div>`);
   $("igCancel").onclick = () => dismiss();
   $("igYes").onclick = async () => {
-    $("igYes").disabled = true;
+    $("igYes").disabled = true; $("igYes").innerHTML = '<span class="spin" aria-hidden="true"></span> Wird gespeichert …';
     try { await api("api/integrations/apply", { entry: plan.entry, values: plan.values, wish, erklaerung }); dismiss(); await loadHistory(); }
     catch (e) { showResult(`<p class="err">Das hat nicht geklappt: ${esc(e.message)}</p>`); }
   };
@@ -1253,7 +1257,7 @@ function showConfirmActions(wish, erklaerung, actions) {
       <button class="btn2" id="actNo">Abbrechen</button></div></div>`);
   $("actNo").onclick = () => dismiss();
   $("actYes").onclick = async () => {
-    $("actYes").disabled = true;
+    $("actYes").disabled = true; $("actYes").innerHTML = '<span class="spin" aria-hidden="true"></span> Wird ausgeführt …';
     try { await api("api/actions/run", { actions, wish, erklaerung }); dismiss(); await loadHistory(); }
     catch (e) { showResult(`<p class="err">Das hat nicht geklappt: ${esc(e.message)}</p>`); }
   };

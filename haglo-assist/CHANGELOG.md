@@ -1,5 +1,10 @@
 # Änderungen
 
+## 0.23.3
+
+- Beim Bestätigen einer Reparatur, Einstellung oder Aktion zeigt der Knopf sofort „Wird repariert …“ bzw. „Wird gespeichert …“
+- Dauert eine Reparatur länger als 90 Sekunden (z. B. weil ein Netzwerkspeicher nicht antwortet), sagt die App das, statt still zu warten
+
 ## 0.23.2
 
 - Reparaturen sind verständlich beschriftet („Netzwerkspeicher-Gerät ausgefallen beheben: Neu laden“) statt mit technischen Namen
