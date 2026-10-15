@@ -38,13 +38,13 @@ SKIP_DOMAINS = {
     "zone", "persistent_notification", "assist_satellite", "ai_task",
 }
 
-ADDON_VERSION = "0.23.0"
+ADDON_VERSION = "0.23.1"
 MAX_VERSIONS = 30                      # so viele Dashboard-Versionen bleiben lokal gespeichert
 BAR_ENTITY = "input_text.haglo_assist"           # Eingabeleiste im Dashboard
 BAR_STATUS = "input_text.haglo_assist_status"    # Rückmeldung darunter
 DEFAULT_BACKEND_URL = "https://api.haglotech.com"
 HUB_FILE = Path("/data/hub.json")
-TERMS_VERSION = "2026-10"
+TERMS_VERSION = "2026-10-14"
 # Nur als Rückfall, solange das Backend nicht erreichbar ist.
 FALLBACK_URLS = {
     "terms_url": "https://haglotech.com/pages/haglo-assist-bedingungen",
@@ -707,6 +707,9 @@ def backend_failure(e: BackendError):
 
 
 # ---------------------------------------------------------------- HA-WebSocket
+HA_RESTARTING = "Home Assistant startet gerade neu oder ist nicht erreichbar. Bitte versuche es in einer Minute noch einmal."
+
+
 class HAClient:
     """Minimaler WebSocket-Client für die Home-Assistant-API (über Supervisor)."""
 
@@ -716,8 +719,12 @@ class HAClient:
         self.msg_id = 0
 
     async def __aenter__(self):
-        self.ws = await self.session.ws_connect(HA_WS_URL, heartbeat=30)
-        msg = await self.ws.receive_json()  # auth_required
+        try:
+            self.ws = await self.session.ws_connect(HA_WS_URL, heartbeat=30)
+            msg = await self.ws.receive_json()  # auth_required
+        except (aiohttp.ClientError, TypeError, ValueError):
+            # während eines Neustarts nimmt Home Assistant keine Verbindung an oder schließt sie sofort
+            raise RuntimeError(HA_RESTARTING)
         await self.ws.send_json({"type": "auth", "access_token": TOKEN})
         msg = await self.ws.receive_json()
         if msg.get("type") != "auth_ok":
@@ -732,7 +739,11 @@ class HAClient:
         self.msg_id += 1
         await self.ws.send_json({"id": self.msg_id, "type": msg_type, **payload})
         while True:
-            msg = await self.ws.receive_json()
+            try:
+                msg = await self.ws.receive_json()
+            except (TypeError, ValueError):
+                # Verbindung geschlossen (z. B. Home Assistant startet neu) – statt "message 257 is not TEXT"
+                raise RuntimeError(HA_RESTARTING)
             if msg.get("id") == self.msg_id and msg.get("type") == "result":
                 if not msg.get("success"):
                     err = msg.get("error", {})
@@ -1724,7 +1735,8 @@ def option_field(f: dict) -> dict:
         out["art"] = "ja/nein"
     elif kind in ("integer", "float", "number"):
         out["art"] = "zahl"
-        out["int"] = kind == "integer" or (kind == "number" and float(cfg.get("step") or 1).is_integer() and cfg.get("step") != "any")
+        step = cfg.get("step") or 1
+        out["int"] = kind == "integer" or (kind == "number" and step != "any" and float(step).is_integer())
         out["min"] = cfg.get("min", f.get("valueMin")); out["max"] = cfg.get("max", f.get("valueMax"))
     elif kind in ("select", "multi_select"):
         raw = cfg.get("options") if sel else f.get("options")
@@ -2253,6 +2265,48 @@ async def build_dashboard(app, wish: str, refine: bool, dialog: list, can_ask: b
             **extra,
         }
         result = await backend(session, "POST", "/v1/generate", payload, timeout=300)
+        # Die KI fragt Daten an (Verlauf, Protokolle, YAML, Integrationen, Systemmeldungen, Zustände) – auch mehrere
+        # nacheinander. Erst danach wird die eigentliche Antwort ausgewertet, egal welche Art sie dann hat.
+        for _ in range(5):
+            kind = result.get("type")
+            if not can_automate or kind not in ("need_history", "need_logs", "need_yaml", "need_integrations", "need_diagnose", "need_states"):
+                break
+            if kind == "need_history":
+                # Verlaufsdaten gehen nur raus, wenn der Nutzer genau dieser Anfrage zugestimmt hat – jedes Mal neu.
+                req = result.get("request") or {}
+                if not allow_history:
+                    names = [by_id[e].get("attributes", {}).get("friendly_name", e) for e in req.get("entity_ids") or [] if e in by_id]
+                    return {"need_history_consent": {"names": names, "von": req.get("von"), "bis": req.get("bis")}, "status": result["status"]}
+                payload["history"] = await history_lines(session, req, by_id)
+            elif kind == "need_logs":
+                # Fehlerprotokolle sind eine eigene Art von Daten: nur mit Zustimmung, und geschwärzt.
+                if not (allow_logs or load_prefs().get("logs_allowed")):
+                    return {"need_logs_consent": True, "status": result["status"]}
+                payload["logs"] = await log_lines(session)
+            elif kind == "need_yaml":
+                # Konfigurationsdateien: eigene Art von Daten, nur mit Zustimmung, geschwärzt, nie secrets.yaml
+                if not (allow_yaml or load_prefs().get("yaml_allowed")):
+                    return {"need_yaml_consent": {"files": result.get("files") or ["configuration.yaml"]}, "status": result["status"]}
+                payload["yaml"] = await read_yaml(result.get("files") or [])
+            elif kind == "need_integrations":
+                # Namen und Einstellungen von Integrationen sind eine eigene Art von Daten: nur mit Zustimmung.
+                if not (allow_integrations or load_prefs().get("integrations_allowed")):
+                    return {"need_integrations_consent": {"query": str(result.get("query") or "")}, "status": result["status"]}
+                payload["integrations"] = await integration_lines(session, str(result.get("query") or ""))
+            elif kind == "need_diagnose":
+                # Systemmeldungen sind eine eigene Art von Daten: Sie gehen nur mit Zustimmung raus.
+                if not (allow_diagnose or load_prefs().get("diagnose_allowed")):
+                    return {"need_diagnose_consent": True, "status": result["status"]}
+                payload["diagnose"] = await system_messages(session)
+            else:
+                # Die KI braucht aktuelle Zustände. Die verlassen das Gerät nur mit Zustimmung des Nutzers –
+                # und nur für genau die Geräte, nach denen gefragt wurde.
+                wanted = [e for e in result.get("entities", []) if e in by_id][:30]
+                if not (allow_states or load_prefs().get("states_allowed")):
+                    return {"need_consent": [{"id": e, "name": by_id[e].get("attributes", {}).get("friendly_name", e)} for e in wanted],
+                            "status": result["status"]}
+                payload["states"] = {e: state_text(by_id[e]) for e in wanted}
+            result = await backend(session, "POST", "/v1/generate", payload, timeout=300)
         if result.get("type") == "rename":
             steps = await rename_items(session, result.get("items") or [])
             text = result.get("erklaerung") or "Erledigt."
@@ -2279,38 +2333,12 @@ async def build_dashboard(app, wish: str, refine: bool, dialog: list, can_ask: b
         if locked and result.get("type") not in ("objects", "actions", "answer", "need_states", "need_diagnose", "need_history", "question", "need_integrations", "integration_set", "need_logs", "repair", "need_yaml"):
             # Der Wunsch betrifft das Dashboard: Die Oberfläche fragt mit einer Karte nach der Freigabe.
             return {"need_dashboard_consent": {"id": dashboard, "label": label}, "status": result.get("status")}
-        if result.get("type") == "need_history" and can_automate:
-            # Verlaufsdaten gehen nur raus, wenn der Nutzer genau dieser Anfrage zugestimmt hat – jedes Mal neu.
-            req = result.get("request") or {}
-            if not allow_history:
-                names = [by_id[e].get("attributes", {}).get("friendly_name", e) for e in req.get("entity_ids") or [] if e in by_id]
-                return {"need_history_consent": {"names": names, "von": req.get("von"), "bis": req.get("bis")}, "status": result["status"]}
-            payload["history"] = await history_lines(session, req, by_id)
-            result = await backend(session, "POST", "/v1/generate", payload, timeout=300)
-        if result.get("type") == "need_logs" and can_automate:
-            # Fehlerprotokolle sind eine eigene Art von Daten: nur mit Zustimmung, und geschwärzt.
-            if not (allow_logs or load_prefs().get("logs_allowed")):
-                return {"need_logs_consent": True, "status": result["status"]}
-            payload["logs"] = await log_lines(session)
-            result = await backend(session, "POST", "/v1/generate", payload, timeout=300)
-        if result.get("type") == "need_yaml" and can_automate:
-            # Konfigurationsdateien: eigene Art von Daten, nur mit Zustimmung, geschwärzt, nie secrets.yaml
-            if not (allow_yaml or load_prefs().get("yaml_allowed")):
-                return {"need_yaml_consent": {"files": result.get("files") or ["configuration.yaml"]}, "status": result["status"]}
-            payload["yaml"] = await read_yaml(result.get("files") or [])
-            result = await backend(session, "POST", "/v1/generate", payload, timeout=300)
         if result.get("type") == "repair":
             plan = await repair_plan(session, result.get("steps") or [])
             keys = ("art", "eintrag", "domain", "issue_id", "option", "datei", "alt", "neu")
             return {"confirm_repair": {"steps": [{k: p[k] for k in keys if k in p} for p in plan],
                                        "show": [{"title": p["title"], "sub": p["sub"]} for p in plan]},
                     "erklaerung": result.get("erklaerung", ""), "status": result["status"]}
-        if result.get("type") == "need_integrations" and can_automate:
-            # Namen und Einstellungen von Integrationen sind eine eigene Art von Daten: nur mit Zustimmung.
-            if not (allow_integrations or load_prefs().get("integrations_allowed")):
-                return {"need_integrations_consent": {"query": str(result.get("query") or "")}, "status": result["status"]}
-            payload["integrations"] = await integration_lines(session, str(result.get("query") or ""))
-            result = await backend(session, "POST", "/v1/generate", payload, timeout=300)
         if result.get("type") == "integration_set":
             change = result.get("change") or {}
             plan = await integration_change(session, str(change.get("eintrag") or ""), change.get("werte") or {})
@@ -2320,21 +2348,6 @@ async def build_dashboard(app, wish: str, refine: bool, dialog: list, can_ask: b
                 return {"answer": text, "status": result["status"]}
             plan.pop("defaults")
             return {"confirm_integration": plan, "erklaerung": result.get("erklaerung", ""), "status": result["status"]}
-        if result.get("type") == "need_diagnose" and can_automate:
-            # Systemmeldungen sind eine eigene Art von Daten: Sie gehen nur mit Zustimmung raus.
-            if not (allow_diagnose or load_prefs().get("diagnose_allowed")):
-                return {"need_diagnose_consent": True, "status": result["status"]}
-            payload["diagnose"] = await system_messages(session)
-            result = await backend(session, "POST", "/v1/generate", payload, timeout=300)
-        if result.get("type") == "need_states" and can_automate:
-            # Die KI braucht aktuelle Zustände. Die verlassen das Gerät nur mit Zustimmung des Nutzers –
-            # und nur für genau die Geräte, nach denen gefragt wurde.
-            wanted = [e for e in result.get("entities", []) if e in by_id][:30]
-            if not (allow_states or load_prefs().get("states_allowed")):
-                return {"need_consent": [{"id": e, "name": by_id[e].get("attributes", {}).get("friendly_name", e)} for e in wanted],
-                        "status": result["status"]}
-            payload["states"] = {e: state_text(by_id[e]) for e in wanted}
-            result = await backend(session, "POST", "/v1/generate", payload, timeout=300)
         if result.get("type") == "objects":
             # Vorschlag anzeigen; angelegt wird erst, wenn der Nutzer bestätigt.
             return {"objects": result["objekte"], "erklaerung": result.get("erklaerung", ""), "status": result["status"]}

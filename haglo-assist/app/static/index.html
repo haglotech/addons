@@ -855,7 +855,7 @@ $("agree").addEventListener("change", (e) => { $("accept").disabled = !e.target.
 $("accept").addEventListener("click", async () => {
   $("accept").disabled = true;
   try {
-    await api("api/consent", { version: (trial && trial.terms_version) || "2026-10" });
+    await api("api/consent", { version: (trial && trial.terms_version) || "2026-10-14" });
     $("consent").classList.add("hidden");
     if (welcomed && !pending) dismiss();
     if (pending) generate(...pending);

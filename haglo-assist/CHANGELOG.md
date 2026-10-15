@@ -1,5 +1,12 @@
 # Änderungen
 
+## 0.23.1
+
+- Behoben: Folgte auf die Systemmeldungen ein Reparaturvorschlag, brach die App mit „'config'“ ab
+- Behoben: Bei manchen Integrationen brach das Lesen der Einstellungen ab
+- Während Home Assistant neu startet, erscheint jetzt ein verständlicher Hinweis statt einer technischen Meldung
+- Haglo Assist fragt bei sehr offenen Wünschen („mach was Schönes“) erst nach und öffnet Türschlösser per Aufschließen
+
 ## 0.23.0
 
 - Neu: Haglo Assist erledigt Reparaturen selbst – nach deiner Bestätigung: Hinweise ausblenden, die eingebaute Reparatur
