@@ -1,5 +1,9 @@
 # Änderungen
 
+## 0.23.7
+
+- Die kleine Zeile nach einer Zustimmung zeigt richtig an, ob einmal oder immer erlaubt wurde
+
 ## 0.23.6
 
 - Erteilte Zustimmungen schrumpfen im Gespräch zu einer kleinen Zeile („✓ Konfigurationsdateien – erlaubt“) statt als große Karte stehen zu bleiben

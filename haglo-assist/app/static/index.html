@@ -607,12 +607,15 @@ function addUser(text) {
 }
 
 // Eine beantwortete Karte bleibt stehen, lässt sich aber nicht mehr bedienen
+// Welcher Knopf zuletzt geklickt wurde – für die kleine Zeile nach einer Zustimmung („erlaubt“ / „immer erlaubt“)
+let lastClick = null;
+document.addEventListener("click", (e) => { lastClick = e.target.closest ? e.target.closest("button") : null; }, true);
 function freeze() {
   if (!cur) return;
   // Erteilte Zustimmungen schrumpfen zu einer kleinen Zeile – wie in einem Chat, die große Karte ist erledigt
   const step = cur.querySelector(".ask-q .step"), head = cur.querySelector(".ask-q h2");
   if (step && head && /Zustimmung/.test(step.textContent)) {
-    const how = /Immer/.test((document.activeElement || {}).textContent || "") ? "immer erlaubt" : "erlaubt";
+    const how = lastClick && /Immer/.test(lastClick.textContent || "") ? "immer erlaubt" : "erlaubt";
     cur.classList.add("tiny");
     cur.firstChild.innerHTML = `<span class="ok-dot">✓</span> ${esc(head.textContent.replace(/\?$/, "").replace(/ übertragen$/, ""))} – ${how}`;
     cur = null; return;
