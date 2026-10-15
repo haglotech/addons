@@ -353,6 +353,12 @@
     .crow { flex-wrap: nowrap; }
     .talk .long { display: none; }
     .tool { font-size: 12px; padding: 4px 9px; gap: 4px; }
+    /* Handy: Verlauf, Automationen, Versionen nur als Symbol – sonst passt die Zeile mit Schnell/Präzise nicht */
+    .tool { font-size: 0; gap: 0; padding: 7px 9px; }
+    .tool svg { width: 16px; height: 16px; }
+    .mode button { padding: 4px 9px; font-size: 12px; }
+    .crow { flex-wrap: wrap; }
+    .tools { flex-wrap: nowrap; margin-left: auto; }
     .tool svg { width: 13px; height: 13px; }
     footer { font-size: 10.5px; padding: 6px 12px 8px; }
     footer #meta, footer #meta + .fsep { display: none; }
@@ -412,9 +418,9 @@
           <button type="button" data-mode="schnell" title="Schnell: antwortet zügig, ideal zum Schalten und für kurze Fragen. Verbraucht wenig vom Kontingent.">Schnell</button>
           <button type="button" data-mode="praezise" title="Präzise: denkt gründlicher – für Dashboards, Reparaturen und Einstellungen. Verbraucht mehr vom Kontingent.">Präzise</button>
         </div>
-        <button type="button" class="tool" id="histLink"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 12a9 9 0 1 0 3-6.7"/><path d="M3 4v5h5"/><path d="M12 8v4l3 2"/></svg>Verlauf</button>
-        <button type="button" class="tool hidden" id="autosLink"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M13 2L4 14h7l-1 8 9-12h-7z"/></svg>Automationen</button>
-        <button type="button" class="tool" id="versionsLink"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3l9 5-9 5-9-5z"/><path d="M3 13l9 5 9-5"/></svg>Versionen</button>
+        <button type="button" class="tool" id="histLink" title="Verlauf" aria-label="Verlauf"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 12a9 9 0 1 0 3-6.7"/><path d="M3 4v5h5"/><path d="M12 8v4l3 2"/></svg>Verlauf</button>
+        <button type="button" class="tool hidden" id="autosLink" title="Automationen" aria-label="Automationen"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M13 2L4 14h7l-1 8 9-12h-7z"/></svg>Automationen</button>
+        <button type="button" class="tool" id="versionsLink" title="Versionen" aria-label="Versionen"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3l9 5-9 5-9-5z"/><path d="M3 13l9 5 9-5"/></svg>Versionen</button>
       </div>
     </div>
   </div>

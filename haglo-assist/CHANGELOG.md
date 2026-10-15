@@ -1,5 +1,9 @@
 # Änderungen
 
+## 0.26.1
+
+- Handy: Die Zeile unter dem Eingabefeld passt wieder in die Breite (Verlauf, Automationen und Versionen als Symbole)
+
 ## 0.26.0
 
 - Neu: Schalter „Schnell“ / „Präzise“ unter dem Eingabefeld. Schnell antwortet zügig und verbraucht wenig, Präzise denkt gründlicher
