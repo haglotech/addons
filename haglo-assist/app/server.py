@@ -38,7 +38,7 @@ SKIP_DOMAINS = {
     "zone", "persistent_notification", "assist_satellite", "ai_task",
 }
 
-ADDON_VERSION = "0.25.0"
+ADDON_VERSION = "0.26.0"
 MAX_VERSIONS = 30                      # so viele Dashboard-Versionen bleiben lokal gespeichert
 BAR_ENTITY = "input_text.haglo_assist"           # Eingabeleiste im Dashboard
 BAR_STATUS = "input_text.haglo_assist_status"    # Rückmeldung darunter
@@ -2393,7 +2393,7 @@ async def build_dashboard(app, wish: str, refine: bool, dialog: list, can_ask: b
                          "danach erledige ich das selbst."]),
                      "automations": await own_objects(session, raw)}
         payload = {
-            "wish": wish, "entities": entities,
+            "wish": wish, "entities": entities, "mode": load_prefs().get("mode", ""),
             "previous": None if rebuild or locked else (strip_bar(before) if own else before),
             "refine": not rebuild, "foreign": not rebuild and not built_by_haglo, "dialog": dialog, "can_ask": can_ask,
             "dashboard_locked": locked,
@@ -3103,6 +3103,8 @@ async def prefs_route(request):
             prefs[key] = body[key]
     if isinstance(body.get("dashboard"), str) and len(body["dashboard"]) <= 100:
         prefs["dashboard"] = body["dashboard"]
+    if body.get("mode") in ("schnell", "praezise"):
+        prefs["mode"] = body["mode"]          # Schnell oder Präzise – vom Kunden gewählt, gilt für alle Anfragen
     write_prefs(prefs)
     return web.json_response({"ok": True, "prefs": prefs})
 

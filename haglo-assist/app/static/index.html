@@ -79,6 +79,9 @@
   .bub .undo:hover { color: var(--text); }
   .bub .gone { font-size: 13px; color: var(--muted); }
   .msg.was .bub { opacity: .6; }
+  .mode { display: inline-flex; border: 1px solid var(--line); border-radius: 999px; padding: 2px; margin-right: 6px; }
+  .mode button { border: 0; background: transparent; padding: 4px 11px; border-radius: 999px; font: inherit; font-size: 12.5px; color: var(--muted); cursor: pointer; }
+  .mode button.on { background: var(--brand-soft); color: var(--brand); font-weight: 600; }
   .msg.tiny .bub { padding: 4px 12px; font-size: 13px; color: var(--muted); background: transparent; border: 1px dashed var(--line); box-shadow: none; }
   .msg.tiny .ok-dot { color: var(--brand); font-weight: 700; }
   .talk { display: inline-flex; align-items: center; gap: 7px; font: inherit; font-size: 12px; color: var(--muted); background: transparent;
@@ -405,6 +408,10 @@
     <div class="crow">
       <button type="button" class="talk hidden" id="talk" title="Neues Gespräch beginnen"><i></i><span id="talkText"></span></button>
       <div class="tools">
+        <div class="mode" role="group" aria-label="Antwortart">
+          <button type="button" data-mode="schnell" title="Schnell: antwortet zügig, ideal zum Schalten und für kurze Fragen. Verbraucht wenig vom Kontingent.">Schnell</button>
+          <button type="button" data-mode="praezise" title="Präzise: denkt gründlicher – für Dashboards, Reparaturen und Einstellungen. Verbraucht mehr vom Kontingent.">Präzise</button>
+        </div>
         <button type="button" class="tool" id="histLink"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 12a9 9 0 1 0 3-6.7"/><path d="M3 4v5h5"/><path d="M12 8v4l3 2"/></svg>Verlauf</button>
         <button type="button" class="tool hidden" id="autosLink"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M13 2L4 14h7l-1 8 9-12h-7z"/></svg>Automationen</button>
         <button type="button" class="tool" id="versionsLink"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3l9 5-9 5-9-5z"/><path d="M3 13l9 5 9-5"/></svg>Versionen</button>
@@ -519,11 +526,22 @@ let dialog = [], asking = null;  // Rückfragen der KI: bisherige Antworten und 
 async function api(path, body) {
   const r = await fetch(path, body ? { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) } : {});
   const data = await r.json().catch(() => ({ ok: false, error: "Ungültige Antwort" }));
-  if (data.prefs) ownerHidden = !!data.prefs.owner_hint_dismissed;
+  if (data.prefs) { ownerHidden = !!data.prefs.owner_hint_dismissed; showMode(data.prefs.mode); }
   if (data.trial) setTrial(data.trial);
   if (!data.ok) { const e = new Error(data.error || "Unbekannter Fehler"); e.code = data.error; throw e; }
   return data;
 }
+
+// Schnell / Präzise: Voreinstellung ist Präzise
+function showMode(m) {
+  const mode = m === "schnell" ? "schnell" : "praezise";
+  document.querySelectorAll(".mode [data-mode]").forEach((b) => b.classList.toggle("on", b.dataset.mode === mode));
+}
+document.querySelectorAll(".mode [data-mode]").forEach((b) => b.addEventListener("click", async () => {
+  showMode(b.dataset.mode);
+  try { await api("api/prefs", { mode: b.dataset.mode }); } catch (e) {}
+}));
+showMode();
 
 function setTrial(t) {
   trial = t;

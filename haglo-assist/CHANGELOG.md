@@ -1,5 +1,11 @@
 # Änderungen
 
+## 0.26.0
+
+- Neu: Schalter „Schnell“ / „Präzise“ unter dem Eingabefeld. Schnell antwortet zügig und verbraucht wenig, Präzise denkt gründlicher
+  (Voreinstellung)
+- Mehr Kontingent in allen Plänen
+
 ## 0.25.0
 
 - Neu: Haglo Assist legt auf Wunsch ein eigenes Dashboard mit Eintrag in der Seitenleiste an („eigener Reiter in der Seitenleiste nur mit Schaltern“) – „Rückgängig“ löscht es wieder
