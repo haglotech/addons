@@ -1,5 +1,5 @@
 name: Haglo Assist
-version: "0.22.1"
+version: "0.23.0"
 slug: haglo-assist
 description: KI-Assistent von Haglo – erstellt dein Dashboard auf Deutsch
 url: https://haglotech.com
@@ -14,6 +14,9 @@ panel_icon: mdi:head-lightbulb-outline
 panel_title: Haglo Assist
 homeassistant_api: true
 hassio_api: true
+# Konfigurationsdateien lesen und (nach Bestätigung, mit Sicherung) ändern – für Reparaturen
+map:
+  - homeassistant_config:rw
 services:
   - mqtt:want
 options:

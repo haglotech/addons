@@ -32,6 +32,8 @@ Einstellungen der betroffenen Integration übertragen – ebenfalls erst nach de
 Passwörter, Schlüssel oder andere Zugangsdaten.
 Bei Fehlern kann Haglo Assist die Fehlerprotokolle von Home Assistant lesen – nur nach deiner Zustimmung; Passwörter,
 Schlüssel, E-Mail-Adressen und öffentliche IP-Adressen werden vorher geschwärzt.
+Für Reparaturen kann Haglo Assist Konfigurationsdateien (z. B. configuration.yaml) lesen und nach deiner Bestätigung ändern –
+nur nach deiner Zustimmung, secrets.yaml nie, mit Sicherung und anschließender Prüfung der Konfiguration.
 
 [Datenschutz](https://haglotech.com/pages/haglo-assist-datenschutz) ·
 [Nutzungsbedingungen](https://haglotech.com/pages/haglo-assist-bedingungen)

@@ -38,7 +38,7 @@ SKIP_DOMAINS = {
     "zone", "persistent_notification", "assist_satellite", "ai_task",
 }
 
-ADDON_VERSION = "0.22.1"
+ADDON_VERSION = "0.23.0"
 MAX_VERSIONS = 30                      # so viele Dashboard-Versionen bleiben lokal gespeichert
 BAR_ENTITY = "input_text.haglo_assist"           # Eingabeleiste im Dashboard
 BAR_STATUS = "input_text.haglo_assist_status"    # Rückmeldung darunter
@@ -1413,9 +1413,13 @@ async def system_messages(session) -> list[str]:
                 title = titles.get(f"component.{i.get('domain')}.issues.{key}.title") or str(key).replace("_", " ")
                 for k, v in (i.get("translation_placeholders") or {}).items():
                     title = title.replace("{" + k + "}", str(v))
+                fix = ""
+                if i.get("is_fixable"):
+                    opts = await repair_options(session, i.get("domain"), i.get("issue_id"))
+                    fix = ", behebbar" + (f" mit den Optionen {', '.join(opts)}" if opts else "")
                 lines.append(f"Reparatur ({ {'error': 'Fehler', 'critical': 'kritisch'}.get(i.get('severity'), 'Hinweis') }, "
-                             f"Integration {i.get('domain')}, seit {str(i.get('created') or '')[:10]}"
-                             f"{', lässt sich per Klick beheben' if i.get('is_fixable') else ''}): {title}"[:300])
+                             f"Integration {i.get('domain')}, seit {str(i.get('created') or '')[:10]}, "
+                             f"Kennung domain={i.get('domain')} issue_id={i.get('issue_id')}{fix}): {title}"[:400])
     except Exception as e:
         lines.append(f"Reparaturen konnten nicht gelesen werden ({type(e).__name__}).")
     try:
@@ -1486,6 +1490,127 @@ async def log_lines(session) -> list[str]:
     return [redact(l) for l in lines][:60]
 
 
+# ---------------------------------------------------------------- Reparaturen von Home Assistant und YAML
+FIX = "/repairs/issues/fix"
+
+
+async def repair_options(session, domain: str, issue_id: str) -> list[str]:
+    """Welche Wahl die eingebaute Reparatur anbietet (z. B. Netzwerkspeicher neu verbinden / entfernen).
+    Öffnet den Reparatur-Dialog nur zum Lesen und schließt ihn sofort wieder."""
+    try:
+        status, step = await core(session, "POST", FIX, {"handler": domain, "issue_id": issue_id})
+    except Exception:
+        return []
+    step = step if isinstance(step, dict) else {}
+    if step.get("flow_id"):
+        await core(session, "DELETE", f"{FIX}/{step['flow_id']}")
+    if status == 200 and step.get("type") == "menu":
+        opts = step.get("menu_options") or []
+        return list(opts.keys()) if isinstance(opts, dict) else [str(o) for o in opts]
+    return []
+
+
+async def repair_issue(session, domain: str, issue_id: str) -> dict | None:
+    async with HAClient(session) as ha:
+        issues = (await ha.call("repairs/list_issues") or {}).get("issues", [])
+    return next((i for i in issues if i.get("domain") == domain and i.get("issue_id") == issue_id), None)
+
+
+async def repair_fix(session, domain: str, issue_id: str, option: str = "") -> str:
+    """Führt die eingebaute Reparatur aus: Menüpunkt wählen, Bestätigungen absenden. Fragt der Dialog nach
+    Eingaben, die die App nicht kennt, wird er abgebrochen – dann ist nichts geändert."""
+    status, step = await core(session, "POST", FIX, {"handler": domain, "issue_id": issue_id})
+    step = step if isinstance(step, dict) else {}
+    for _ in range(5):
+        kind = step.get("type")
+        if kind == "create_entry":
+            return "erledigt"
+        if kind == "abort":
+            return f"abgebrochen: {step.get('reason') or 'ohne Grund'}"
+        if status != 200 or not step.get("flow_id"):
+            raise RuntimeError("Die Reparatur ließ sich nicht starten.")
+        fid = step["flow_id"]
+        if kind == "menu":
+            opts = step.get("menu_options") or []
+            opts = list(opts.keys()) if isinstance(opts, dict) else [str(o) for o in opts]
+            pick = option if option in opts else (opts[0] if len(opts) == 1 else "")
+            if not pick:
+                await core(session, "DELETE", f"{FIX}/{fid}")
+                raise RuntimeError(f"Die Reparatur bietet mehrere Wege an ({', '.join(opts)}) – bitte sag, welcher.")
+            status, step = await core(session, "POST", f"{FIX}/{fid}", {"next_step_id": pick})
+        elif kind == "form":
+            # nur reine Bestätigungen: Felder ohne Vorgabe kann die App nicht ausfüllen
+            missing = [f.get("name") for f in step.get("data_schema") or [] if f.get("required") and "default" not in f]
+            if missing:
+                await core(session, "DELETE", f"{FIX}/{fid}")
+                raise RuntimeError("Die Reparatur braucht Angaben, die nur du machen kannst – bitte direkt unter Reparaturen erledigen.")
+            status, step = await core(session, "POST", f"{FIX}/{fid}", {})
+        else:
+            await core(session, "DELETE", f"{FIX}/{fid}")
+            raise RuntimeError("Die Reparatur lief anders als erwartet. Es wurde nichts geändert.")
+        step = step if isinstance(step, dict) else {}
+    raise RuntimeError("Die Reparatur hat zu viele Schritte.")
+
+
+# Konfigurationsdateien: Haglo Assist sieht /homeassistant (Zuordnung homeassistant_config). Gelesen wird nur nach
+# Zustimmung, secrets.yaml nie; Zugangsdaten werden geschwärzt. Geändert wird nur ein exakt gefundener Ausschnitt,
+# mit Sicherung in /data und Prüfung der Konfiguration – schlägt die fehl, wird der alte Stand zurückgeschrieben.
+HA_CONFIG = Path("/homeassistant")
+YAML_BACKUPS = Path("/data/yaml-backups")
+YAML_SECRET = re.compile(r"^(\s*-?\s*[\w-]*(?:password|passwort|token|api_key|apikey|secret|client_id|pin)[\w-]*\s*:\s*)(?!!secret)(\S.*)$", re.I | re.M)
+
+
+def yaml_path(name: str) -> Path | None:
+    name = str(name).strip().lstrip("/")
+    if not re.fullmatch(r"[\w\-./]+\.ya?ml", name) or ".." in name or name.split("/")[-1] == "secrets.yaml" \
+            or any(part.startswith(".") for part in name.split("/")):
+        return None
+    p = (HA_CONFIG / name).resolve()
+    return p if str(p).startswith(str(HA_CONFIG.resolve()) + "/") else None
+
+
+def yaml_redact(text: str) -> str:
+    return redact(YAML_SECRET.sub(r"\1[geschwärzt]", text))
+
+
+async def read_yaml(names: list[str]) -> list[str]:
+    """configuration.yaml, die dort eingebundenen Dateien und die gewünschten – geschwärzt, zusammen höchstens 40.000 Zeichen."""
+    want = ["configuration.yaml"]
+    main = yaml_path("configuration.yaml")
+    if main and main.exists():
+        want += re.findall(r"!include\s+([\w\-./]+\.ya?ml)", main.read_text(errors="replace"))
+    want += [n for n in names if isinstance(n, str)]
+    out, used, seen = [], 0, set()
+    for name in want:
+        p = yaml_path(name)
+        if not p or p in seen:
+            continue
+        seen.add(p)
+        if not p.exists():
+            out.append(f"Datei {name}: gibt es nicht")
+            continue
+        text = yaml_redact(p.read_text(errors="replace"))
+        if used + len(text) > 40000:
+            out.append(f"Datei {name}: zu groß, nicht mitgeschickt")
+            continue
+        used += len(text)
+        out.append(f"Datei {name}:\n{text}")
+    return out
+
+
+def yaml_check(step: dict) -> tuple[Path, str]:
+    p = yaml_path(step.get("datei", ""))
+    if not p or not p.exists():
+        raise RuntimeError(f"Die Datei „{step.get('datei')}“ darf Haglo Assist nicht ändern oder es gibt sie nicht.")
+    alt, neu = step.get("alt") or "", step.get("neu") or ""
+    if "[geschwärzt]" in alt + neu or "[Schlüssel]" in alt + neu or "[E-Mail]" in alt + neu:
+        raise RuntimeError("Die Änderung berührt geschwärzte Zugangsdaten – das macht Haglo Assist nicht.")
+    text = p.read_text(errors="replace")
+    if text.count(alt) != 1:
+        raise RuntimeError(f"Die zu ändernde Stelle in „{step.get('datei')}“ habe ich nicht eindeutig gefunden. Es wurde nichts geändert.")
+    return p, text
+
+
 async def entry_by_id(session, entry_id: str) -> dict | None:
     status, entries = await core(session, "GET", "/config/config_entries/entry")
     return next((e for e in entries if isinstance(e, dict) and e.get("entry_id") == entry_id), None) if isinstance(entries, list) else None
@@ -1494,10 +1619,28 @@ async def entry_by_id(session, entry_id: str) -> dict | None:
 async def repair_plan(session, steps: list[dict]) -> list[dict]:
     """Prüft die vorgeschlagenen Schritte vor Ort und beschreibt sie für die Bestätigung (ändert nichts)."""
     out = []
-    for st in steps[:5]:
+    for st in steps[:8]:
         art = st.get("art")
         if art == "home_assistant_neu_starten":
             out.append({"art": art, "title": "Home Assistant neu starten", "sub": "Die Konfiguration wird vorher geprüft. Dauert 1–3 Minuten."})
+            continue
+        if art in ("reparatur_ignorieren", "reparatur_beheben"):
+            issue = await repair_issue(session, str(st.get("domain")), str(st.get("issue_id")))
+            if not issue:
+                raise RuntimeError("Diesen Reparaturhinweis gibt es nicht mehr. Es wurde nichts geändert.")
+            name = str(issue.get("translation_key") or issue.get("issue_id")).replace("_", " ")
+            out.append({"art": art, "domain": issue["domain"], "issue_id": issue["issue_id"], "option": str(st.get("option") or ""),
+                        "title": ("Hinweis ausblenden: " if art == "reparatur_ignorieren" else "Reparatur ausführen: ") + f"{name} ({issue['domain']})",
+                        "sub": (f"Weg: {str(st.get('option')).replace('_', ' ')}" if st.get("option") else
+                                "Home Assistant führt seine eingebaute Reparatur aus") if art == "reparatur_beheben" else "Der Hinweis erscheint nicht mehr unter Reparaturen"})
+            continue
+        if art == "yaml_aendern":
+            yaml_check(st)
+            alt, neu = str(st.get("alt") or "").strip(), str(st.get("neu") or "").strip()
+            short = lambda t: (t.splitlines()[0][:70] + (" …" if len(t.splitlines()) > 1 or len(t) > 70 else "")) if t else "–"
+            out.append({"art": art, "datei": st["datei"], "alt": st["alt"], "neu": st.get("neu") or "",
+                        "title": f"{st['datei']} ändern" + (" (Eintrag entfernen)" if not neu else ""),
+                        "sub": f"bisher: {short(alt)} → neu: {short(neu) if neu else 'entfernt'} · wird vorher gesichert und danach geprüft"})
             continue
         e = await entry_by_id(session, str(st.get("eintrag") or ""))
         if not e or art not in ("integration_neu_laden", "integration_einschalten"):
@@ -1517,6 +1660,29 @@ async def repair_apply(session, steps: list[dict]) -> list[dict]:
             status, res = await core(session, "POST", f"/config/config_entries/entry/{st['eintrag']}/reload")
             ok = status == 200
             sub = ("neu geladen" + (" – Home Assistant braucht danach einen Neustart" if isinstance(res, dict) and res.get("require_restart") else "")) if ok else f"fehlgeschlagen ({status})"
+        elif st["art"] == "reparatur_ignorieren":
+            async with HAClient(session) as ha:
+                await ha.call("repairs/ignore_issue", domain=st["domain"], issue_id=st["issue_id"], ignore=True)
+            ok, sub = True, "ausgeblendet"
+        elif st["art"] == "reparatur_beheben":
+            try:
+                sub = await repair_fix(session, st["domain"], st["issue_id"], st.get("option", ""))
+                ok = sub == "erledigt"
+            except RuntimeError as e:
+                ok, sub = False, str(e)
+        elif st["art"] == "yaml_aendern":
+            p, text = yaml_check(st)
+            YAML_BACKUPS.mkdir(parents=True, exist_ok=True)
+            backup = YAML_BACKUPS / f"{p.name}.{time.strftime('%Y%m%d-%H%M%S')}"
+            backup.write_text(text)
+            p.write_text(text.replace(st["alt"], st.get("neu") or "", 1))
+            status, res = await core(session, "POST", "/config/core/check_config")
+            if status == 200 and isinstance(res, dict) and res.get("result") == "valid":
+                ok, sub = True, f"geändert, Konfiguration geprüft: in Ordnung (Sicherung: {backup.name})"
+            else:
+                p.write_text(text)       # alter Stand zurück
+                errors = redact(str((res or {}).get("errors") or "unbekannter Fehler"))[:240] if isinstance(res, dict) else ""
+                ok, sub = False, f"nicht übernommen – die Prüfung meldete Fehler, der alte Stand ist wiederhergestellt: {errors}"
         elif st["art"] == "integration_einschalten":
             async with HAClient(session) as ha:
                 res = await ha.call("config_entries/disable", entry_id=st["eintrag"], disabled_by=None)
@@ -1530,8 +1696,9 @@ async def repair_apply(session, steps: list[dict]) -> list[dict]:
                 break
             status, _ = await core(session, "POST", "/services/homeassistant/restart", {})
             ok, sub = status in (200, 201, 502, 504), "Neustart läuft – in 1–3 Minuten ist alles wieder da"
-        done.append({"icon": "action", "title": st["title"], "sub": sub,
-                     "url": f"/config/integrations/integration/{st['domain']}" if st.get("domain") else None})
+        url = "/config/repairs" if st["art"].startswith("reparatur_") else "/config/logs" if st["art"] == "yaml_aendern" \
+            else f"/config/integrations/integration/{st['domain']}" if st.get("domain") else None
+        done.append({"icon": "action", "title": st["title"], "sub": sub, "url": url})
         if not ok:
             break
     return done
@@ -2042,7 +2209,7 @@ async def ensure_host_entry(session, domain: str, host: str) -> tuple[bool, str]
 async def build_dashboard(app, wish: str, refine: bool, dialog: list, can_ask: bool,
                           dashboard: str | None = DASHBOARD_PATH, can_automate: bool = False, allow_states: bool = False,
                           allow_diagnose: bool = False, allow_history: bool = False,
-                          allow_integrations: bool = False, allow_logs: bool = False) -> dict:
+                          allow_integrations: bool = False, allow_logs: bool = False, allow_yaml: bool = False) -> dict:
     """Holt das Dashboard vom Backend und speichert es. Gibt entweder eine Rückfrage
     ({"question": …}) oder das Ergebnis zurück. Wirft BackendError bei Backend-Fehlern.
 
@@ -2075,7 +2242,7 @@ async def build_dashboard(app, wish: str, refine: bool, dialog: list, can_ask: b
         if can_automate:
             raw = await all_states(session)
             by_id = {x["entity_id"]: x for x in raw}
-            extra = {"kinds": KINDS, "can_control": True, "can_add_device": True, "can_rename": True, "can_diagnose": True, "can_history": True, "can_integrations": True, "can_logs": True,
+            extra = {"kinds": KINDS, "can_control": True, "can_add_device": True, "can_rename": True, "can_diagnose": True, "can_history": True, "can_integrations": True, "can_logs": True, "can_yaml": HA_CONFIG.exists(),
                      "context": recent_context(), "hints": await address_hints(session, wish),
                      "automations": await own_objects(session, raw)}
         payload = {
@@ -2109,7 +2276,7 @@ async def build_dashboard(app, wish: str, refine: bool, dialog: list, can_ask: b
             want = result.get("device") or {}
             info = await probe_device(session, str(want.get("adresse") or ""))
             return {"confirm_device": {**info, "wanted_name": str(want.get("name") or "")[:40]}, "status": result["status"]}
-        if locked and result.get("type") not in ("objects", "actions", "answer", "need_states", "need_diagnose", "need_history", "question", "need_integrations", "integration_set", "need_logs", "repair"):
+        if locked and result.get("type") not in ("objects", "actions", "answer", "need_states", "need_diagnose", "need_history", "question", "need_integrations", "integration_set", "need_logs", "repair", "need_yaml"):
             # Der Wunsch betrifft das Dashboard: Die Oberfläche fragt mit einer Karte nach der Freigabe.
             return {"need_dashboard_consent": {"id": dashboard, "label": label}, "status": result.get("status")}
         if result.get("type") == "need_history" and can_automate:
@@ -2126,9 +2293,16 @@ async def build_dashboard(app, wish: str, refine: bool, dialog: list, can_ask: b
                 return {"need_logs_consent": True, "status": result["status"]}
             payload["logs"] = await log_lines(session)
             result = await backend(session, "POST", "/v1/generate", payload, timeout=300)
+        if result.get("type") == "need_yaml" and can_automate:
+            # Konfigurationsdateien: eigene Art von Daten, nur mit Zustimmung, geschwärzt, nie secrets.yaml
+            if not (allow_yaml or load_prefs().get("yaml_allowed")):
+                return {"need_yaml_consent": {"files": result.get("files") or ["configuration.yaml"]}, "status": result["status"]}
+            payload["yaml"] = await read_yaml(result.get("files") or [])
+            result = await backend(session, "POST", "/v1/generate", payload, timeout=300)
         if result.get("type") == "repair":
             plan = await repair_plan(session, result.get("steps") or [])
-            return {"confirm_repair": {"steps": [{"art": p["art"], **({"eintrag": p["eintrag"]} if p.get("eintrag") else {})} for p in plan],
+            keys = ("art", "eintrag", "domain", "issue_id", "option", "datei", "alt", "neu")
+            return {"confirm_repair": {"steps": [{k: p[k] for k in keys if k in p} for p in plan],
                                        "show": [{"title": p["title"], "sub": p["sub"]} for p in plan]},
                     "erklaerung": result.get("erklaerung", ""), "status": result["status"]}
         if result.get("type") == "need_integrations" and can_automate:
@@ -2337,6 +2511,7 @@ async def generate(request):
                                        allow_diagnose=bool(body.get("allow_diagnose")),
                                        allow_integrations=bool(body.get("allow_integrations")),
                                        allow_logs=bool(body.get("allow_logs")),
+                                       allow_yaml=bool(body.get("allow_yaml")),
                                        allow_history=bool(body.get("allow_history")))
     except BackendError as e:
         return backend_failure(e)
@@ -2344,7 +2519,7 @@ async def generate(request):
         return web.json_response({"ok": False, "error": str(e)}, status=500)
     finally:
         request.app["job"] = None
-    for key in ("objects", "confirm_actions", "confirm_device", "need_consent", "need_history_consent", "need_diagnose_consent", "need_integrations_consent", "confirm_integration", "need_logs_consent", "confirm_repair", "need_dashboard_consent", "done", "answer"):
+    for key in ("objects", "confirm_actions", "confirm_device", "need_consent", "need_history_consent", "need_diagnose_consent", "need_integrations_consent", "confirm_integration", "need_logs_consent", "confirm_repair", "need_yaml_consent", "need_dashboard_consent", "done", "answer"):
         if key in result:
             return web.json_response({"ok": True, key: result[key], "erklaerung": result.get("erklaerung", ""),
                                       "trial": trial_info(result["status"]) if result.get("status") else trial})
@@ -2741,7 +2916,7 @@ async def prefs_route(request):
     if body.get("owner_hint_dismissed") is True:
         prefs["owner_hint_dismissed"] = True
     # Zustimmungen: Zustände für Fragen übertragen; eigene Automationen bearbeiten (und dafür übertragen)
-    for key in ("states_allowed", "foreign_automations", "diagnose_allowed", "integrations_allowed", "logs_allowed"):
+    for key in ("states_allowed", "foreign_automations", "diagnose_allowed", "integrations_allowed", "logs_allowed", "yaml_allowed"):
         if isinstance(body.get(key), bool):
             prefs[key] = body[key]
     if isinstance(body.get("dashboard"), str) and len(body["dashboard"]) <= 100:

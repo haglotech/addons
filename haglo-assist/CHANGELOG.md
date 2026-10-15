@@ -1,5 +1,13 @@
 # Änderungen
 
+## 0.23.0
+
+- Neu: Haglo Assist erledigt Reparaturen selbst – nach deiner Bestätigung: Hinweise ausblenden, die eingebaute Reparatur
+  von Home Assistant ausführen (z. B. Netzwerkspeicher neu verbinden oder entfernen) und Einträge in der configuration.yaml
+  anpassen oder entfernen. Vor jeder YAML-Änderung wird gesichert und danach die Konfiguration geprüft; bei Fehlern wird
+  automatisch der alte Stand wiederhergestellt
+- Die App braucht dafür Zugriff auf den Konfigurationsordner von Home Assistant; die Datei secrets.yaml liest sie nie
+
 ## 0.22.1
 
 - Haglo Assist weiß jetzt, aus welcher Integration ein Gerät stammt – und kann z. B. sagen, ob met.no doppelt eingerichtet ist

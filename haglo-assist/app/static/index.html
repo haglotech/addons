@@ -877,13 +877,14 @@ async function generate(wish, label, keepDialog, allowStates) {
   let i = 0; typing(steps[0]);
   const t = setInterval(() => { i = Math.min(i + 1, steps.length - 1); if ($("loadText")) $("loadText").textContent = steps[i]; }, 7000);
   try {
-    const r = await api("api/generate", { wish, dialog, allow_states: !!granted.states, allow_diagnose: !!granted.diagnose, allow_history: !!granted.history, allow_integrations: !!granted.integrations, allow_logs: !!granted.logs });
+    const r = await api("api/generate", { wish, dialog, allow_states: !!granted.states, allow_diagnose: !!granted.diagnose, allow_history: !!granted.history, allow_integrations: !!granted.integrations, allow_logs: !!granted.logs, allow_yaml: !!granted.yaml });
     if (r.question) { showQuestion(wish, label, r.question); return; }
     dialog = []; mem.set("draft", null);
     if (r.objects) { showAutomations(wish, r.erklaerung, r.objects); return; }
     if (r.need_consent) { showStateConsent(wish, label, r.need_consent); return; }
     if (r.need_diagnose_consent) { showDiagnoseConsent(wish, label); return; }
     if (r.need_logs_consent) { showLogsConsent(wish, label); return; }
+    if (r.need_yaml_consent) { showYamlConsent(wish, label, r.need_yaml_consent.files || []); return; }
     if (r.confirm_repair) { showConfirmRepair(wish, r.erklaerung, r.confirm_repair); return; }
     if (r.need_integrations_consent) { showIntegrationsConsent(wish, label, r.need_integrations_consent.query); return; }
     if (r.confirm_integration) { showConfirmIntegration(wish, r.erklaerung, r.confirm_integration); return; }
@@ -1188,6 +1189,17 @@ function showLogsConsent(wish, label) {
   $("lgNo").onclick = () => dismiss();
   $("lgOnce").onclick = () => generate(wish, label, false, { logs: true });
   $("lgAlways").onclick = async () => { try { await api("api/prefs", { logs_allowed: true }); } catch (e) {} generate(wish, label, false, { logs: true }); };
+}
+function showYamlConsent(wish, label, files) {
+  showResult(`<div class="ask-q"><p class="step">Deine Zustimmung ist nötig</p><h2>Konfigurationsdateien übertragen?</h2>
+    <p style="color:var(--text)">Für diese Reparatur muss Haglo Assist <b>${esc(files.join(", ") || "configuration.yaml")}</b> und die dort eingebundenen Dateien lesen.
+      Sie gehen an den Haglo-Server und unseren KI-Dienstleister Anthropic (USA). Die Datei secrets.yaml wird nie gelesen; Passwörter, Schlüssel,
+      E-Mail-Adressen und öffentliche IP-Adressen werden vorher geschwärzt. Geändert wird erst, wenn du die Änderung danach bestätigst – mit Sicherung und Prüfung.</p>
+    <div class="actions" style="justify-content:flex-start"><button class="primary" id="ymOnce">Einmal erlauben</button>
+      <button class="btn2" id="ymAlways">Immer erlauben</button><button class="btn2" id="ymNo">Abbrechen</button></div></div>`);
+  $("ymNo").onclick = () => dismiss();
+  $("ymOnce").onclick = () => generate(wish, label, false, { yaml: true });
+  $("ymAlways").onclick = async () => { try { await api("api/prefs", { yaml_allowed: true }); } catch (e) {} generate(wish, label, false, { yaml: true }); };
 }
 // Reparaturschritte anzeigen – ausgeführt wird erst nach „Ja, reparieren“
 function showConfirmRepair(wish, erklaerung, plan) {
