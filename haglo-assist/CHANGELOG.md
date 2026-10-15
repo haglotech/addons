@@ -1,5 +1,10 @@
 # Änderungen
 
+## 0.25.0
+
+- Neu: Haglo Assist legt auf Wunsch ein eigenes Dashboard mit Eintrag in der Seitenleiste an („eigener Reiter in der Seitenleiste nur mit Schaltern“) – „Rückgängig“ löscht es wieder
+- Behoben: Eine neue Ansicht auf der Startseite wurde als „Reiter in der Seitenleiste“ bezeichnet
+
 ## 0.24.0
 
 - Neu: Haglo Assist spielt Updates ein („mach alle Updates“) – nach deiner Bestätigung, wo möglich mit Sicherung vorher,

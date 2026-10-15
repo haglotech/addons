@@ -755,7 +755,7 @@ const STEP_ICON = {
 };
 
 function historyMsg(h) {
-  const title = h.kind === "dashboard" && h.target ? (h.target === "Startseite" ? "Startseite geändert" : `„${h.target}“ geändert`) : KIND[h.kind], undone = h.undone ? `<div class="gone">↩ Rückgängig gemacht</div>` : "";
+  const title = h.kind === "dashboard" && h.target ? (h.created ? `Neues Dashboard „${h.target}“ in der Seitenleiste` : h.target === "Startseite" ? "Startseite geändert" : `„${h.target}“ geändert`) : KIND[h.kind], undone = h.undone ? `<div class="gone">↩ Rückgängig gemacht</div>` : "";
   const body = h.kind === "answer" ? md(h.text)
     : `${title ? `<h2>${h.undone ? "" : "✓ "}${esc(title)}</h2>` : ""}${h.text ? md(h.text) : ""}`;
   const open = h.url && !h.undone ? `<a class="btn2" href="${esc(h.url)}" target="_top">Öffnen</a>` : "";

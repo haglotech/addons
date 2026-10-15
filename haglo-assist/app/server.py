@@ -38,7 +38,7 @@ SKIP_DOMAINS = {
     "zone", "persistent_notification", "assist_satellite", "ai_task",
 }
 
-ADDON_VERSION = "0.24.0"
+ADDON_VERSION = "0.25.0"
 MAX_VERSIONS = 30                      # so viele Dashboard-Versionen bleiben lokal gespeichert
 BAR_ENTITY = "input_text.haglo_assist"           # Eingabeleiste im Dashboard
 BAR_STATUS = "input_text.haglo_assist_status"    # Rückmeldung darunter
@@ -855,6 +855,40 @@ async def ensure_dashboard(ha: HAClient):
     )
 
 
+async def create_sidebar_dashboard(ha: "HAClient", wish: str, result: dict) -> dict:
+    """Legt ein neues Dashboard mit eigenem Eintrag in der Seitenleiste an und füllt es."""
+    new = result["neues_dashboard"]
+    title = new["titel"]
+    base = "haglo-" + (re.sub(r"[^a-z0-9]+", "-", title.lower().replace("ä", "ae").replace("ö", "oe").replace("ü", "ue").replace("ß", "ss")).strip("-") or "dashboard")
+    taken = {d.get("url_path") for d in await ha.call("lovelace/dashboards/list")} | set((await ha.call("get_panels")).keys())
+    url_path, n = base[:40], 2
+    while url_path in taken:
+        url_path, n = f"{base[:36]}-{n}", n + 1
+    removed: list[str] = []
+    config = clean_config(result["config"], {s["entity_id"] for s in await ha.call("get_states")}, removed)
+    if not config.get("views"):
+        raise RuntimeError("Das Ergebnis war leer. Es wurde nichts angelegt.")
+    config.setdefault("title", title)
+    item = await ha.call("lovelace/dashboards/create", url_path=url_path, title=title, icon=new.get("icon") or "mdi:view-dashboard",
+                         mode="storage", require_admin=False, show_in_sidebar=True)
+    try:
+        await ha.call("lovelace/config/save", url_path=url_path, config=config)
+    except Exception:
+        await ha.call("lovelace/dashboards/delete", dashboard_id=item["id"])   # nichts Halbes stehen lassen
+        raise
+    # von Haglo Assist gebaut: darf künftig ohne Rückfrage weiterbearbeitet werden
+    prefs = load_prefs()
+    prefs["built"] = sorted(set(prefs.get("built", [])) | {url_path})
+    write_prefs(prefs)
+    ALLOWED_FILE.parent.mkdir(parents=True, exist_ok=True)
+    ALLOWED_FILE.write_text(json.dumps(sorted(allowed_dashboards() | {url_path})))
+    text = (result.get("erklaerung", "") + f" Du findest es links in der Seitenleiste unter „{title}“.").strip()
+    add_history("dashboard", wish, text, url=f"/{url_path}", target=title, created=True,
+                undo={"type": "new_dashboard", "id": item["id"], "url_path": url_path})
+    return {"erklaerung": text, "config": config, "removed": sorted(set(removed)), "backup": None,
+            "usage": result.get("usage", {}), "status": result["status"], "dashboard_url": f"/{url_path}"}
+
+
 async def current_config(ha: HAClient, path: str | None = DASHBOARD_PATH):
     """Konfiguration eines Dashboards; path=None ist die Standard-Übersicht."""
     try:
@@ -1145,6 +1179,8 @@ def can_undo(entry: dict, reg: dict) -> bool:
         return False
     if undo["type"] == "version":
         return (BACKUP_DIR / str(undo["id"])).exists()
+    if undo["type"] == "new_dashboard":
+        return True
     return any((i.get("backup") and (AUTO_BACKUP_DIR / i["backup"]).exists()) or i["id"] in reg for i in undo.get("items", []))
 
 
@@ -2429,7 +2465,7 @@ async def build_dashboard(app, wish: str, refine: bool, dialog: list, can_ask: b
             want = result.get("device") or {}
             info = await probe_device(session, str(want.get("adresse") or ""))
             return {"confirm_device": {**info, "wanted_name": str(want.get("name") or "")[:40]}, "status": result["status"]}
-        if locked and result.get("type") not in ("objects", "actions", "answer", "need_states", "need_diagnose", "need_history", "question", "need_integrations", "integration_set", "need_logs", "repair", "need_yaml"):
+        if locked and not result.get("neues_dashboard") and result.get("type") not in ("objects", "actions", "answer", "need_states", "need_diagnose", "need_history", "question", "need_integrations", "integration_set", "need_logs", "repair", "need_yaml"):
             # Der Wunsch betrifft das Dashboard: Die Oberfläche fragt mit einer Karte nach der Freigabe.
             return {"need_dashboard_consent": {"id": dashboard, "label": label}, "status": result.get("status")}
         if result.get("type") == "repair":
@@ -2469,6 +2505,10 @@ async def build_dashboard(app, wish: str, refine: bool, dialog: list, can_ask: b
             # Die KI braucht noch eine Angabe: Rückfrage anzeigen, nichts speichern.
             return {"question": {"frage": result["frage"], "optionen": result["optionen"],
                                  "mehrfach": bool(result.get("mehrfach"))}, "status": result["status"]}
+
+        if result.get("neues_dashboard"):
+            # Eigenes Dashboard mit Eintrag in der Seitenleiste – das bisherige bleibt unangetastet
+            return await create_sidebar_dashboard(ha, wish, result)
 
         removed: list[str] = []
         if own:
@@ -2728,6 +2768,14 @@ async def undo_history(request):
         if undo["type"] == "version":
             # keep=True: Der jetzige Stand wird vorher gesichert, das Rückgängig lässt sich also selbst zurücknehmen
             await restore_version(request.app, BACKUP_DIR / undo["id"], keep=True, log=False)
+        elif undo["type"] == "new_dashboard":
+            # neu angelegtes Dashboard wieder löschen (verschwindet aus der Seitenleiste)
+            async with HAClient(session) as ha:
+                try:
+                    await ha.call("lovelace/dashboards/delete", dashboard_id=undo["id"])
+                except HAError as e:
+                    if "not_found" not in str(e):
+                        raise
         else:
             for item in undo["items"]:
                 if item.get("backup") and (AUTO_BACKUP_DIR / item["backup"]).exists():
