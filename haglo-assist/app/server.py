@@ -1164,12 +1164,29 @@ def save_history(items: list) -> None:
     HISTORY_FILE.write_text(json.dumps(items[-MAX_HISTORY:], ensure_ascii=False))
 
 
+ROUTE: dict | None = None      # Weg der gerade laufenden Anfrage (für die Anzeige im Verlauf)
+
+# Woran Auto erkennt, dass ein Wunsch Claude Präzise braucht
+COMPLEX = re.compile(
+    r"dashboard|übersicht|seite|reiter|karte|kachel|layout|automati|wenn .+ (dann|soll|sollen)|immer wenn|sobald|"
+    r"jeden (tag|morgen|abend)|am meisten|welche geräte|"
+    r"zeitplan|um \d{1,2}(:\d\d)? ?uhr|warum|wieso|weshalb|erklär|fehler|repar|kaputt|geht nicht|funktioniert nicht|"
+    r"einricht|integration|hinzufüg|verbind|update|aktualisier|umbenenn|aufräum|optimier|vorschl|plan|analys|"
+    r"verbrauch der letzten|verlauf|statistik|vergleich|yaml|konfigur|skript (bau|erstell|schreib)|bau|erstell", re.I)
+
+
+def is_complex(wish: str) -> bool:
+    return len(wish) > 120 or len(wish.split()) > 18 or bool(COMPLEX.search(wish))
+
+
 def add_history(kind: str, wish: str, text: str, **extra) -> str:
     """Merkt sich, was gemacht wurde – das ist der Gesprächsverlauf in der Oberfläche. Bleibt auf dem
     Gerät. `undo` beschreibt, wie sich der Eintrag zurücknehmen lässt:
     {"type": "version", "id": <Datei>} oder {"type": "objects", "items": [{"id", "backup"}]}."""
     items = load_history()
     hid = f"{int(time.time() * 1000)}"
+    if ROUTE and "local" not in extra:
+        extra = {**extra, "route": ROUTE}      # über welchen Weg (Claude Schnell/Präzise, Auto) beantwortet
     items.append({"id": hid, "ts": int(time.time()), "kind": kind, "wish": wish[:300], "text": text[:6000],
                   **{k: v for k, v in extra.items() if v is not None}})
     save_history(items)
@@ -2397,7 +2414,7 @@ async def build_dashboard(app, wish: str, refine: bool, dialog: list, can_ask: b
                          "danach erledige ich das selbst."]),
                      "automations": await own_objects(session, raw)}
         payload = {
-            "wish": wish, "entities": entities, "mode": {"lokal": "schnell"}.get(load_prefs().get("mode", ""), load_prefs().get("mode", "")),
+            "wish": wish, "entities": entities, "mode": app.get("effective_mode") or {"lokal": "schnell", "auto": "schnell"}.get(load_prefs().get("mode", ""), load_prefs().get("mode", "")),
             "previous": None if rebuild or locked else (strip_bar(before) if own else before),
             "refine": not rebuild, "foreign": not rebuild and not built_by_haglo, "dialog": dialog, "can_ask": can_ask,
             "dashboard_locked": locked,
@@ -2649,16 +2666,25 @@ async def generate(request):
     if not wish:
         return web.json_response({"ok": False, "error": "Bitte einen Wunsch eingeben."}, status=400)
     talk_touch()        # eine Nachricht ist auch eine Regung; nach langer Pause beginnt hier das neue Gespräch
-    mode = load_prefs().get("mode") or "schnell"
-    if not dialog and not refine and mode in ("lokal", "schnell"):
-        # Schnellweg (beide Modi) und Haglo Local (nur „Lokal“): direkt auf dem Hub, ohne Internet und Kontingent
+    mode = load_prefs().get("mode") or "auto"
+    complex_wish = is_complex(wish)
+    if not dialog and not refine and mode in ("auto", "lokal", "schnell"):
+        # Schnellweg (Auto, Lokal, Schnell) und Haglo Local (Auto bei einfachen Wünschen, Lokal immer):
+        # direkt auf dem Hub, ohne Internet und Kontingent
         try:
-            done = await local_answer(request.app, wish, use_model=mode == "lokal")
+            done = await local_answer(request.app, wish,
+                                      use_model=mode == "lokal" or (mode == "auto" and not complex_wish))
         except Exception as e:
             print(f"[Lokal] übersprungen: {e}", flush=True)
             done = None
         if done:
             return web.json_response({"ok": True, **done})
+    # Welche Claude-Stufe? Auto entscheidet nach dem Wunsch, sonst gilt die Wahl des Kunden.
+    cloud_mode = ("praezise" if complex_wish else "schnell") if mode == "auto" else \
+        ("schnell" if mode == "lokal" else mode)
+    request.app["effective_mode"] = cloud_mode
+    global ROUTE
+    ROUTE = {"auto": mode == "auto", "via": cloud_mode}
     try:
         # Vorab prüfen, damit ohne Zustimmung oder Kontingent keine Gerätedaten gesendet werden.
         trial = trial_info((await backend(session, "GET", "/v1/status"))["status"])
@@ -2685,6 +2711,8 @@ async def generate(request):
         return web.json_response({"ok": False, "error": str(e)}, status=500)
     finally:
         request.app["job"] = None
+        request.app["effective_mode"] = None
+        ROUTE = None
     for key in ("objects", "confirm_actions", "confirm_device", "need_consent", "need_history_consent", "need_diagnose_consent", "need_integrations_consent", "confirm_integration", "need_logs_consent", "confirm_repair", "need_yaml_consent", "need_dashboard_consent", "done", "answer"):
         if key in result:
             return web.json_response({"ok": True, key: result[key], "erklaerung": result.get("erklaerung", ""),
@@ -3117,12 +3145,13 @@ async def prefs_route(request):
             prefs[key] = body[key]
     if isinstance(body.get("dashboard"), str) and len(body["dashboard"]) <= 100:
         prefs["dashboard"] = body["dashboard"]
-    if body.get("mode") in ("lokal", "schnell", "praezise"):
-        prefs["mode"] = body["mode"]          # Lokal, Schnell oder Präzise – vom Kunden gewählt, gilt für alle Anfragen
+    if body.get("mode") in ("auto", "lokal", "schnell", "praezise"):
+        prefs["mode"] = body["mode"]          # Auto, Lokal, Schnell oder Präzise – gilt für alle Anfragen
     write_prefs(prefs)
     if "mode" in body and request.app.get("local"):
-        # „Lokal“ gewählt: Haglo Local starten (lädt beim ersten Mal das Modell); sonst Speicher wieder freigeben
-        want = prefs.get("mode") == "lokal"
+        # Haglo Local starten (lädt beim ersten Mal das Modell), wenn Lokal gewählt ist – oder Auto auf einem
+        # Gerät mit genug Arbeitsspeicher; sonst Speicher wieder freigeben
+        want = local_wanted(prefs.get("mode"))
         if want != bool(local_ai.load_state().get("enabled")):
             local_ai.save_state({**local_ai.load_state(), "enabled": want})
             await (request.app["local"].start() if want else request.app["local"].stop())
@@ -3330,6 +3359,18 @@ async def voice_reset(request):
 
 
 # ---------------------------------------------------------------- Haglo Local (eigenes Modell auf dem Hub)
+def ram_gb() -> float:
+    try:
+        return os.sysconf("SC_PAGE_SIZE") * os.sysconf("SC_PHYS_PAGES") / 1024 ** 3
+    except (ValueError, OSError):
+        return 0
+
+
+def local_wanted(mode: str | None) -> bool:
+    """Modell laden? Bei „Lokal“ immer, bei „Auto“ ab 3 GB Arbeitsspeicher (Wyse 5070 / T630 mit 8 GB)."""
+    return mode == "lokal" or ((mode or "auto") == "auto" and ram_gb() >= 3)
+
+
 async def area_map(app, force: bool = False) -> dict[str, str]:
     """entity_id → Raumname. Zwischengespeichert, nach einer Minute im Hintergrund aufgefrischt."""
     cached = app.get("areas_cache")
@@ -3409,7 +3450,7 @@ async def local_set(request):
         local_ai.save_state({**local_ai.load_state(), "enabled": body["enabled"]})
         prefs = load_prefs()
         if body["enabled"] or prefs.get("mode") == "lokal":
-            write_prefs({**prefs, "mode": "lokal" if body["enabled"] else "schnell"})
+            write_prefs({**prefs, "mode": "lokal" if body["enabled"] else "auto"})
         if body["enabled"]:
             await loc.start()
         else:
@@ -3458,7 +3499,9 @@ async def on_startup(app):
         # In der Zeit soll Schalten (Schnellweg) sofort reagieren.
         await asyncio.sleep(START_DELAY)
         try:
-            if local_ai.load_state().get("enabled"):
+            want = local_wanted(load_prefs().get("mode"))
+            local_ai.save_state({**local_ai.load_state(), "enabled": want})
+            if want:
                 await app["local"].start()
             if voice.load_state().get("enabled"):
                 await app["voice"].start()
