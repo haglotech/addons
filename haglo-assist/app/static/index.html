@@ -290,6 +290,8 @@
   .vpair ol { margin: 6px 0 0 18px; padding: 0; color: var(--muted); font-size: 14px; }
   #vFilter { width: 100%; margin: 0 0 10px; box-sizing: border-box; }
   .lok { margin-top: 8px; font-size: 12px; color: var(--brand); }
+  .lok.cloud { color: var(--muted); }
+  .lok a { color: var(--brand); cursor: pointer; text-decoration: underline; }
   .vlist { display: flex; flex-direction: column; gap: 8px; }
   .ver { border: 1px solid var(--line); border-radius: 12px; padding: 12px 14px; display: flex; align-items: center; gap: 12px; }
   .ver .info { flex: 1; min-width: 0; }
@@ -426,6 +428,7 @@
       <button type="button" class="talk hidden" id="talk" title="Neues Gespräch beginnen"><i></i><span id="talkText"></span></button>
       <div class="tools">
         <div class="mode" role="group" aria-label="Antwortart">
+          <button type="button" data-mode="auto" title="Auto: Haglo Assist entscheidet selbst – Schaltbefehle sofort direkt auf dem Hub, einfache Wünsche mit Haglo Local, große Aufgaben mit Claude Präzise. Empfohlen.">Auto</button>
           <button type="button" data-mode="lokal" title="Lokal: Haglo Local versteht einfache Befehle direkt auf deinem Hub – ohne Internet, ohne Kontingent. Was es nicht kann, übernimmt automatisch Claude.">⚡ Lokal</button>
           <button type="button" data-mode="schnell" title="Schnell: einfache Schaltbefehle sofort direkt auf dem Hub, alles andere zügig über Claude. Verbraucht wenig vom Kontingent.">Schnell</button>
           <button type="button" data-mode="praezise" title="Präzise: denkt gründlicher nach – für große Dashboards, Reparaturen und Einstellungen. Dauert etwas länger und verbraucht mehr vom Kontingent.">Präzise</button>
@@ -433,7 +436,7 @@
         <button type="button" class="tool" id="histLink" title="Verlauf" aria-label="Verlauf"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 12a9 9 0 1 0 3-6.7"/><path d="M3 4v5h5"/><path d="M12 8v4l3 2"/></svg>Verlauf</button>
         <button type="button" class="tool hidden" id="autosLink" title="Automationen" aria-label="Automationen"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M13 2L4 14h7l-1 8 9-12h-7z"/></svg>Automationen</button>
         <button type="button" class="tool" id="voiceLink" title="Sprachsteuerung (Alexa)" aria-label="Sprachsteuerung"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="2" width="6" height="12" rx="3"/><path d="M5 10a7 7 0 0 0 14 0"/><path d="M12 17v4"/></svg>Sprache</button>
-        <button type="button" class="tool" id="localLink" title="Haglo Local – KI direkt auf dem Hub" aria-label="Haglo Local"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="4" y="4" width="16" height="16" rx="2"/><rect x="9" y="9" width="6" height="6"/><path d="M9 1v3M15 1v3M9 20v3M15 20v3M20 9h3M20 14h3M1 9h3M1 14h3"/></svg>Lokal</button>
+        <button type="button" class="tool hidden" id="localLink" title="Haglo Local – KI direkt auf dem Hub" aria-label="Haglo Local"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="4" y="4" width="16" height="16" rx="2"/><rect x="9" y="9" width="6" height="6"/><path d="M9 1v3M15 1v3M9 20v3M15 20v3M20 9h3M20 14h3M1 9h3M1 14h3"/></svg>Lokal</button>
         <button type="button" class="tool" id="versionsLink" title="Versionen" aria-label="Versionen"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3l9 5-9 5-9-5z"/><path d="M3 13l9 5 9-5"/></svg>Versionen</button>
       </div>
     </div>
@@ -538,6 +541,7 @@
       </div>
       <p class="hint">Die Limits füllen sich laufend wieder auf. Große Dashboards und lange Wünsche verbrauchen mehr als kleine Änderungen.</p>
       <p class="hint" id="hubId"></p>
+      <p class="now">⚡ <b>Schnellweg und Haglo Local sind in jedem Plan unbegrenzt</b> – Schalten, Dimmen und einfache Fragen laufen direkt auf deinem Hub, ohne Internet. Dein Plan bestimmt, wie viel Claude du für große Aufgaben nutzen kannst: Dashboards, Automationen, Reparaturen.</p>
       <p class="hint" id="planHint">Bezahlung, Rechnungen und Kündigung laufen sicher über unseren Zahlungsdienst Stripe.</p>
       <details class="ask">
         <summary>Integration anfragen</summary>
@@ -582,7 +586,7 @@ async function api(path, body) {
 
 // Schnell / Präzise: Voreinstellung ist Schnell
 function showMode(m) {
-  const mode = m === "praezise" || m === "lokal" ? m : "schnell";
+  const mode = ["lokal", "schnell", "praezise"].includes(m) ? m : "auto";
   document.querySelectorAll(".mode [data-mode]").forEach((b) => b.classList.toggle("on", b.dataset.mode === mode));
 }
 document.querySelectorAll(".mode [data-mode]").forEach((b) => b.addEventListener("click", async () => {
@@ -823,6 +827,15 @@ const STEP_ICON = {
   action: STEP_SVG('<path d="M13 3L5 14h6l-1 7 8-11h-6l1-7z"/>'),
 };
 
+// Ehrlicher Hinweis auf einen größeren Plan: nur bei Claude-Antworten, nur wenn das Kontingent spürbar
+// genutzt ist und es einen größeren Plan gibt – nie bei lokalen Antworten.
+function upsell(h) {
+  if (!trial || !trial.window || (trial.subscription && trial.subscription.active && trial.level === "max")) return "";
+  const pct = Math.max(trial.window.used_pct || 0, (trial.week && trial.week.used_pct) || 0);
+  if (pct < 50) return "";
+  return ` · <a role="button" tabindex="0" data-plans-open>${pct >= 80 ? "Kontingent fast aufgebraucht – mehr mit einem größeren Plan" : "Mehr Präzise-Antworten mit einem größeren Plan"} ›</a>`;
+}
+
 function historyMsg(h) {
   const title = h.kind === "dashboard" && h.target ? (h.created ? `Neues Dashboard „${h.target}“ in der Seitenleiste` : h.target === "Startseite" ? "Startseite geändert" : `„${h.target}“ geändert`) : KIND[h.kind], undone = h.undone ? `<div class="gone">↩ Rückgängig gemacht</div>` : "";
   const body = h.kind === "answer" ? md(h.text)
@@ -834,7 +847,8 @@ function historyMsg(h) {
       <span class="tx"><b>${esc(s.title)}</b>${s.sub ? `<small>${esc(s.sub)}</small>` : ""}</span>
       ${s.url ? '<span class="go2" aria-hidden="true">›</span>' : ""}</a>`).join("")}</div>` : "";
   const undo = h.can_undo ? `<div class="links"><button class="undo" data-undo="${esc(h.id)}">Rückgängig</button></div>` : "";
-  const lok = h.local ? `<div class="lok">⚡ Direkt auf dem Hub · ${h.local < 1000 ? h.local + " ms" : (h.local / 1000).toFixed(1).replace(".", ",") + " s"} · ohne Internet</div>` : "";
+  const lok = h.local ? `<div class="lok">⚡ Direkt auf dem Hub · ${h.local < 1000 ? h.local + " ms" : (h.local / 1000).toFixed(1).replace(".", ",") + " s"} · ohne Internet, ohne Kontingent</div>`
+    : h.route ? `<div class="lok cloud">☁ Claude ${h.route.via === "praezise" ? "Präzise" : "Schnell"}${h.route.auto ? " · von Auto gewählt" : ""}${upsell(h)}</div>` : "";
   return (h.wish ? `<div class="msg user"><div class="bub">${esc(h.wish)}</div></div>` : "")
     + `<div class="msg bot${h.undone ? " was" : ""}"><div class="bub">${body}${steps}${open ? `<div class="actions">${open}</div>` : ""}${undo}${undone}${lok}</div>
        <span class="when2">${stamp(h.ts)}</span></div>`;
@@ -1131,6 +1145,7 @@ async function devSet(body) {
 $("devPlan").addEventListener("change", () => devSet({ plan: $("devPlan").value || null }));
 $("devReset").addEventListener("click", () => devSet({ plan: $("devPlan").value || null, reset_limits: true }));
 
+$("result").addEventListener("click", (e) => { if (e.target.closest("[data-plans-open]")) openPlans(); });
 $("owner").addEventListener("click", async (e) => {
   if (e.target.closest("#ownerClose")) {       // dauerhaft ausblenden, gespeichert auf dem Gerät
     ownerHidden = true; $("owner").classList.add("hidden");
@@ -1527,7 +1542,7 @@ $("localClose").addEventListener("click", () => { $("local").classList.add("hidd
 $("local").addEventListener("click", (e) => { if (e.target === $("local")) { $("local").classList.add("hidden"); clearTimeout(lTimer); } });
 $("lOn").addEventListener("change", async (e) => {
   e.target.disabled = true;
-  try { await api("api/local", { enabled: e.target.checked }); showMode(e.target.checked ? "lokal" : "schnell"); await openLocal(); } catch (err) { $("lState").textContent = err.message; }
+  try { await api("api/local", { enabled: e.target.checked }); showMode(e.target.checked ? "lokal" : "auto"); await openLocal(); } catch (err) { $("lState").textContent = err.message; }
   e.target.disabled = false;
 });
 
