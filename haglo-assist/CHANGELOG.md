@@ -1,5 +1,9 @@
 # Änderungen
 
+## 0.26.2
+
+- Voreinstellung ist jetzt „Schnell“; „Präzise“ denkt gründlicher nach, verbraucht etwas mehr und dauert etwas länger
+
 ## 0.26.1
 
 - Handy: Die Zeile unter dem Eingabefeld passt wieder in die Breite (Verlauf, Automationen und Versionen als Symbole)

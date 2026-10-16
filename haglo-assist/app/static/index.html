@@ -416,7 +416,7 @@
       <div class="tools">
         <div class="mode" role="group" aria-label="Antwortart">
           <button type="button" data-mode="schnell" title="Schnell: antwortet zügig, ideal zum Schalten und für kurze Fragen. Verbraucht wenig vom Kontingent.">Schnell</button>
-          <button type="button" data-mode="praezise" title="Präzise: denkt gründlicher – für Dashboards, Reparaturen und Einstellungen. Verbraucht mehr vom Kontingent.">Präzise</button>
+          <button type="button" data-mode="praezise" title="Präzise: denkt gründlicher nach – für große Dashboards, Reparaturen und Einstellungen. Dauert etwas länger und verbraucht mehr vom Kontingent.">Präzise</button>
         </div>
         <button type="button" class="tool" id="histLink" title="Verlauf" aria-label="Verlauf"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 12a9 9 0 1 0 3-6.7"/><path d="M3 4v5h5"/><path d="M12 8v4l3 2"/></svg>Verlauf</button>
         <button type="button" class="tool hidden" id="autosLink" title="Automationen" aria-label="Automationen"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M13 2L4 14h7l-1 8 9-12h-7z"/></svg>Automationen</button>
@@ -538,9 +538,9 @@ async function api(path, body) {
   return data;
 }
 
-// Schnell / Präzise: Voreinstellung ist Präzise
+// Schnell / Präzise: Voreinstellung ist Schnell
 function showMode(m) {
-  const mode = m === "schnell" ? "schnell" : "praezise";
+  const mode = m === "praezise" ? "praezise" : "schnell";
   document.querySelectorAll(".mode [data-mode]").forEach((b) => b.classList.toggle("on", b.dataset.mode === mode));
 }
 document.querySelectorAll(".mode [data-mode]").forEach((b) => b.addEventListener("click", async () => {
