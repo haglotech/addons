@@ -104,7 +104,9 @@ def similar(x: str, n: str) -> bool:
     """Wort aus dem Befehl passt zu einem Namenswort – auch mit Tippfehler oder Wortende."""
     if x == n:
         return True
-    if len(x) >= 4 and (n.startswith(x[:max(4, len(x) - 2)]) or x.startswith(n[:max(4, len(n) - 2)])):
+    # Wortformen (Licht/Lichter, Rollladen/Rollläden): gleicher Anfang, kaum Längenunterschied – aber
+    # kein Treffer bei zusammengesetzten Wörtern („Lichterkette“ ist nicht „Licht“)
+    if len(x) >= 4 and abs(len(x) - len(n)) <= 3 and (n.startswith(x[:max(4, len(x) - 2)]) or x.startswith(n[:max(4, len(n) - 2)])):
         return True
     return len(x) >= 5 and len(n) >= 5 and difflib.SequenceMatcher(None, x, n).ratio() >= 0.8
 
@@ -280,7 +282,7 @@ def to_actions(out: dict, idx: dict[int, str]) -> list[dict] | None:
 
 
 # ---------------------------------------------------------------- Schnellweg (ohne Modell, < 1 s)
-RE_QUESTION = re.compile(r"\?|^(ist|sind|wie|was|welche|wieviel|wie ?viel|läuft|laeuft|hab|habe|warum|wann|wo)\b", re.I)
+RE_QUESTION = re.compile(r"\?|^\W*(ist|is|isst|sind|wie|was|welche|wieviel|wie ?viel|läuft|laeuft|hab|habe|warum|wann|wo|status)\b", re.I)
 RE_MULTI = re.compile(r"\b(und|dann|danach|außerdem|ausserdem|sowie|wenn|falls|sobald)\b|,(?!\d)", re.I)
 RE_PCT = re.compile(r"(\d{1,3})\s*(%|prozent)", re.I)
 RE_DEG = re.compile(r"(\d{1,2}(?:[.,]5)?)\s*(°|grad)", re.I)
@@ -302,32 +304,50 @@ def fast_path(wish: str, states: list[dict], areas: dict[str, str]) -> dict | No
     picks = preselect(w, states, areas)
     if not picks:
         return None
-    # Ziel: genau ein klar bester Treffer, oder „alle Lichter (im Raum)“
+    # Raum erkennen – auch mit Tippfehler („dachbdoen“); Raumwörter zählen nicht als Gerätename
+    cmd_words = words(w)
+    room_names = {r for r in areas.values() if r}
+    room_words = {x for r in room_names for x in words(r)}
+    said = [r for r in room_names if words(r) and all(any(similar(x, y) for x in cmd_words) for y in words(r))]
+    room = said[0] if len(said) == 1 else None
+    dev_words = [x for x in cmd_words if not any(similar(x, y) for y in room_words)]
+
+    def name_words(p):
+        return [n for n in words(p["st"].get("attributes", {}).get("friendly_name") or "") if n not in room_words]
+
     def score_of(p):
-        nw = set(words(p["st"].get("attributes", {}).get("friendly_name") or ""))
-        return sum(1 for x in words(w) if any(similar(x, n) for n in nw))
+        nw = name_words(p)
+        return sum(1 for x in dev_words if any(similar(x, n) for n in nw))
+
+    def in_room(p):
+        return room is not None and (p["room"] == room or norm(room).strip() in norm(p["st"].get("attributes", {}).get("friendly_name") or ""))
+
     all_lights = re.search(r"\balle\b.*\b(licht|lichter|lampen)\b|\b(licht|lichter)\b.*\b(überall|ueberall)\b", low)
-    room_names = {norm(r).strip() for r in areas.values() if r}
-    room = next((r for r in room_names if r and r in low), None)
-    if all_lights or (re.search(r"\b(licht|lichter|lampen)\b", low) and room and not any(score_of(p) >= 2 for p in picks)):
-        targets = [p for p in picks if p["st"]["entity_id"].startswith("light.") and (not room or norm(p["room"]).strip() == room)]
-        if all_lights and not room:
-            targets = [{"st": s, "room": areas.get(s["entity_id"], "")} for s in states if s["entity_id"].startswith("light.")
-                       and not s.get("attributes", {}).get("hidden")]
+    generic_light = re.search(r"\b(licht|lichter|lampen)\b", low) and not any(score_of(p) >= 2 for p in picks)
+    if all_lights or (generic_light and room):
+        lights = [{"st": s_, "room": areas.get(s_["entity_id"], "")} for s_ in states if s_["entity_id"].startswith("light.")
+                  and not s_.get("attributes", {}).get("hidden")]
+        targets = [p for p in lights if in_room(p)] if room else (lights if all_lights else [])
         if not targets:
             return None
     else:
-        # Nur Schaltbares zählt (Messwerte wie „Schreibtisch Leistung“ nicht); bei Gleichstand gewinnt der
-        # Name ohne zusätzliche Wörter („Schreibtisch“ vor „Schreibtisch Licht“)
-        act_picks = [p for p in picks if p["st"]["entity_id"].split(".")[0] in ACTIONABLE]
-        if not act_picks:
+        # Nur Schaltbares zählt (Messwerte wie „Schreibtisch Leistung“ nicht)
+        act = [p for p in picks if p["st"]["entity_id"].split(".")[0] in ACTIONABLE]
+        if room:
+            act = [p for p in act if in_room(p)]
+        act = [p for p in act if score_of(p) >= 1]
+        if not act:
             return None
-        extra = lambda p: len(words(p["st"].get("attributes", {}).get("friendly_name") or "")) - score_of(p)
-        ranked = sorted(act_picks, key=lambda p: (-score_of(p), extra(p)))
-        best = score_of(ranked[0])
-        if best < 1 or (len(ranked) > 1 and score_of(ranked[1]) == best and extra(ranked[1]) == extra(ranked[0])):
-            return None
-        targets = [ranked[0]]
+        best = max(score_of(p) for p in act)
+        top = [p for p in act if score_of(p) == best]
+        if len(top) > 1:
+            # Gleichstand: „Schreibtisch“ schlägt „Schreibtisch Lampe“ (zusätzliches Gerätewort) – aber
+            # „Aquarium“ und „Aquarium Hobbyraum“ unterscheiden sich nur im Raum → unklar, lieber nachfragen
+            extra = lambda p: len(name_words(p)) - score_of(p)
+            top.sort(key=extra)
+            if extra(top[0]) == extra(top[1]):
+                return None
+        targets = [top[0]]
     doms = {t["st"]["entity_id"].split(".")[0] for t in targets}
     if len(doms) != 1:
         return None
