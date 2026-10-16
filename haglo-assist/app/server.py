@@ -3429,6 +3429,9 @@ async def only_ingress(request, handler):
     return await handler(request)
 
 
+START_DELAY = 45          # Sekunden nach dem Start, bevor Modell und Matterbridge laden
+
+
 async def on_startup(app):
     app["session"] = aiohttp.ClientSession()
     app["bar_lock"] = asyncio.Lock()
@@ -3444,18 +3447,29 @@ async def on_startup(app):
     asyncio.create_task(selftest(app))
     app["local"] = local_ai.LocalAI(app["session"])
     asyncio.create_task(area_map(app))          # Raumliste vorab laden – der erste Befehl ist dann schon schnell
-    if local_ai.load_state().get("enabled"):
-        await app["local"].start()
     app["voice"] = voice.Voice(app["session"])
     try:
         await app["voice"].start_proxy()
-        if voice.load_state().get("enabled"):
-            await app["voice"].start()
     except Exception as e:
-        print(f"[Sprache] Start fehlgeschlagen: {e}")
+        print(f"[Sprache] Weiterleitung fehlgeschlagen: {e}")
+
+    async def later():
+        # Modell und Matterbridge erst nach dem Start: beide belasten CPU und Home Assistant spürbar.
+        # In der Zeit soll Schalten (Schnellweg) sofort reagieren.
+        await asyncio.sleep(START_DELAY)
+        try:
+            if local_ai.load_state().get("enabled"):
+                await app["local"].start()
+            if voice.load_state().get("enabled"):
+                await app["voice"].start()
+        except Exception as e:
+            print(f"[Start] {e}")
+    app["later_task"] = asyncio.create_task(later())
 
 
 async def on_cleanup(app):
+    if app.get("later_task"):
+        app["later_task"].cancel()
     if app.get("local"):
         await app["local"].stop()
     if app.get("voice"):
