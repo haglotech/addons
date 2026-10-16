@@ -1,5 +1,14 @@
 # Änderungen
 
+## 0.27.0 (Beta, Branch feat/sprachsteuerung)
+
+- Neu: Sprachsteuerung (Beta) – Geräte per Alexa schalten, auch Google Home und Apple Home. Unter dem Eingabefeld „Sprache“
+  öffnen, einschalten, Geräte anhaken und mit dem angezeigten Code in der Alexa-App koppeln. Läuft lokal über Matter,
+  ohne Haglo-Server
+- Auch Skripte, Szenen und Schalter-Helfer lassen sich per Sprache starten („Alexa, schalte Radio ein“)
+- Freigegebene Geräte tragen in Home Assistant das Label „Sprachsteuerung“ und lassen sich auch dort pflegen
+- Die App nutzt jetzt das Host-Netzwerk (für Matter nötig); die Oberfläche bleibt nur über Home Assistant erreichbar
+
 ## 0.26.2
 
 - Voreinstellung ist jetzt „Schnell“; „Präzise“ denkt gründlicher nach, verbraucht etwas mehr und dauert etwas länger
