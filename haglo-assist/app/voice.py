@@ -26,6 +26,7 @@ LABEL = "Sprachsteuerung"
 LABEL_ICON = "mdi:microphone-message"
 PROXY_HOST, PROXY_PORT = "127.0.0.1", 18124      # Weiterleiter zu Home Assistant
 FRONTEND_PORT = 18283                            # Matterbridge-Oberfläche, nur lokal, wird nicht genutzt
+MATTER_PORT = 5550                               # nicht 5540: den nutzt der Matter-Server von Home Assistant
 HA_WS_URL = "ws://supervisor/core/websocket"
 TOKEN = os.environ.get("SUPERVISOR_TOKEN", "")
 PLUGIN = "matterbridge-hass"
@@ -181,7 +182,7 @@ class Voice:
                 await self.ensure_plugin()
                 self.write_config()
                 self.proc = await asyncio.create_subprocess_exec(
-                    "matterbridge", "--bridge", "--homedir", str(VOICE_DIR), "--frontend", str(FRONTEND_PORT),
+                    "matterbridge", "--bridge", "--homedir", str(VOICE_DIR), "--frontend", str(FRONTEND_PORT), "--port", str(MATTER_PORT),
                     "--bind", "127.0.0.1", "--novirtual", "--no-ansi",
                     stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.STDOUT)
                 self.running, self.error = True, ""
