@@ -3323,6 +3323,9 @@ async def only_ingress(request, handler):
     return await handler(request)
 
 
+START_DELAY = 45          # Sekunden nach dem Start, bevor Matterbridge lädt
+
+
 async def on_startup(app):
     app["session"] = aiohttp.ClientSession()
     app["bar_lock"] = asyncio.Lock()
@@ -3339,13 +3342,23 @@ async def on_startup(app):
     app["voice"] = voice.Voice(app["session"])
     try:
         await app["voice"].start_proxy()
-        if voice.load_state().get("enabled"):
-            await app["voice"].start()
     except Exception as e:
-        print(f"[Sprache] Start fehlgeschlagen: {e}")
+        print(f"[Sprache] Weiterleitung fehlgeschlagen: {e}")
+
+    async def later():
+        # Matterbridge erst nach dem Start: belastet CPU und Home Assistant spürbar
+        await asyncio.sleep(START_DELAY)
+        try:
+            if voice.load_state().get("enabled"):
+                await app["voice"].start()
+        except Exception as e:
+            print(f"[Sprache] Start fehlgeschlagen: {e}")
+    app["later_task"] = asyncio.create_task(later())
 
 
 async def on_cleanup(app):
+    if app.get("later_task"):
+        app["later_task"].cancel()
     if app.get("voice"):
         await app["voice"].stop()
         if app["voice"].runner:
