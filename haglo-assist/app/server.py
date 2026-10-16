@@ -2396,7 +2396,7 @@ async def build_dashboard(app, wish: str, refine: bool, dialog: list, can_ask: b
                          "danach erledige ich das selbst."]),
                      "automations": await own_objects(session, raw)}
         payload = {
-            "wish": wish, "entities": entities, "mode": load_prefs().get("mode", ""),
+            "wish": wish, "entities": entities, "mode": {"lokal": "schnell"}.get(load_prefs().get("mode", ""), load_prefs().get("mode", "")),
             "previous": None if rebuild or locked else (strip_bar(before) if own else before),
             "refine": not rebuild, "foreign": not rebuild and not built_by_haglo, "dialog": dialog, "can_ask": can_ask,
             "dashboard_locked": locked,
@@ -2648,7 +2648,7 @@ async def generate(request):
     if not wish:
         return web.json_response({"ok": False, "error": "Bitte einen Wunsch eingeben."}, status=400)
     talk_touch()        # eine Nachricht ist auch eine Regung; nach langer Pause beginnt hier das neue Gespräch
-    if not dialog and not refine and local_ai.load_state().get("enabled"):
+    if not dialog and not refine and load_prefs().get("mode") == "lokal":
         # Haglo Local: einfache Befehle direkt auf dem Hub – ohne Internet, ohne Kontingent
         try:
             done = await local_answer(request.app, wish)
@@ -3115,9 +3115,15 @@ async def prefs_route(request):
             prefs[key] = body[key]
     if isinstance(body.get("dashboard"), str) and len(body["dashboard"]) <= 100:
         prefs["dashboard"] = body["dashboard"]
-    if body.get("mode") in ("schnell", "praezise"):
-        prefs["mode"] = body["mode"]          # Schnell oder Präzise – vom Kunden gewählt, gilt für alle Anfragen
+    if body.get("mode") in ("lokal", "schnell", "praezise"):
+        prefs["mode"] = body["mode"]          # Lokal, Schnell oder Präzise – vom Kunden gewählt, gilt für alle Anfragen
     write_prefs(prefs)
+    if "mode" in body and request.app.get("local"):
+        # „Lokal“ gewählt: Haglo Local starten (lädt beim ersten Mal das Modell); sonst Speicher wieder freigeben
+        want = prefs.get("mode") == "lokal"
+        if want != bool(local_ai.load_state().get("enabled")):
+            local_ai.save_state({**local_ai.load_state(), "enabled": want})
+            await (request.app["local"].start() if want else request.app["local"].stop())
     return web.json_response({"ok": True, "prefs": prefs})
 
 
@@ -3378,6 +3384,9 @@ async def local_set(request):
     loc = request.app["local"]
     if isinstance(body.get("enabled"), bool):
         local_ai.save_state({**local_ai.load_state(), "enabled": body["enabled"]})
+        prefs = load_prefs()
+        if body["enabled"] or prefs.get("mode") == "lokal":
+            write_prefs({**prefs, "mode": "lokal" if body["enabled"] else "schnell"})
         if body["enabled"]:
             await loc.start()
         else:

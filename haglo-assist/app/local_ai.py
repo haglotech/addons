@@ -201,13 +201,46 @@ def build_prompt(wish: str, picks: list[dict]) -> tuple[str, dict[int, str]]:
 
 
 def parse(text: str) -> dict | None:
-    m = re.search(r"\{.*\}", text, re.S)
-    if not m:
-        return None
-    try:
-        return json.loads(m.group(0))
-    except Exception:
-        return None
+    text = text.strip()
+    for cand in (text, text + "}", text + "]}", text + "}]}"):     # durch „stop“ abgeschnittenes Ende ergänzen
+        m = re.search(r"\{.*\}", cand, re.S)
+        if not m:
+            continue
+        try:
+            return json.loads(m.group(0))
+        except Exception:
+            continue
+    return None
+
+
+WORDS = {"turn_on": "an", "turn_off": "aus", "toggle": "umgeschaltet", "open_cover": "fährt hoch", "close_cover": "fährt runter",
+         "stop_cover": "gestoppt", "set_cover_position": "auf {position} %", "set_temperature": "auf {temperature} °C",
+         "set_hvac_mode": "{hvac_mode}", "lock": "verriegelt", "unlock": "entriegelt", "media_play": "spielt",
+         "media_pause": "pausiert", "volume_set": "Lautstärke geändert", "volume_up": "lauter", "volume_down": "leiser",
+         "start": "legt los", "return_to_base": "fährt zur Station"}
+
+
+def confirm_text(acts: list[dict], names: dict[str, str]) -> str:
+    out = []
+    for a in acts:
+        dom, svc = a["action"].split(".")
+        data = a.get("data") or {}
+        if dom in ("scene", "script"):
+            out.append(f"„{names.get(a['target']['entity_id'][0], '')}“ gestartet")
+            continue
+        if svc == "turn_on" and "brightness_pct" in data:
+            w = f"auf {data['brightness_pct']} %"
+        elif svc == "turn_on" and "brightness_step_pct" in data:
+            w = "heller" if data["brightness_step_pct"] > 0 else "dunkler"
+        else:
+            try:
+                w = WORDS.get(svc, svc).format(**{k: str(v).replace(".", ",") for k, v in data.items()})
+            except (KeyError, IndexError):
+                w = WORDS.get(svc, svc)
+            w = {"off": "aus", "heat": "an"}.get(w, w)
+        n = ", ".join(names.get(e, e) for e in a["target"]["entity_id"][:4])
+        out.append(f"{n} {w}")
+    return (". ".join(out) + ".") if out else "Erledigt."
 
 
 def to_actions(out: dict, idx: dict[int, str]) -> list[dict] | None:
@@ -374,7 +407,9 @@ class LocalAI:
         user, idx = build_prompt(wish, picks)
         t0 = time.time()
         body = {"messages": [{"role": "system", "content": SYSTEM}, {"role": "user", "content": user}],
-                "temperature": 0, "max_tokens": 120, "cache_prompt": True}
+                "temperature": 0, "max_tokens": 120, "cache_prompt": True,
+                # Bei Aktionen nach der Aktionsliste aufhören – die Bestätigung schreibt der Code (spart Zeit)
+                "stop": [',"t":']}
         try:
             async with self.session.post(f"http://127.0.0.1:{PORT}/v1/chat/completions", json=body,
                                          timeout=aiohttp.ClientTimeout(total=45)) as r:
@@ -393,7 +428,8 @@ class LocalAI:
             acts = to_actions(out, idx)
             if not acts:
                 return None
-            return {"kind": "actions", "actions": acts, "text": str(out.get("t") or "Erledigt."), "ms": self.last_ms}
+            names = {p["st"]["entity_id"]: p["st"].get("attributes", {}).get("friendly_name") or p["st"]["entity_id"] for p in picks}
+            return {"kind": "actions", "actions": acts, "text": confirm_text(acts, names), "ms": self.last_ms}
         if out.get("f"):
             return {"kind": "question", "text": str(out["f"]), "ms": self.last_ms}
         if out.get("t"):
