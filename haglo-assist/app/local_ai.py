@@ -340,12 +340,18 @@ def fast_path(wish: str, states: list[dict], areas: dict[str, str]) -> dict | No
     def in_room(p):
         return room is not None and (p["room"] == room or norm(room).strip() in norm(p["st"].get("attributes", {}).get("friendly_name") or ""))
 
-    all_lights = re.search(r"\balle\b.*\b(licht|lichter|lampen)\b|\b(licht|lichter)\b.*\b(überall|ueberall)\b", low)
-    generic_light = re.search(r"\b(licht|lichter|lampen)\b", low) and not any(score_of(p) >= 2 for p in picks)
+    light_word = any(similar(x, y) for x in low.split() for y in ("licht", "lichter", "lampen")) or \
+        re.search(r"\b(licht|lichter|lampen)\b", low)
+    all_lights = light_word and re.search(r"\balle\b|\balles\b|\büberall\b|\bueberall\b|\bsämtliche\b", low)
+    generic_light = light_word and not any(score_of(p) >= 2 for p in picks)
     if all_lights or (generic_light and room):
         lights = [{"st": s_, "room": areas.get(s_["entity_id"], "")} for s_ in states if s_["entity_id"].startswith("light.")
                   and not s_.get("attributes", {}).get("hidden")]
         targets = [p for p in lights if in_room(p)] if room else (lights if all_lights else [])
+        # „das Licht im Hobbyraum“ und dort heißt ein Gerät schlicht „Licht“: genau das ist gemeint
+        named = [p for p in targets if name_words(p) == ["licht"]]
+        if room and not all_lights and len(named) == 1:
+            targets = named
         if not targets:
             return None
     else:
