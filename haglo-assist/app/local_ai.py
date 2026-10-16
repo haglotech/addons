@@ -28,8 +28,10 @@ STATE_FILE = Path("/data/local-ai.json")       # {"enabled": bool}
 PORT = 18180
 BASE = {"file": "qwen2.5-0.5b-instruct-q4_k_m.gguf",
         "url": "https://huggingface.co/Qwen/Qwen2.5-0.5B-Instruct-GGUF/resolve/main/qwen2.5-0.5b-instruct-q4_k_m.gguf"}
-# Der Haglo-Adapter (LoRA) liegt in Teilen im Haglo-Repo; Name und Prüfsumme legt models.json fest.
-MODELS_URL = "https://raw.githubusercontent.com/haglotech/addons/haglo-local-modelle/haglo-local/models.json"
+# Der Haglo-Adapter (LoRA) ist Haglo-eigen und liegt NICHT im öffentlichen Repo. Bezug: vom Haglo-Server
+# (models.json mit Teilen und Prüfsummen) – oder als Datei im Home-Assistant-Ordner /config/haglo-local/.
+MODELS_URL = "https://api.haglotech.com/v1/models/haglo-local/models.json"
+EXTRA_DIRS = [Path("/homeassistant/haglo-local")]
 
 SYSTEM = ("Du bist Haglo Local, der lokale Smart-Home-Assistent. Antworte nur mit JSON: "
           '{"a":[{"s":Dienst,"e":[Nummern],"d":{Daten}}],"t":Bestätigung} oder {"t":Antwort} '
@@ -465,8 +467,9 @@ class LocalAI:
                 if hashlib.sha256(adapter.read_bytes()).hexdigest() != spec["adapter"]["sha256"]:
                     adapter.unlink(missing_ok=True)
                     raise RuntimeError("Haglo-Adapter beschädigt")
-        elif any(DIR.glob("haglo-local-*.gguf")):
-            adapter = sorted(DIR.glob("haglo-local-*.gguf"))[-1]
+        else:
+            found = sorted(f for d in [DIR, *EXTRA_DIRS] if d.exists() for f in d.glob("haglo-local-*.gguf"))
+            adapter = found[-1] if found else None
         return base, adapter
 
     async def _run(self):
