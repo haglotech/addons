@@ -42,6 +42,7 @@ DOMAIN_NAMES = {"light": "Licht", "switch": "Schalter", "fan": "Ventilator", "co
 ANSI = re.compile(r"\x1b\[[0-9;]*m")
 RE_MANUAL = re.compile(r"Manual pairing code (\d{4}-\d{3}-\d{4}|\d{11}|\d{4}-\d{3}-\d{4}-\d{4}-\d{3}-\d{4})")
 RE_QR = re.compile(r"data=(MT:[A-Z0-9.\-]+)")
+RE_SHOW = re.compile(r"\[(notice|warn|error|fatal)\]|Creating device|pairing code|commissioned", re.I)
 
 
 def load_state() -> dict:
@@ -133,6 +134,9 @@ class Voice:
             "host": f"ws://{PROXY_HOST}:{PROXY_PORT}", "token": self.secret, "rejectUnauthorized": False,
             "reconnectTimeout": 30, "reconnectRetries": 1000,
             "filterByArea": "", "filterByLabel": LABEL,
+            # Jede freigegebene Entität wird ein eigenes Gerät in Alexa – mit dem Namen, den der Kunde in
+            # Home Assistant sieht („Schreibtisch“), nicht dem technischen Gerätenamen („Tasmota“).
+            "splitByLabel": LABEL, "splitEntities": [], "splitNameStrategy": "Friendly name",
             "whiteList": [], "blackList": [], "entityWhiteList": DOMAINS, "entityBlackList": [],
             "discardHiddenEntities": False, "unregisterOnShutdown": False, "debug": False,
         })
@@ -164,6 +168,8 @@ class Voice:
         if not line:
             return
         self.log = (self.log + [line])[-300:]
+        if RE_SHOW.search(line):
+            print("[Matter]", line[:400], flush=True)   # landet im Protokoll des Add-ons – für Support
         m = RE_MANUAL.search(line)
         if m:
             self.manual, self.paired = m.group(1), False
@@ -277,9 +283,7 @@ async def candidates(ha) -> list[dict]:
         dev = devices.get(r.get("device_id") or "")
         area = areas.get(r.get("area_id") or (dev or {}).get("area_id") or "", "")
         name = st.get("attributes", {}).get("friendly_name") or eid
-        # So heißt es später in Alexa: bei Geräten der Gerätename, sonst der Name der Entität
-        alexa = ((dev or {}).get("name_by_user") or (dev or {}).get("name")) if dev else (r.get("name") or r.get("original_name") or name)
-        out.append({"id": eid, "name": name, "alexa": alexa or name, "area": area,
+        out.append({"id": eid, "name": name, "alexa": name, "area": area,   # in Alexa heißt es genauso
                     "art": DOMAIN_NAMES.get(domain, domain), "domain": domain,
                     "on": bool(lid and lid in (r.get("labels") or []))})
     order = {d: i for i, d in enumerate(DOMAINS)}
