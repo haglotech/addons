@@ -60,7 +60,7 @@ HINTS = {
     "climate": ["heizung", "heiz", "thermostat", "warm", "kalt", "grad", "klima", "kühl", "kuehl", "heiß", "heiss"],
     "sensor:temperature": ["temperatur", "warm", "kalt", "grad", "thermometer"],
     "sensor:humidity": ["feucht"],
-    "sensor:power": ["strom", "verbrauch", "leistung", "watt"],
+    "sensor:power": ["strom", "verbrauch", "leistung", "watt", "bezieh", "bezug", "einspeis", "netz"],
     "binary_sensor": ["fenster", "tür", "tuer", "tor", "offen", "zu"],
     "lock": ["schloss", "abschließ", "abschliess", "verriegel", "aufschließ", "aufschliess", "sperr"],
     "media_player": ["musik", "lautsprecher", "fernseher", "tv", "leiser", "lauter", "pause", "lautstärke", "lautstaerke", "radio", "sonos"],
@@ -184,10 +184,14 @@ def preselect(wish: str, states: list[dict], areas: dict[str, str]) -> list[dict
                 score += 3
             elif any(similar(x, n) for n in nw):
                 score += 2
+            elif any(len(n) >= 5 and n in x for n in nw):
+                score += 1.5        # Wortteil: „zisternenpumpe“ ↔ „Zisternensensor Pumpe“ (nur für das Modell)
         if room and room in room_hit:
             score += 2
         if any(h in low for h in HINTS.get(k, [])):
             score += 1.5
+            if k == "sensor:power" and re.search(r"netz|bezug|verbrauch|gesamt|total", norm(name)):
+                score += 1      # bei „wie viel Strom …“ zuerst die Gesamt-/Netzwerte
         if k in ("scene", "script") and score < 3:
             continue        # Szenen/Skripte nur bei Namenstreffer
         if score >= 1.5:
@@ -195,7 +199,9 @@ def preselect(wish: str, states: list[dict], areas: dict[str, str]) -> list[dict
     scored.sort(key=lambda x: -x[0])
     best = scored[0][0] if scored else 0
     # Raum genannt: alle passenden Geräte dieses Raums behalten; sonst nur die deutlich besten
-    keep = [s for s in scored if s[0] >= best - 3 or (s[2] in room_hit)]
+    # Raum genannt: alle passenden Geräte dieses Raums; Name genannt (≥ 3 Punkte): immer – sonst fiele bei
+    # „Schreibtisch aus und Garage-Steckdose an“ eines der beiden Geräte heraus
+    keep = [s for s in scored if s[0] >= best - 3 or s[0] >= 3 or (s[2] in room_hit)]
     return [{"st": st, "room": room} for _, st, room in keep[:MAX_DEVICES]]
 
 
@@ -274,8 +280,20 @@ def to_actions(out: dict, idx: dict[int, str]) -> list[dict] | None:
                 ids.append(idx[int(e)])
             except (KeyError, ValueError, TypeError):
                 return None
-        if not ids or any(i.split(".")[0] != dom for i in ids):
+        if not ids:
             return None
+        if any(i.split(".")[0] != dom for i in ids):
+            # An/Aus/Umschalten ist für alle schaltbaren Typen gleich gemeint („Steckdose“ kann technisch ein
+            # light sein) – dann je Gerät den passenden Dienst nehmen. Alles andere: lieber Claude.
+            if s not in ("turn_on", "turn_off", "toggle"):
+                return None
+            data = a.get("d") if isinstance(a.get("d"), dict) else {}
+            for i in ids:
+                d2 = i.split(".")[0]
+                if s not in ALLOWED_SERVICES.get(d2, set()):
+                    return None
+                acts.append({"action": f"{d2}.{s}", "target": {"entity_id": [i]}, **({"data": data} if data else {})})
+            continue
         data = a.get("d") if isinstance(a.get("d"), dict) else {}
         acts.append({"action": svc, "target": {"entity_id": ids}, **({"data": data} if data else {})})
     return acts
