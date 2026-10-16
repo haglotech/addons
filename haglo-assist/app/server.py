@@ -22,6 +22,7 @@ from urllib.parse import quote
 import aiohttp
 from aiohttp import web
 
+import local_ai
 import voice
 
 OPTIONS_FILE = Path("/data/options.json")
@@ -2647,6 +2648,15 @@ async def generate(request):
     if not wish:
         return web.json_response({"ok": False, "error": "Bitte einen Wunsch eingeben."}, status=400)
     talk_touch()        # eine Nachricht ist auch eine Regung; nach langer Pause beginnt hier das neue Gespräch
+    if not dialog and not refine and local_ai.load_state().get("enabled"):
+        # Haglo Local: einfache Befehle direkt auf dem Hub – ohne Internet, ohne Kontingent
+        try:
+            done = await local_answer(request.app, wish)
+        except Exception as e:
+            print(f"[Lokal] übersprungen: {e}", flush=True)
+            done = None
+        if done:
+            return web.json_response({"ok": True, **done})
     try:
         # Vorab prüfen, damit ohne Zustimmung oder Kontingent keine Gerätedaten gesendet werden.
         trial = trial_info((await backend(session, "GET", "/v1/status"))["status"])
@@ -3311,6 +3321,70 @@ async def voice_reset(request):
     return web.json_response({"ok": True, **request.app["voice"].info()})
 
 
+# ---------------------------------------------------------------- Haglo Local (eigenes Modell auf dem Hub)
+async def area_map(app) -> dict[str, str]:
+    """entity_id → Raumname, 60 s zwischengespeichert."""
+    cached = app.get("areas_cache")
+    if cached and time.time() - cached[0] < 60:
+        return cached[1]
+    async with HAClient(app["session"]) as ha:
+        ents = await ha.call("config/entity_registry/list") or []
+        devs = {d["id"]: d for d in await ha.call("config/device_registry/list") or []}
+        names = {a["area_id"]: a["name"] for a in await ha.call("config/area_registry/list") or []}
+    out = {}
+    for e in ents:
+        aid = e.get("area_id") or (devs.get(e.get("device_id") or "") or {}).get("area_id")
+        if aid in names:
+            out[e["entity_id"]] = names[aid]
+    app["areas_cache"] = (time.time(), out)
+    return out
+
+
+async def local_answer(app, wish: str) -> dict | None:
+    loc = app.get("local")
+    if not loc:
+        return None
+    session = app["session"]
+    states = await all_states(session)
+    res = await loc.understand(wish, states, await area_map(app))
+    if not res:
+        return None
+    ms = res["ms"]
+    if res["kind"] in ("answer", "question"):
+        add_history("answer", wish, res["text"], local=ms)
+        return {"answer": res["text"], "local": ms}
+    by_id = {x["entity_id"]: x for x in states}
+    acts = res["actions"]
+    if check_actions(acts, by_id):
+        return None
+    if any(risky_action(a, by_id) for a in acts):
+        return {"confirm_actions": acts, "erklaerung": res["text"], "local": ms}
+    await run_actions(session, acts)
+    add_history("control", wish, res["text"], steps=await action_steps(session, acts, by_id), local=ms)
+    return {"done": res["text"], "local": ms}
+
+
+@routes.get("/api/local")
+async def local_status(request):
+    return web.json_response({"ok": True, **request.app["local"].info()})
+
+
+@routes.post("/api/local")
+async def local_set(request):
+    try:
+        body = await request.json()
+    except Exception:
+        body = {}
+    loc = request.app["local"]
+    if isinstance(body.get("enabled"), bool):
+        local_ai.save_state({**local_ai.load_state(), "enabled": body["enabled"]})
+        if body["enabled"]:
+            await loc.start()
+        else:
+            await loc.stop()
+    return web.json_response({"ok": True, **loc.info()})
+
+
 # Mit Host-Netzwerk (nötig für Matter) wäre Port 8099 im ganzen Heimnetz offen. Die Oberfläche
 # darf aber nur über Home Assistant (Ingress, 172.30.32.2) erreichbar sein.
 INGRESS_IPS = {"172.30.32.2", "127.0.0.1", "::1"}
@@ -3336,6 +3410,9 @@ async def on_startup(app):
     if app["bar_enabled"]:
         app["bar_task"] = asyncio.create_task(bar_listener(app))
     asyncio.create_task(selftest(app))
+    app["local"] = local_ai.LocalAI(app["session"])
+    if local_ai.load_state().get("enabled"):
+        await app["local"].start()
     app["voice"] = voice.Voice(app["session"])
     try:
         await app["voice"].start_proxy()
@@ -3346,6 +3423,8 @@ async def on_startup(app):
 
 
 async def on_cleanup(app):
+    if app.get("local"):
+        await app["local"].stop()
     if app.get("voice"):
         await app["voice"].stop()
         if app["voice"].runner:
