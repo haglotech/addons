@@ -290,6 +290,7 @@ UP = re.compile(r"\b(hoch|rauf|öffne\w*|oeffne\w*|auf)\b", re.I)
 DOWN = re.compile(r"\b(runter|zu|schließ\w*|schliess\w*|herunter)\b", re.I)
 STOPW = re.compile(r"\b(stopp\w*|stop|anhalten|halt)\b", re.I)
 SWITCHY = {"light", "switch", "fan", "input_boolean", "media_player"}
+ACTIONABLE = SWITCHY | {"cover", "climate", "scene", "script"}
 
 
 def fast_path(wish: str, states: list[dict], areas: dict[str, str]) -> dict | None:
@@ -316,9 +317,15 @@ def fast_path(wish: str, states: list[dict], areas: dict[str, str]) -> dict | No
         if not targets:
             return None
     else:
-        ranked = sorted(picks, key=lambda p: -score_of(p))
+        # Nur Schaltbares zählt (Messwerte wie „Schreibtisch Leistung“ nicht); bei Gleichstand gewinnt der
+        # Name ohne zusätzliche Wörter („Schreibtisch“ vor „Schreibtisch Licht“)
+        act_picks = [p for p in picks if p["st"]["entity_id"].split(".")[0] in ACTIONABLE]
+        if not act_picks:
+            return None
+        extra = lambda p: len(words(p["st"].get("attributes", {}).get("friendly_name") or "")) - score_of(p)
+        ranked = sorted(act_picks, key=lambda p: (-score_of(p), extra(p)))
         best = score_of(ranked[0])
-        if best < 1 or (len(ranked) > 1 and score_of(ranked[1]) == best):
+        if best < 1 or (len(ranked) > 1 and score_of(ranked[1]) == best and extra(ranked[1]) == extra(ranked[0])):
             return None
         targets = [ranked[0]]
     doms = {t["st"]["entity_id"].split(".")[0] for t in targets}
