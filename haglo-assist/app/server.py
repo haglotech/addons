@@ -3313,7 +3313,7 @@ async def voice_reset(request):
 
 # Mit Host-Netzwerk (nötig für Matter) wäre Port 8099 im ganzen Heimnetz offen. Die Oberfläche
 # darf aber nur über Home Assistant (Ingress, 172.30.32.2) erreichbar sein.
-INGRESS_IPS = {"172.30.32.2", "127.0.0.1", "::1"}
+INGRESS_IPS = {"172.30.32.2"}                # nur der Ingress-Proxy von Home Assistant
 
 
 @web.middleware
