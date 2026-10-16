@@ -427,7 +427,7 @@
       <div class="tools">
         <div class="mode" role="group" aria-label="Antwortart">
           <button type="button" data-mode="lokal" title="Lokal: Haglo Local versteht einfache Befehle direkt auf deinem Hub – ohne Internet, ohne Kontingent. Was es nicht kann, übernimmt automatisch Claude.">⚡ Lokal</button>
-          <button type="button" data-mode="schnell" title="Schnell: antwortet zügig, ideal zum Schalten und für kurze Fragen. Verbraucht wenig vom Kontingent.">Schnell</button>
+          <button type="button" data-mode="schnell" title="Schnell: einfache Schaltbefehle sofort direkt auf dem Hub, alles andere zügig über Claude. Verbraucht wenig vom Kontingent.">Schnell</button>
           <button type="button" data-mode="praezise" title="Präzise: denkt gründlicher nach – für große Dashboards, Reparaturen und Einstellungen. Dauert etwas länger und verbraucht mehr vom Kontingent.">Präzise</button>
         </div>
         <button type="button" class="tool" id="histLink" title="Verlauf" aria-label="Verlauf"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 12a9 9 0 1 0 3-6.7"/><path d="M3 4v5h5"/><path d="M12 8v4l3 2"/></svg>Verlauf</button>
@@ -834,7 +834,7 @@ function historyMsg(h) {
       <span class="tx"><b>${esc(s.title)}</b>${s.sub ? `<small>${esc(s.sub)}</small>` : ""}</span>
       ${s.url ? '<span class="go2" aria-hidden="true">›</span>' : ""}</a>`).join("")}</div>` : "";
   const undo = h.can_undo ? `<div class="links"><button class="undo" data-undo="${esc(h.id)}">Rückgängig</button></div>` : "";
-  const lok = h.local ? `<div class="lok">⚡ Haglo Local · ${(h.local / 1000).toFixed(1).replace(".", ",")} s · direkt auf dem Hub</div>` : "";
+  const lok = h.local ? `<div class="lok">⚡ Direkt auf dem Hub · ${h.local < 1000 ? h.local + " ms" : (h.local / 1000).toFixed(1).replace(".", ",") + " s"} · ohne Internet</div>` : "";
   return (h.wish ? `<div class="msg user"><div class="bub">${esc(h.wish)}</div></div>` : "")
     + `<div class="msg bot${h.undone ? " was" : ""}"><div class="bub">${body}${steps}${open ? `<div class="actions">${open}</div>` : ""}${undo}${undone}${lok}</div>
        <span class="when2">${stamp(h.ts)}</span></div>`;
