@@ -89,7 +89,7 @@ def norm(s: str) -> str:
 
 
 def words(s: str) -> list[str]:
-    return [w for w in norm(s).split() if len(w) >= 3 and w not in STOP]
+    return [w for w in norm(s).split() if (len(w) >= 3 or w.isdigit()) and w not in STOP]
 
 
 def fmt_num(v) -> str:
