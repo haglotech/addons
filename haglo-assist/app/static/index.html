@@ -426,6 +426,7 @@
       <button type="button" class="talk hidden" id="talk" title="Neues Gespräch beginnen"><i></i><span id="talkText"></span></button>
       <div class="tools">
         <div class="mode" role="group" aria-label="Antwortart">
+          <button type="button" data-mode="lokal" title="Lokal: Haglo Local versteht einfache Befehle direkt auf deinem Hub – ohne Internet, ohne Kontingent. Was es nicht kann, übernimmt automatisch Claude.">⚡ Lokal</button>
           <button type="button" data-mode="schnell" title="Schnell: antwortet zügig, ideal zum Schalten und für kurze Fragen. Verbraucht wenig vom Kontingent.">Schnell</button>
           <button type="button" data-mode="praezise" title="Präzise: denkt gründlicher nach – für große Dashboards, Reparaturen und Einstellungen. Dauert etwas länger und verbraucht mehr vom Kontingent.">Präzise</button>
         </div>
@@ -493,7 +494,7 @@
       <button class="close" id="localClose" aria-label="Schließen">×</button>
       <h3>Haglo Local <span class="kind">Beta</span></h3>
       <p class="now">Das eigene Haglo-Sprachmodell läuft direkt auf deinem Hub. Einfache Befehle – schalten, dimmen, Rollläden, Heizung, Szenen, Fragen nach Werten – versteht es ohne Internet und ohne dein Kontingent. Für alles Größere (Dashboards, Automationen, Reparaturen) übernimmt wie gewohnt Claude.</p>
-      <label class="vtoggle"><input type="checkbox" id="lOn"><span><b>Haglo Local einschalten</b><br>Beim ersten Mal lädt der Hub das Modell (etwa 400 MB).</span></label>
+      <label class="vtoggle"><input type="checkbox" id="lOn"><span><b>Modus „⚡ Lokal“ verwenden</b><br>Gleich wie der Knopf unter dem Eingabefeld. Beim ersten Mal lädt der Hub das Modell (etwa 400 MB).</span></label>
       <div class="vpair" id="lState">–</div>
       <p class="hint">Probier es: „Schreibtisch aus“, „mach es im Büro wärmer“, „ist die Garage zu?“. Antworten von Haglo Local tragen das Zeichen ⚡.</p>
     </div>
@@ -581,12 +582,15 @@ async function api(path, body) {
 
 // Schnell / Präzise: Voreinstellung ist Schnell
 function showMode(m) {
-  const mode = m === "praezise" ? "praezise" : "schnell";
+  const mode = m === "praezise" || m === "lokal" ? m : "schnell";
   document.querySelectorAll(".mode [data-mode]").forEach((b) => b.classList.toggle("on", b.dataset.mode === mode));
 }
 document.querySelectorAll(".mode [data-mode]").forEach((b) => b.addEventListener("click", async () => {
   showMode(b.dataset.mode);
   try { await api("api/prefs", { mode: b.dataset.mode }); } catch (e) {}
+  if (b.dataset.mode === "lokal") {      // Status zeigen, solange das Modell lädt
+    try { const r = await api("api/local"); if (r.status !== "bereit") openLocal(); } catch (e) {}
+  }
 }));
 showMode();
 
@@ -1523,7 +1527,7 @@ $("localClose").addEventListener("click", () => { $("local").classList.add("hidd
 $("local").addEventListener("click", (e) => { if (e.target === $("local")) { $("local").classList.add("hidden"); clearTimeout(lTimer); } });
 $("lOn").addEventListener("change", async (e) => {
   e.target.disabled = true;
-  try { await api("api/local", { enabled: e.target.checked }); await openLocal(); } catch (err) { $("lState").textContent = err.message; }
+  try { await api("api/local", { enabled: e.target.checked }); showMode(e.target.checked ? "lokal" : "schnell"); await openLocal(); } catch (err) { $("lState").textContent = err.message; }
   e.target.disabled = false;
 });
 
