@@ -22,6 +22,8 @@ from urllib.parse import quote
 import aiohttp
 from aiohttp import web
 
+import voice
+
 OPTIONS_FILE = Path("/data/options.json")
 BACKUP_DIR = Path("/data/backups")
 STATIC_DIR = Path(__file__).parent / "static"
@@ -38,7 +40,7 @@ SKIP_DOMAINS = {
     "zone", "persistent_notification", "assist_satellite", "ai_task",
 }
 
-ADDON_VERSION = "0.26.2"
+ADDON_VERSION = "0.27.0"
 MAX_VERSIONS = 30                      # so viele Dashboard-Versionen bleiben lokal gespeichert
 BAR_ENTITY = "input_text.haglo_assist"           # Eingabeleiste im Dashboard
 BAR_STATUS = "input_text.haglo_assist_status"    # Rückmeldung darunter
@@ -3254,6 +3256,73 @@ async def portal(request):
     return await forward(request, "/v1/billing/portal")
 
 
+
+# ---------------------------------------------------------------- Sprachsteuerung (Alexa & Co. über Matter)
+@routes.get("/api/voice")
+async def voice_status(request):
+    """Stand der Sprachsteuerung und die Geräte, die man freigeben kann."""
+    v = request.app["voice"]
+    try:
+        async with HAClient(request.app["session"]) as ha:
+            items = await voice.candidates(ha)
+    except Exception as e:
+        return web.json_response({"ok": False, "error": str(e)}, status=500)
+    return web.json_response({"ok": True, **v.info(), "items": items})
+
+
+@routes.post("/api/voice")
+async def voice_set(request):
+    """Ein-/Ausschalten und Geräteauswahl. Ausgewählte Geräte bekommen in Home Assistant das Label „Sprachsteuerung“."""
+    v = request.app["voice"]
+    try:
+        body = await request.json()
+    except Exception:
+        body = {}
+    try:
+        changed = 0
+        if isinstance(body.get("entities"), list):
+            wanted = {str(e) for e in body["entities"] if isinstance(e, str)}
+            async with HAClient(request.app["session"]) as ha:
+                allowed = {c["id"] for c in await voice.candidates(ha)}
+                changed = await voice.set_selected(ha, wanted & allowed)
+        state = voice.load_state()
+        if isinstance(body.get("enabled"), bool) and body["enabled"] != bool(state.get("enabled")):
+            voice.save_state({**state, "enabled": body["enabled"]})
+            if body["enabled"]:
+                await v.start()
+                add_history("answer", "Sprachsteuerung eingeschaltet", "Sprachsteuerung ist an. Jetzt in der Alexa-App koppeln.")
+            else:
+                await v.stop()
+                add_history("answer", "Sprachsteuerung ausgeschaltet", "Sprachsteuerung ist aus. Alexa sieht die Geräte nicht mehr.")
+        elif changed and state.get("enabled"):
+            await v.restart()   # neu freigegebene Geräte erscheinen nach dem Neustart in Alexa
+    except Exception as e:
+        return web.json_response({"ok": False, "error": str(e)}, status=500)
+    return web.json_response({"ok": True, "changed": changed, **v.info()})
+
+
+@routes.post("/api/voice/reset")
+async def voice_reset(request):
+    """Kopplung löschen (z. B. Alexa-Konto gewechselt) – danach gibt es einen neuen Kopplungscode."""
+    try:
+        await request.app["voice"].reset_pairing()
+    except Exception as e:
+        return web.json_response({"ok": False, "error": str(e)}, status=500)
+    return web.json_response({"ok": True, **request.app["voice"].info()})
+
+
+# Mit Host-Netzwerk (nötig für Matter) wäre Port 8099 im ganzen Heimnetz offen. Die Oberfläche
+# darf aber nur über Home Assistant (Ingress, 172.30.32.2) erreichbar sein.
+INGRESS_IPS = {"172.30.32.2", "127.0.0.1", "::1"}
+
+
+@web.middleware
+async def only_ingress(request, handler):
+    if request.remote not in INGRESS_IPS:
+        return web.Response(status=403, text="Haglo Assist ist nur über Home Assistant erreichbar.")
+    return await handler(request)
+
+
 async def on_startup(app):
     app["session"] = aiohttp.ClientSession()
     app["bar_lock"] = asyncio.Lock()
@@ -3267,16 +3336,27 @@ async def on_startup(app):
     if app["bar_enabled"]:
         app["bar_task"] = asyncio.create_task(bar_listener(app))
     asyncio.create_task(selftest(app))
+    app["voice"] = voice.Voice(app["session"])
+    try:
+        await app["voice"].start_proxy()
+        if voice.load_state().get("enabled"):
+            await app["voice"].start()
+    except Exception as e:
+        print(f"[Sprache] Start fehlgeschlagen: {e}")
 
 
 async def on_cleanup(app):
+    if app.get("voice"):
+        await app["voice"].stop()
+        if app["voice"].runner:
+            await app["voice"].runner.cleanup()
     if app.get("bar_task"):
         app["bar_task"].cancel()
     await app["session"].close()
 
 
 def make_app() -> web.Application:
-    app = web.Application()
+    app = web.Application(middlewares=[only_ingress])
     app.add_routes(routes)
     app.router.add_static("/static/", STATIC_DIR)
     app.on_startup.append(on_startup)
