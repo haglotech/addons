@@ -12,6 +12,7 @@ Ist das Modell nicht da, nicht sicher oder der Wunsch zu groß, übernimmt wie b
 """
 
 import asyncio
+import difflib
 import hashlib
 import json
 import os
@@ -34,6 +35,7 @@ SYSTEM = ("Du bist Haglo Local, der lokale Smart-Home-Assistent. Antworte nur mi
           '{"a":[{"s":Dienst,"e":[Nummern],"d":{Daten}}],"t":Bestätigung} oder {"t":Antwort} '
           'oder {"f":Rückfrage} oder {"c":1} wenn es zu komplex ist.')
 
+LIMIT_S = 5              # länger wartet niemand: danach übernimmt Claude
 MAX_LEN = 140            # längere Wünsche sind fast nie „schalte X“ – direkt an Claude
 MAX_DEVICES = 10
 SHOWN = {"light", "switch", "cover", "climate", "lock", "media_player", "vacuum", "scene", "script",
@@ -96,6 +98,15 @@ def fmt_num(v) -> str:
     except (TypeError, ValueError):
         return str(v)
     return str(int(f)) if f == int(f) else str(round(f, 1))
+
+
+def similar(x: str, n: str) -> bool:
+    """Wort aus dem Befehl passt zu einem Namenswort – auch mit Tippfehler oder Wortende."""
+    if x == n:
+        return True
+    if len(x) >= 4 and (n.startswith(x[:max(4, len(x) - 2)]) or x.startswith(n[:max(4, len(n) - 2)])):
+        return True
+    return len(x) >= 5 and len(n) >= 5 and difflib.SequenceMatcher(None, x, n).ratio() >= 0.8
 
 
 def state_line(st: dict) -> str | None:
@@ -169,7 +180,7 @@ def preselect(wish: str, states: list[dict], areas: dict[str, str]) -> list[dict
         for x in w:
             if x in nw:
                 score += 3
-            elif any(len(x) >= 4 and (n.startswith(x[:max(4, len(x) - 2)]) or x.startswith(n[:max(4, len(n) - 2)])) for n in nw):
+            elif any(similar(x, n) for n in nw):
                 score += 2
         if room and room in room_hit:
             score += 2
@@ -266,6 +277,81 @@ def to_actions(out: dict, idx: dict[int, str]) -> list[dict] | None:
         data = a.get("d") if isinstance(a.get("d"), dict) else {}
         acts.append({"action": svc, "target": {"entity_id": ids}, **({"data": data} if data else {})})
     return acts
+
+
+# ---------------------------------------------------------------- Schnellweg (ohne Modell, < 1 s)
+RE_QUESTION = re.compile(r"\?|^(ist|sind|wie|was|welche|wieviel|wie ?viel|läuft|laeuft|hab|habe|warum|wann|wo)\b", re.I)
+RE_MULTI = re.compile(r"\b(und|dann|danach|außerdem|ausserdem|sowie|wenn|falls|sobald)\b|,(?!\d)", re.I)
+RE_PCT = re.compile(r"(\d{1,3})\s*(%|prozent)", re.I)
+RE_DEG = re.compile(r"(\d{1,2}(?:[.,]5)?)\s*(°|grad)", re.I)
+ON = re.compile(r"\b(an|ein|einschalten|anschalten|anmachen|anknipsen|starte|starten|aktivier\w*)\b", re.I)
+OFF = re.compile(r"\b(aus|ausschalten|ausmachen|abschalten|ab|ausknipsen|deaktivier\w*)\b", re.I)
+UP = re.compile(r"\b(hoch|rauf|öffne\w*|oeffne\w*|auf)\b", re.I)
+DOWN = re.compile(r"\b(runter|zu|schließ\w*|schliess\w*|herunter)\b", re.I)
+STOPW = re.compile(r"\b(stopp\w*|stop|anhalten|halt)\b", re.I)
+SWITCHY = {"light", "switch", "fan", "input_boolean", "media_player"}
+
+
+def fast_path(wish: str, states: list[dict], areas: dict[str, str]) -> dict | None:
+    """Eindeutige, kurze Schaltbefehle direkt ausführen – ohne Modell. Alles Unklare: None."""
+    w = wish.strip()
+    if len(w) > 60 or RE_QUESTION.search(w) or RE_MULTI.search(w):
+        return None
+    low = norm(w)
+    picks = preselect(w, states, areas)
+    if not picks:
+        return None
+    # Ziel: genau ein klar bester Treffer, oder „alle Lichter (im Raum)“
+    def score_of(p):
+        nw = set(words(p["st"].get("attributes", {}).get("friendly_name") or ""))
+        return sum(1 for x in words(w) if any(similar(x, n) for n in nw))
+    all_lights = re.search(r"\balle\b.*\b(licht|lichter|lampen)\b|\b(licht|lichter)\b.*\b(überall|ueberall)\b", low)
+    room_names = {norm(r).strip() for r in areas.values() if r}
+    room = next((r for r in room_names if r and r in low), None)
+    if all_lights or (re.search(r"\b(licht|lichter|lampen)\b", low) and room and not any(score_of(p) >= 2 for p in picks)):
+        targets = [p for p in picks if p["st"]["entity_id"].startswith("light.") and (not room or norm(p["room"]).strip() == room)]
+        if all_lights and not room:
+            targets = [{"st": s, "room": areas.get(s["entity_id"], "")} for s in states if s["entity_id"].startswith("light.")
+                       and not s.get("attributes", {}).get("hidden")]
+        if not targets:
+            return None
+    else:
+        ranked = sorted(picks, key=lambda p: -score_of(p))
+        best = score_of(ranked[0])
+        if best < 1 or (len(ranked) > 1 and score_of(ranked[1]) == best):
+            return None
+        targets = [ranked[0]]
+    doms = {t["st"]["entity_id"].split(".")[0] for t in targets}
+    if len(doms) != 1:
+        return None
+    dom = doms.pop()
+    ids = [t["st"]["entity_id"] for t in targets]
+    pct, deg = RE_PCT.search(w), RE_DEG.search(w)
+    act = None
+    if dom in ("scene", "script"):
+        act = {"action": f"{dom}.turn_on"}
+    elif dom == "light" and pct:
+        act = {"action": "light.turn_on", "data": {"brightness_pct": max(1, min(100, int(pct.group(1))))}}
+    elif dom == "cover":
+        if pct:
+            act = {"action": "cover.set_cover_position", "data": {"position": max(0, min(100, int(pct.group(1))))}}
+        elif STOPW.search(w):
+            act = {"action": "cover.stop_cover"}
+        elif DOWN.search(w) and not UP.search(w):
+            act = {"action": "cover.close_cover"}
+        elif UP.search(w) and not DOWN.search(w):
+            act = {"action": "cover.open_cover"}
+    elif dom == "climate" and deg:
+        act = {"action": "climate.set_temperature", "data": {"temperature": float(deg.group(1).replace(",", "."))}}
+    elif dom in SWITCHY:
+        on, off = bool(ON.search(w)), bool(OFF.search(w))
+        if on != off:
+            act = {"action": f"{dom}.turn_{'on' if on else 'off'}"}
+    if not act:
+        return None
+    act["target"] = {"entity_id": ids}
+    names = {t["st"]["entity_id"]: t["st"].get("attributes", {}).get("friendly_name") or t["st"]["entity_id"] for t in targets}
+    return {"kind": "actions", "actions": [act], "text": confirm_text([act], names), "fast": True}
 
 
 class LocalAI:
@@ -397,9 +483,15 @@ class LocalAI:
                 "last_ms": self.last_ms}
 
     # ------------------------------------------------------------ Befehl verstehen
-    async def understand(self, wish: str, states: list[dict], areas: dict[str, str]) -> dict | None:
+    async def understand(self, wish: str, states: list[dict], areas: dict[str, str], use_model: bool = True) -> dict | None:
         """Gibt {"kind": "actions"|"answer"|"question", ...} zurück – oder None (→ Claude übernimmt)."""
-        if self.status != "bereit" or len(wish) > MAX_LEN:
+        t_start = time.time()
+        quick = fast_path(wish, states, areas)
+        if quick:
+            quick["ms"] = self.last_ms = max(1, int((time.time() - t_start) * 1000))
+            print(f"[Lokal] Schnellweg {quick['ms']} ms | {wish!r} → {quick['actions']}", flush=True)
+            return quick
+        if not use_model or self.status != "bereit" or len(wish) > MAX_LEN:
             return None
         picks = preselect(wish, states, areas)
         if not picks:
@@ -412,10 +504,13 @@ class LocalAI:
                 "stop": [',"t":']}
         try:
             async with self.session.post(f"http://127.0.0.1:{PORT}/v1/chat/completions", json=body,
-                                         timeout=aiohttp.ClientTimeout(total=45)) as r:
+                                         timeout=aiohttp.ClientTimeout(total=LIMIT_S)) as r:
                 if r.status != 200:
                     return None
                 data = await r.json()
+        except asyncio.TimeoutError:
+            print(f"[Lokal] über {LIMIT_S} s – Claude übernimmt: {wish!r}", flush=True)
+            return None
         except Exception:
             return None
         self.last_ms = int((time.time() - t0) * 1000)

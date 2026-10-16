@@ -2648,10 +2648,11 @@ async def generate(request):
     if not wish:
         return web.json_response({"ok": False, "error": "Bitte einen Wunsch eingeben."}, status=400)
     talk_touch()        # eine Nachricht ist auch eine Regung; nach langer Pause beginnt hier das neue Gespräch
-    if not dialog and not refine and load_prefs().get("mode") == "lokal":
-        # Haglo Local: einfache Befehle direkt auf dem Hub – ohne Internet, ohne Kontingent
+    mode = load_prefs().get("mode") or "schnell"
+    if not dialog and not refine and mode in ("lokal", "schnell"):
+        # Schnellweg (beide Modi) und Haglo Local (nur „Lokal“): direkt auf dem Hub, ohne Internet und Kontingent
         try:
-            done = await local_answer(request.app, wish)
+            done = await local_answer(request.app, wish, use_model=mode == "lokal")
         except Exception as e:
             print(f"[Lokal] übersprungen: {e}", flush=True)
             done = None
@@ -3346,13 +3347,13 @@ async def area_map(app) -> dict[str, str]:
     return out
 
 
-async def local_answer(app, wish: str) -> dict | None:
+async def local_answer(app, wish: str, use_model: bool = True) -> dict | None:
     loc = app.get("local")
     if not loc:
         return None
     session = app["session"]
     states = await all_states(session)
-    res = await loc.understand(wish, states, await area_map(app))
+    res = await loc.understand(wish, states, await area_map(app), use_model=use_model)
     if not res:
         return None
     ms = res["ms"]
