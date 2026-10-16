@@ -2233,13 +2233,14 @@ async def rename_items(session, items: list) -> list[dict]:
     return steps
 
 
-async def action_steps(session, actions: list, by_id: dict) -> list[dict]:
+async def action_steps(session, actions: list, by_id: dict, registry: dict | None = None) -> list[dict]:
     """Was geschaltet wurde, für die Anzeige: je Gerät eine Zeile mit Link."""
-    try:
-        async with HAClient(session) as ha:
-            registry = {e["entity_id"]: e for e in await ha.call("config/entity_registry/list") or []}
-    except Exception:
-        registry = {}
+    if registry is None:
+        try:
+            async with HAClient(session) as ha:
+                registry = {e["entity_id"]: e for e in await ha.call("config/entity_registry/list") or []}
+        except Exception:
+            registry = {}
     words = {"turn_on": ("on", "eingeschaltet"), "turn_off": ("off", "ausgeschaltet"), "toggle": ("action", "umgeschaltet"),
              "open_cover": ("on", "geöffnet"), "close_cover": ("off", "geschlossen"), "lock": ("off", "verriegelt"), "unlock": ("on", "entriegelt")}
     steps = []
@@ -3329,15 +3330,26 @@ async def voice_reset(request):
 
 
 # ---------------------------------------------------------------- Haglo Local (eigenes Modell auf dem Hub)
-async def area_map(app) -> dict[str, str]:
-    """entity_id → Raumname, 60 s zwischengespeichert."""
+async def area_map(app, force: bool = False) -> dict[str, str]:
+    """entity_id → Raumname. Zwischengespeichert, nach einer Minute im Hintergrund aufgefrischt."""
     cached = app.get("areas_cache")
-    if cached and time.time() - cached[0] < 60:
+    if cached and not force and time.time() - cached[0] < 600:
+        if time.time() - cached[0] > 60 and not app.get("areas_refresh"):
+            # im Hintergrund auffrischen – der Befehl wartet nicht darauf
+            async def refresh():
+                try:
+                    await area_map(app, force=True)
+                except Exception:
+                    pass
+                finally:
+                    app["areas_refresh"] = None
+            app["areas_refresh"] = asyncio.create_task(refresh())
         return cached[1]
     async with HAClient(app["session"]) as ha:
         ents = await ha.call("config/entity_registry/list") or []
         devs = {d["id"]: d for d in await ha.call("config/device_registry/list") or []}
         names = {a["area_id"]: a["name"] for a in await ha.call("config/area_registry/list") or []}
+    app["registry_cache"] = {e["entity_id"]: e for e in ents}
     out = {}
     for e in ents:
         aid = e.get("area_id") or (devs.get(e.get("device_id") or "") or {}).get("area_id")
@@ -3351,13 +3363,14 @@ async def local_answer(app, wish: str, use_model: bool = True) -> dict | None:
     loc = app.get("local")
     if not loc:
         return None
+    t0 = time.time()
     session = app["session"]
-    states = await all_states(session)
-    res = await loc.understand(wish, states, await area_map(app), use_model=use_model)
+    states, areas = await asyncio.gather(all_states(session), area_map(app))
+    res = await loc.understand(wish, states, areas, use_model=use_model)
     if not res:
         return None
-    ms = res["ms"]
     if res["kind"] in ("answer", "question"):
+        ms = int((time.time() - t0) * 1000)
         add_history("answer", wish, res["text"], local=ms)
         return {"answer": res["text"], "local": ms}
     by_id = {x["entity_id"]: x for x in states}
@@ -3365,9 +3378,11 @@ async def local_answer(app, wish: str, use_model: bool = True) -> dict | None:
     if check_actions(acts, by_id):
         return None
     if any(risky_action(a, by_id) for a in acts):
-        return {"confirm_actions": acts, "erklaerung": res["text"], "local": ms}
+        return {"confirm_actions": acts, "erklaerung": res["text"]}
     await run_actions(session, acts)
-    add_history("control", wish, res["text"], steps=await action_steps(session, acts, by_id), local=ms)
+    ms = int((time.time() - t0) * 1000)        # ehrliche Zeit: vom Befehl bis Home Assistant geschaltet hat
+    print(f"[Lokal] gesamt {ms} ms (erkannt in {res['ms']} ms) | {wish!r}", flush=True)
+    add_history("control", wish, res["text"], steps=await action_steps(session, acts, by_id, app.get("registry_cache")), local=ms)
     return {"done": res["text"], "local": ms}
 
 
@@ -3421,6 +3436,7 @@ async def on_startup(app):
         app["bar_task"] = asyncio.create_task(bar_listener(app))
     asyncio.create_task(selftest(app))
     app["local"] = local_ai.LocalAI(app["session"])
+    asyncio.create_task(area_map(app))          # Raumliste vorab laden – der erste Befehl ist dann schon schnell
     if local_ai.load_state().get("enabled"):
         await app["local"].start()
     app["voice"] = voice.Voice(app["session"])
