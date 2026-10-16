@@ -279,6 +279,16 @@
   .sheet .row { display: flex; gap: 10px; }
   .sheet .row > * { flex: 1; }
   .sheet .row .btn2 { justify-content: center; cursor: pointer; padding: 12px; }
+  .vtoggle, .vitem { display: flex; gap: 10px; align-items: flex-start; cursor: pointer; }
+  .vtoggle { margin: 0 0 14px; }
+  .vitem { border: 1px solid var(--line); border-radius: 12px; padding: 10px 14px; align-items: center; }
+  .vitem .info { flex: 1; min-width: 0; }
+  .vitem .n { font-weight: 600; color: var(--heading); font-size: 15px; }
+  .vitem .d { color: var(--muted); font-size: 13px; }
+  .vpair { border: 1px solid var(--line); border-radius: 12px; padding: 14px; margin: 0 0 14px; }
+  .vpair .code { font-size: 26px; font-weight: 600; letter-spacing: 2px; color: var(--heading); margin: 6px 0; user-select: all; }
+  .vpair ol { margin: 6px 0 0 18px; padding: 0; color: var(--muted); font-size: 14px; }
+  #vFilter { width: 100%; margin: 0 0 10px; box-sizing: border-box; }
   .vlist { display: flex; flex-direction: column; gap: 8px; }
   .ver { border: 1px solid var(--line); border-radius: 12px; padding: 12px 14px; display: flex; align-items: center; gap: 12px; }
   .ver .info { flex: 1; min-width: 0; }
@@ -420,6 +430,7 @@
         </div>
         <button type="button" class="tool" id="histLink" title="Verlauf" aria-label="Verlauf"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 12a9 9 0 1 0 3-6.7"/><path d="M3 4v5h5"/><path d="M12 8v4l3 2"/></svg>Verlauf</button>
         <button type="button" class="tool hidden" id="autosLink" title="Automationen" aria-label="Automationen"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M13 2L4 14h7l-1 8 9-12h-7z"/></svg>Automationen</button>
+        <button type="button" class="tool" id="voiceLink" title="Sprachsteuerung (Alexa)" aria-label="Sprachsteuerung"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="2" width="6" height="12" rx="3"/><path d="M5 10a7 7 0 0 0 14 0"/><path d="M12 17v4"/></svg>Sprache</button>
         <button type="button" class="tool" id="versionsLink" title="Versionen" aria-label="Versionen"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3l9 5-9 5-9-5z"/><path d="M3 13l9 5 9-5"/></svg>Versionen</button>
       </div>
     </div>
@@ -455,6 +466,23 @@
         <label><input type="checkbox" id="optForeign"><span><b>Auch meine eigenen Automationen ändern</b><br>Dafür werden deine bestehenden Automationen an den Haglo-Server und Anthropic übertragen. Vor jeder Änderung wird die bisherige Fassung gesichert.</span></label>
         <label><input type="checkbox" id="optStates"><span><b>Aktuelle Werte für Fragen immer übertragen</b><br>Für Fragen wie „Wie warm ist es im Bad?“ werden die Werte der betroffenen Geräte übertragen, ohne jedes Mal zu fragen.</span></label>
       </div>
+    </div>
+  </div>
+
+  <div class="sheet-bg hidden" id="voice">
+    <div class="sheet wide">
+      <button class="close" id="voiceClose" aria-label="Schließen">×</button>
+      <h3>Sprachsteuerung <span class="kind">Beta</span></h3>
+      <p class="now">Schalte ausgewählte Geräte per Sprache mit Alexa – auch Google Home und Apple Home funktionieren. Die Verbindung läuft direkt in deinem Heimnetz über Matter, ohne Haglo-Server und ohne Cloud-Konto bei uns.</p>
+      <label class="vtoggle"><input type="checkbox" id="vOn"><span><b>Sprachsteuerung einschalten</b><br>Nur die Geräte, die du unten anhakst, sind für Alexa sichtbar.</span></label>
+      <div id="vPair" class="vpair hidden"></div>
+      <div id="vBody" class="hidden">
+        <input id="vFilter" class="fld" placeholder="Gerät suchen …" autocomplete="off">
+        <div class="vlist" id="vItems"></div>
+        <div class="actions" style="justify-content:flex-start;margin-top:12px"><button class="primary" id="vSave" disabled>Auswahl übernehmen</button></div>
+      </div>
+      <p class="hint" id="vMsg"></p>
+      <p class="hint">Das Echo braucht Matter-Unterstützung (z. B. Echo 4. Gen., Echo Dot ab 4. Gen., Echo Show). In Home Assistant tragen freigegebene Geräte das Label „Sprachsteuerung“. <a role="button" tabindex="0" id="vReset">Kopplung zurücksetzen</a></p>
     </div>
   </div>
 
@@ -1390,6 +1418,76 @@ $("autos").addEventListener("click", async (e) => {
   b.disabled = true;
   try { await api("api/automations/delete", { id: b.dataset.del }); openAutos(); loadHistory(); }
   catch (err) { $("aHint").textContent = err.message; $("aHint").classList.add("err"); b.disabled = false; }
+});
+
+// ---------------------------------------------------------------- Sprachsteuerung
+let vItems = [], vChosen = new Set(), vTimer = null;
+function vRender() {
+  const q = $("vFilter").value.trim().toLowerCase();
+  const list = vItems.filter((i) => !q || (i.name + " " + i.area + " " + i.art).toLowerCase().includes(q));
+  $("vItems").innerHTML = list.length ? list.map((i) => `<label class="vitem"><input type="checkbox" data-v="${esc(i.id)}"${vChosen.has(i.id) ? " checked" : ""}>
+      <div class="info"><div class="n">${esc(i.name)} <span class="kind">${esc(i.art)}</span></div>
+      <div class="d">${esc([i.area, i.alexa !== i.name ? `in Alexa: „${i.alexa}“` : ""].filter(Boolean).join(" · "))}</div></div></label>`).join("")
+    : `<p class="now">${vItems.length ? "Nichts gefunden." : "Keine schaltbaren Geräte gefunden."}</p>`;
+  const before = new Set(vItems.filter((i) => i.on).map((i) => i.id));
+  $("vSave").disabled = before.size === vChosen.size && [...vChosen].every((x) => before.has(x));
+}
+function vPair(r) {
+  const box = $("vPair");
+  if (!r.enabled) { box.classList.add("hidden"); return; }
+  box.classList.remove("hidden");
+  if (r.paired) box.innerHTML = `<b>✓ Gekoppelt.</b> Sag zum Beispiel: „Alexa, schalte ${esc((vItems.find((i) => i.on) || {}).alexa || "die Steckdose")} ein.“<br><span class="hint">Neu angehakte Geräte erscheinen nach etwa einer Minute in der Alexa-App.</span>`;
+  else if (r.manual) box.innerHTML = `<b>Jetzt in der Alexa-App koppeln</b><div class="code">${esc(r.manual)}</div>
+      <ol><li>Alexa-App → <b>Geräte</b> → <b>+</b> → <b>Gerät hinzufügen</b> → <b>Andere</b> → <b>Matter</b></li>
+      <li>Beim QR-Code die Option für den <b>Zahlencode</b> wählen (Alexa nennt es z. B. „Code eingeben“)</li>
+      <li>Diesen Code eingeben. Danach erscheinen die angehakten Geräte.</li></ol>`;
+  else box.innerHTML = r.error ? `<span class="err">${esc(r.error)}</span>` : `Sprach-Modul startet … das dauert beim ersten Mal bis zu zwei Minuten.`;
+}
+async function openVoice(keep) {
+  $("voice").classList.remove("hidden");
+  if (!keep) { $("vMsg").textContent = ""; $("vMsg").classList.remove("err"); }
+  try {
+    const r = await api("api/voice");
+    vItems = r.items; if (!keep) vChosen = new Set(r.items.filter((i) => i.on).map((i) => i.id));
+    $("vOn").checked = r.enabled; $("vBody").classList.toggle("hidden", !r.enabled);
+    vPair(r); vRender();
+    clearTimeout(vTimer);
+    if (r.enabled && !r.paired && !$("voice").classList.contains("hidden")) vTimer = setTimeout(() => openVoice(true), 4000);
+  } catch (e) { $("vMsg").textContent = e.message; $("vMsg").classList.add("err"); }
+}
+function closeVoice() { $("voice").classList.add("hidden"); clearTimeout(vTimer); }
+$("voiceLink").addEventListener("click", () => openVoice());
+$("voiceLink").addEventListener("keydown", (e) => { if (e.key === "Enter") openVoice(); });
+$("voiceClose").addEventListener("click", closeVoice);
+$("voice").addEventListener("click", (e) => { if (e.target === $("voice")) closeVoice(); });
+$("vFilter").addEventListener("input", vRender);
+$("vItems").addEventListener("change", (e) => {
+  const id = e.target.dataset.v; if (!id) return;
+  e.target.checked ? vChosen.add(id) : vChosen.delete(id); vRender();
+});
+$("vOn").addEventListener("change", async (e) => {
+  e.target.disabled = true;
+  try { await api("api/voice", { enabled: e.target.checked }); await openVoice(true); }
+  catch (err) { $("vMsg").textContent = err.message; $("vMsg").classList.add("err"); e.target.checked = !e.target.checked; }
+  e.target.disabled = false;
+});
+$("vSave").addEventListener("click", async () => {
+  $("vSave").disabled = true; $("vSave").textContent = "Wird übernommen …";
+  try {
+    const r = await api("api/voice", { entities: [...vChosen] });
+    $("vMsg").classList.remove("err");
+    $("vMsg").textContent = r.changed ? "Übernommen. In etwa einer Minute sieht Alexa die Änderung." : "Keine Änderung.";
+    await openVoice(true);
+  } catch (err) { $("vMsg").textContent = err.message; $("vMsg").classList.add("err"); }
+  $("vSave").textContent = "Auswahl übernehmen";
+});
+$("vReset").addEventListener("click", async () => {
+  const b = $("vReset");
+  if (!b.dataset.sure) { b.dataset.sure = "1"; b.textContent = "Wirklich zurücksetzen? Alexa verliert die Geräte."; setTimeout(() => { delete b.dataset.sure; b.textContent = "Kopplung zurücksetzen"; }, 6000); return; }
+  delete b.dataset.sure; b.textContent = "Kopplung zurücksetzen";
+  $("vMsg").classList.remove("err"); $("vMsg").textContent = "Kopplung wird zurückgesetzt …";
+  try { await api("api/voice/reset", {}); $("vMsg").textContent = "Zurückgesetzt. In der Alexa-App die alten Geräte entfernen und neu koppeln."; openVoice(true); }
+  catch (err) { $("vMsg").textContent = err.message; $("vMsg").classList.add("err"); }
 });
 
 // ---------------------------------------------------------------- Versionen
