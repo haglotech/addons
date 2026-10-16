@@ -3365,7 +3365,14 @@ async def local_answer(app, wish: str, use_model: bool = True) -> dict | None:
         return None
     t0 = time.time()
     session = app["session"]
-    states, areas = await asyncio.gather(all_states(session), area_map(app))
+    if app.get("areas_cache"):
+        states, areas = await asyncio.gather(all_states(session), area_map(app))
+    else:
+        # Raumliste noch nicht da (gerade gestartet): nicht darauf warten – Namen reichen fürs Schalten
+        if not app.get("areas_refresh"):
+            app["areas_refresh"] = asyncio.create_task(area_map(app, force=True))
+            app["areas_refresh"].add_done_callback(lambda _t: app.__setitem__("areas_refresh", None))
+        states, areas = await all_states(session), {}
     res = await loc.understand(wish, states, areas, use_model=use_model)
     if not res:
         return None

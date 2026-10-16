@@ -436,8 +436,10 @@ class LocalAI:
                         "-c", "2048", "-t", threads, "-np", "1"]
                 if adapter:
                     args += ["--lora", str(adapter)]
+                # niedrige Priorität: Schalten und Home Assistant selbst gehen immer vor
                 self.proc = await asyncio.create_subprocess_exec(*args, stdout=asyncio.subprocess.PIPE,
-                                                                 stderr=asyncio.subprocess.STDOUT)
+                                                                 stderr=asyncio.subprocess.STDOUT,
+                                                                 preexec_fn=lambda: os.nice(10))
                 asyncio.create_task(self._watch_ready())
                 async for raw in self.proc.stdout:
                     line = raw.decode(errors="replace").rstrip()

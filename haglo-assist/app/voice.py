@@ -190,7 +190,8 @@ class Voice:
                 self.proc = await asyncio.create_subprocess_exec(
                     "matterbridge", "--bridge", "--homedir", str(VOICE_DIR), "--frontend", str(FRONTEND_PORT), "--port", str(MATTER_PORT),
                     "--bind", "127.0.0.1", "--novirtual", "--no-ansi",
-                    stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.STDOUT)
+                    stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.STDOUT,
+                    preexec_fn=lambda: os.nice(5))      # niedrigere Priorität als die App selbst
                 self.running, self.error = True, ""
                 started = asyncio.get_running_loop().time()
                 async for raw in self.proc.stdout:
