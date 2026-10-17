@@ -216,12 +216,13 @@ def preselect(wish: str, states: list[dict], areas: dict[str, str]) -> list[dict
     return [{"st": st, "room": room} for _, st, room in keep[:MAX_DEVICES]]
 
 
-def build_prompt(wish: str, picks: list[dict]) -> tuple[str, dict[int, str]]:
+def build_prompt(wish: str, picks: list[dict], short: bool = False) -> tuple[str, dict[int, str]]:
+    """Geräteliste fürs Modell. short: Gerätart statt entity_id (kürzer, schneller – für Adapter „…-kurz“)."""
     lines, idx = [], {}
     for i, p in enumerate(picks, 1):
         st = p["st"]
         name = st.get("attributes", {}).get("friendly_name") or st["entity_id"]
-        parts = [str(i), st["entity_id"], name, p["room"] or "-"]
+        parts = [str(i), st["entity_id"].split(".")[0] if short else st["entity_id"], name, p["room"] or "-"]
         s = state_line(st)
         if s:
             parts.append(s)
@@ -1006,6 +1007,7 @@ class LocalAI:
         self.progress = 0
         self.lock = asyncio.Lock()
         self.last_ms = None
+        self.short = False            # Prompt-Format des geladenen Adapters
 
     # ------------------------------------------------------------ Modell holen und starten
     async def _download(self, url: str, dest: Path, sha: str | None = None, part: str = ""):
@@ -1065,6 +1067,7 @@ class LocalAI:
         else:
             found = sorted(f for d in [DIR, *EXTRA_DIRS] if d.exists() for f in d.glob("haglo-local-*.gguf"))
             adapter = found[-1] if found else None
+        self.short = bool(adapter and "kurz" in adapter.name) or (spec or {}).get("prompt") == "kurz"
         return base, adapter
 
     async def _run(self):
@@ -1165,7 +1168,7 @@ class LocalAI:
         if not picks:
             print(f"[Lokal] kein passendes Gerät gefunden | {wish!r}", flush=True)
             return None
-        user, idx = build_prompt(wish, picks)
+        user, idx = build_prompt(wish, picks, self.short)
         by_id = {x["entity_id"]: x for x in states}
         t0 = time.time()
         limit = LIMIT_PLAN_S if planned else LIMIT_S
