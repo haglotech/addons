@@ -260,6 +260,8 @@ def confirm_text(acts: list[dict], names: dict[str, str]) -> str:
             continue
         if svc == "turn_on" and "brightness_pct" in data:
             w = f"auf {data['brightness_pct']} %"
+        elif svc == "set_temperature" and "target_temp_low" in data:
+            w = f"auf {fmt_num(data['target_temp_low'])}–{fmt_num(data.get('target_temp_high'))} °C".replace(".", ",")
         elif svc == "turn_on" and "brightness_step_pct" in data:
             w = "heller" if data["brightness_step_pct"] > 0 else "dunkler"
         else:
@@ -509,12 +511,17 @@ def fix_values(wish: str, out: dict, idx: dict[int, str], by_id: dict[str, dict]
             continue
         if a.get("s") == "climate.set_temperature" and RE_WARM.search(wish) and not RE_DEG.search(wish):
             try:
-                st = by_id[idx[int((a.get("e") or [None])[0])]]
-                goal = float(st.get("attributes", {}).get("temperature"))
+                attrs = by_id[idx[int((a.get("e") or [None])[0])]].get("attributes", {})
             except (KeyError, TypeError, ValueError):
                 continue
-            up = bool(RE_WARMER.search(wish)) and not RE_COOLER.search(wish)
-            d["temperature"] = round(goal + (1.5 if up else -1.5), 1)
+            step = 1.5 if RE_WARMER.search(wish) and not RE_COOLER.search(wish) else -1.5
+            if isinstance(attrs.get("temperature"), (int, float)):
+                d["temperature"] = round(attrs["temperature"] + step, 1)
+            elif isinstance(attrs.get("target_temp_low"), (int, float)) and isinstance(attrs.get("target_temp_high"), (int, float)):
+                # Heizen/Kühlen mit Unter- und Obergrenze: beide Grenzen verschieben
+                d.pop("temperature", None)
+                d["target_temp_low"] = round(attrs["target_temp_low"] + step, 1)
+                d["target_temp_high"] = round(attrs["target_temp_high"] + step, 1)
         if a.get("s") == "light.turn_on" and "color_temp_kelvin" in d:
             low = wish.lower()
             d["color_temp_kelvin"] = 6000 if "kalt" in low else 2700 if "warm" in low else d["color_temp_kelvin"]
@@ -731,6 +738,20 @@ def rooms_named(wish: str, areas: dict[str, str]) -> set[str]:
     return out
 
 
+def name_hit(wish: str, st: dict) -> bool:
+    """Steht ein Wort aus dem Gerätenamen im Wunsch (ohne Raum- und Füllwörter)?"""
+    a = st.get("attributes") or {}
+    ww = words(wish)
+    return any(similar(x, n) for x in ww for n in words(a.get("friendly_name") or "") if n not in STOP and len(n) >= 3)
+
+
+def exact_hit(wish: str, st: dict, skip: set[str] = frozenset()) -> bool:
+    """Ein Wort des Gerätenamens (ohne Raumwörter) steht genau so im Wunsch."""
+    ww = set(words(wish))
+    return any(n in ww for n in words((st.get("attributes") or {}).get("friendly_name") or "")
+               if n not in STOP and n not in skip and len(n) >= 4)
+
+
 def named_in_wish(wish: str, st: dict, areas: dict[str, str]) -> bool:
     """Kommt das Gerät im Wunsch vor (Name, Gerätart oder Raum)?"""
     a = st.get("attributes") or {}
@@ -783,10 +804,11 @@ def code_rules(wish: str, out: dict, idx: dict[int, str], by_id: dict[str, dict]
     """Was das kleine Modell schlecht kann, macht der Code; was nicht zum Wunsch passt, geht an Claude (None)."""
     low = norm(wish)
     named = rooms_named(wish, areas)
+    room_words = {x for r in set(areas.values()) for x in words(r)}
     acts_src = out["au"]["a"] if isinstance(out.get("au"), dict) else out.get("a") or []
     # 1. Jedes Gerät muss im Wunsch vorkommen und – wenn Räume genannt sind – in einem davon stehen
     for a in acts_src:
-        for e in a.get("e") or []:
+        for pos, e in enumerate(list(a.get("e") or [])):
             try:
                 st = by_id[idx[int(e)]]
             except (KeyError, TypeError, ValueError):
@@ -796,7 +818,27 @@ def code_rules(wish: str, out: dict, idx: dict[int, str], by_id: dict[str, dict]
             if dom in ("scene", "script"):
                 continue
             if named and room and room not in named:
-                return None
+                # Gerät aus einem nicht genannten Raum: zum gleichnamigen Gerät im genannten Raum wechseln;
+                # beim Namen genanntes Gerät bei mehreren Befehlen behalten (der Raum gehört zum anderen Teil);
+                # sonst nur, wenn es im genannten Raum genau ein Gerät dieser Art gibt
+                there = [i for i, x in idx.items() if x.split(".")[0] == dom and areas.get(x) in named and i not in a["e"]]
+                same = [i for i in there if name_hit(wish, by_id[idx[i]])]
+                if len(same) == 1:
+                    a["e"][pos] = same[0]
+                elif name_hit(wish, st) and len(acts_src) > 1:
+                    pass
+                elif len(there) == 1 and not same:
+                    a["e"][pos] = there[0]
+                else:
+                    return None
+                st = by_id[idx[a["e"][pos]]]
+            # Steht ein Gerätename wörtlich im Wunsch, hat er Vorrang vor einem nur ähnlichen („Deckenlicht“ ≠ „Deckenleuchte“)
+            if not exact_hit(wish, st, room_words):
+                exact = [i for i, x in idx.items() if x.split(".")[0] == dom and i not in a["e"]
+                         and exact_hit(wish, by_id[x], room_words) and (not named or areas.get(x) in named)]
+                if len(exact) == 1:
+                    a["e"][pos] = exact[0]
+                    st = by_id[idx[exact[0]]]
             if (len(acts_src) > 1 or "in" in out or "au" in out) and not named_in_wish(wish, st, areas):
                 return None
     # 2. Dasselbe Gerät gleichzeitig an und aus → nicht raten
