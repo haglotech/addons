@@ -1168,7 +1168,7 @@ ROUTE: dict | None = None      # Weg der gerade laufenden Anfrage (für die Anze
 
 # Woran Auto erkennt, dass ein Wunsch Claude Präzise braucht
 COMPLEX = re.compile(
-    r"dashboard|übersicht|seite|reiter|karte|kachel|layout|automati|wenn .+ (dann|soll|sollen)|immer wenn|sobald|"
+    r"dashboard|übersicht|seite|reiter|karte|kachel|layout|automati|(wenn|falls) .+ (dann|soll|sollen)|immer wenn|sobald|"
     r"jeden (tag|morgen|abend)|am meisten|welche geräte|"
     r"zeitplan|um \d{1,2}(:\d\d)? ?uhr|warum|wieso|weshalb|erklär|fehler|repar|kaputt|geht nicht|funktioniert nicht|"
     r"einricht|integration|hinzufüg|verbind|update|aktualisier|umbenenn|aufräum|optimier|vorschl|plan|analys|"
@@ -3405,6 +3405,10 @@ async def local_answer(app, wish: str, use_model: bool = True) -> dict | None:
     if not loc:
         return None
     t0 = time.time()
+    # Sicherheit: Wenn-dann-Wünsche, Zeitpläne, Automationen, Fehlersuche werden in KEINEM Modus lokal
+    # ausgeführt – weder Schnellweg noch Modell. Die gehen an Claude (Auto/Schnell/Präzise).
+    if is_complex(wish):
+        return None
     session = app["session"]
     if app.get("areas_cache"):
         states, areas = await asyncio.gather(all_states(session), area_map(app))
