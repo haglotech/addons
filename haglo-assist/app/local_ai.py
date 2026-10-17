@@ -405,7 +405,12 @@ def fast_path(wish: str, states: list[dict], areas: dict[str, str]) -> dict | No
         act = [p for p in picks if p["st"]["entity_id"].split(".")[0] in ACTIONABLE]
         if room:
             act = [p for p in act if in_room(p)]
-        act = [p for p in act if score_of(p) >= 1]
+        if room and not any(score_of(p) >= 1 for p in act):
+            # Nur der Raum genannt („Schalte Garage ein“): eindeutig, wenn dort genau ein Schaltbares ist
+            only = [p for p in act if p["st"]["entity_id"].split(".")[0] in SWITCHY]
+            act = only if len(only) == 1 else []
+        else:
+            act = [p for p in act if score_of(p) >= 1]
         if not act:
             return None
         best = max(score_of(p) for p in act)
