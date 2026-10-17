@@ -2679,6 +2679,16 @@ async def generate(request):
             done = None
         if done:
             return web.json_response({"ok": True, **done})
+    if mode == "lokal":
+        # Lokal heißt lokal: nie still an Claude weitergeben. Ehrlich sagen, was lokal nicht geht.
+        text = ("Wenn-dann-Regeln, Zeitpläne, Automationen, Dashboards und Fehlersuche mache ich nicht lokal. "
+                "Dafür oben „Auto“ oder „Präzise“ wählen.") if complex_wish else \
+               ("Das habe ich lokal nicht sicher verstanden. Lokal schalte ich Geräte, stelle Helligkeit, Temperatur "
+                "und Rollläden ein und sage dir, ob etwas an ist. Gerätename oder Raum genauer nennen – oder für "
+                "alles andere „Auto“ wählen.")
+        print(f"[Lokal] nicht lokal lösbar, Claude NICHT gefragt (Modus Lokal) | {wish!r}", flush=True)
+        add_history("answer", wish, text, local=1)
+        return web.json_response({"ok": True, "answer": text, "local": 1})
     # Welche Claude-Stufe? Auto entscheidet nach dem Wunsch, sonst gilt die Wahl des Kunden.
     cloud_mode = ("praezise" if complex_wish else "schnell") if mode == "auto" else \
         ("schnell" if mode == "lokal" else mode)
@@ -3408,6 +3418,7 @@ async def local_answer(app, wish: str, use_model: bool = True) -> dict | None:
     # Sicherheit: Wenn-dann-Wünsche, Zeitpläne, Automationen, Fehlersuche werden in KEINEM Modus lokal
     # ausgeführt – weder Schnellweg noch Modell. Die gehen an Claude (Auto/Schnell/Präzise).
     if is_complex(wish):
+        print(f"[Lokal] komplex → nicht lokal | {wish!r}", flush=True)
         return None
     session = app["session"]
     if app.get("areas_cache"):
@@ -3428,6 +3439,7 @@ async def local_answer(app, wish: str, use_model: bool = True) -> dict | None:
     by_id = {x["entity_id"]: x for x in states}
     acts = res["actions"]
     if check_actions(acts, by_id):
+        print(f"[Lokal] Aktion abgelehnt ({check_actions(acts, by_id)}) | {wish!r}", flush=True)
         return None
     if any(risky_action(a, by_id) for a in acts):
         return {"confirm_actions": acts, "erklaerung": res["text"]}

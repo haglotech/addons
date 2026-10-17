@@ -592,9 +592,12 @@ class LocalAI:
             print(f"[Lokal] Schnellweg {quick['ms']} ms | {wish!r} → {quick['actions']}", flush=True)
             return quick
         if not use_model or self.status != "bereit" or len(wish) > MAX_LEN:
+            why = "Modell aus" if not use_model else f"Modell {self.status}" if self.status != "bereit" else "zu lang"
+            print(f"[Lokal] Schnellweg passt nicht, {why} | {wish!r}", flush=True)
             return None
         picks = preselect(wish, states, areas)
         if not picks:
+            print(f"[Lokal] kein passendes Gerät gefunden | {wish!r}", flush=True)
             return None
         user, idx = build_prompt(wish, picks)
         t0 = time.time()
