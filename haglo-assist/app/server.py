@@ -41,7 +41,7 @@ SKIP_DOMAINS = {
     "zone", "persistent_notification", "assist_satellite", "ai_task",
 }
 
-ADDON_VERSION = "0.27.0"
+ADDON_VERSION = "0.28.0"
 MAX_VERSIONS = 30                      # so viele Dashboard-Versionen bleiben lokal gespeichert
 BAR_ENTITY = "input_text.haglo_assist"           # Eingabeleiste im Dashboard
 BAR_STATUS = "input_text.haglo_assist_status"    # Rückmeldung darunter
@@ -1201,6 +1201,8 @@ def can_undo(entry: dict, reg: dict) -> bool:
         return (BACKUP_DIR / str(undo["id"])).exists()
     if undo["type"] == "new_dashboard":
         return True
+    if undo["type"] == "timer":
+        return undo["id"] in load_timers()
     return any((i.get("backup") and (AUTO_BACKUP_DIR / i["backup"]).exists()) or i["id"] in reg for i in undo.get("items", []))
 
 
@@ -2673,7 +2675,7 @@ async def generate(request):
         # direkt auf dem Hub, ohne Internet und Kontingent
         try:
             done = await local_answer(request.app, wish,
-                                      use_model=mode == "lokal" or (mode == "auto" and not complex_wish))
+                                      use_model=mode == "lokal" or (mode == "auto" and (not complex_wish or bool(local_ai.PLAN.search(wish)))))
         except Exception as e:
             print(f"[Lokal] übersprungen: {e}", flush=True)
             done = None
@@ -2681,11 +2683,12 @@ async def generate(request):
             return web.json_response({"ok": True, **done})
     if mode == "lokal":
         # Lokal heißt lokal: nie still an Claude weitergeben. Ehrlich sagen, was lokal nicht geht.
-        text = ("Wenn-dann-Regeln, Zeitpläne, Automationen, Dashboards und Fehlersuche mache ich nicht lokal. "
-                "Dafür oben „Auto“ oder „Präzise“ wählen.") if complex_wish else \
+        text = ("Das kann ich lokal nicht sicher. Lokal schalte ich Geräte, stelle Timer, lege einfache Automationen "
+                "(Uhrzeit, Sonne, Bewegung, Tür/Fenster, Temperatur) und Dashboards für Räume an. Fehlersuche, "
+                "Energie-Auswertungen und Umbauten macht „Auto“ oder „Präzise“.") if complex_wish else \
                ("Das habe ich lokal nicht sicher verstanden. Lokal schalte ich Geräte, stelle Helligkeit, Temperatur "
-                "und Rollläden ein und sage dir, ob etwas an ist. Gerätename oder Raum genauer nennen – oder für "
-                "alles andere „Auto“ wählen.")
+                "und Rollläden ein, stelle Timer und sage dir, ob etwas an ist. Gerätename oder Raum genauer nennen – "
+                "oder für alles andere „Auto“ wählen.")
         print(f"[Lokal] nicht lokal lösbar, Claude NICHT gefragt (Modus Lokal) | {wish!r}", flush=True)
         add_history("answer", wish, text, local=1)
         return web.json_response({"ok": True, "answer": text, "local": 1})
@@ -2820,6 +2823,8 @@ async def undo_history(request):
         if undo["type"] == "version":
             # keep=True: Der jetzige Stand wird vorher gesichert, das Rückgängig lässt sich also selbst zurücknehmen
             await restore_version(request.app, BACKUP_DIR / undo["id"], keep=True, log=False)
+        elif undo["type"] == "timer":
+            cancel_timer(request.app, undo["id"])
         elif undo["type"] == "new_dashboard":
             # neu angelegtes Dashboard wieder löschen (verschwindet aus der Seitenleiste)
             async with HAClient(session) as ha:
@@ -3410,14 +3415,80 @@ async def area_map(app, force: bool = False) -> dict[str, str]:
     return out
 
 
+# Timer von Haglo Local („in 10 Minuten Licht aus“). Liegen in /data, damit sie einen Neustart überstehen.
+TIMERS_FILE = Path("/data/timers.json")
+
+
+def load_timers() -> dict:
+    try:
+        return json.loads(TIMERS_FILE.read_text())
+    except Exception:
+        return {}
+
+
+def save_timers(timers: dict) -> None:
+    TIMERS_FILE.write_text(json.dumps(timers, ensure_ascii=False))
+
+
+async def run_timer(app, tid: str):
+    t = load_timers().get(tid)
+    if not t:
+        return
+    await asyncio.sleep(max(0, t["at"] - time.time()))
+    timers = load_timers()
+    if tid not in timers:
+        return              # inzwischen zurückgenommen
+    timers.pop(tid)
+    save_timers(timers)
+    try:
+        await run_actions(app["session"], t["actions"])
+        print(f"[Timer] ausgeführt: {t['text']}", flush=True)
+    except Exception as e:
+        print(f"[Timer] fehlgeschlagen: {t['text']} – {e}", flush=True)
+    finally:
+        app.setdefault("timer_tasks", {}).pop(tid, None)
+
+
+def start_timer(app, actions: list, seconds: int, text: str) -> str:
+    tid = f"t{int(time.time() * 1000)}"
+    timers = load_timers()
+    timers[tid] = {"at": time.time() + seconds, "actions": actions, "text": text}
+    save_timers(timers)
+    app.setdefault("timer_tasks", {})[tid] = asyncio.create_task(run_timer(app, tid))
+    return tid
+
+
+def cancel_timer(app, tid: str) -> None:
+    timers = load_timers()
+    timers.pop(tid, None)
+    save_timers(timers)
+    task = app.setdefault("timer_tasks", {}).pop(tid, None)
+    if task:
+        task.cancel()
+
+
+def resume_timers(app) -> None:
+    """Nach einem Neustart: offene Timer weiterlaufen lassen. Bis 10 Minuten verpasste holen wir nach,
+    ältere verfallen (nachts um drei soll nicht plötzlich das Licht angehen)."""
+    timers = load_timers()
+    stale = [k for k, t in timers.items() if t["at"] < time.time() - 600]
+    for k in stale:
+        timers.pop(k)
+    if stale:
+        save_timers(timers)
+    for tid in timers:
+        app.setdefault("timer_tasks", {})[tid] = asyncio.create_task(run_timer(app, tid))
+
+
 async def local_answer(app, wish: str, use_model: bool = True) -> dict | None:
     loc = app.get("local")
     if not loc:
         return None
     t0 = time.time()
-    # Sicherheit: Wenn-dann-Wünsche, Zeitpläne, Automationen, Fehlersuche werden in KEINEM Modus lokal
-    # ausgeführt – weder Schnellweg noch Modell. Die gehen an Claude (Auto/Schnell/Präzise).
-    if is_complex(wish):
+    # Sicherheit: Wenn-dann-Wünsche, Zeitpläne, Automationen und Dashboards schaltet der Schnellweg nie sofort.
+    # Das Modell darf sie planen (Timer, Automation mit Bestätigung, neues Dashboard mit Rückgängig);
+    # Fehlersuche und alles andere Komplexe geht an Claude.
+    if is_complex(wish) and not local_ai.PLAN.search(wish):
         print(f"[Lokal] komplex → nicht lokal | {wish!r}", flush=True)
         return None
     session = app["session"]
@@ -3437,12 +3508,40 @@ async def local_answer(app, wish: str, use_model: bool = True) -> dict | None:
         add_history("answer", wish, res["text"], local=ms)
         return {"answer": res["text"], "local": ms}
     by_id = {x["entity_id"]: x for x in states}
+    if res["kind"] == "automation":
+        obj = res["object"]
+        if check_actions(obj["actions"], by_id):
+            print(f"[Lokal] Automation abgelehnt ({check_actions(obj['actions'], by_id)}) | {wish!r}", flush=True)
+            return None
+        # gleiche Bestätigungskarte wie bei Claude – angelegt wird erst nach „Ja“
+        return {"objects": [obj], "erklaerung": res["text"], "local": int((time.time() - t0) * 1000)}
+    if res["kind"] == "dashboard":
+        title, cfg = local_ai.dashboard_config(res["plan"], states, areas, app.get("registry_cache"))
+        if not cfg.get("views"):
+            print(f"[Lokal] Dashboard-Plan ohne passende Geräte → Claude | {wish!r}", flush=True)
+            return None
+        cards = sum(len(sec["cards"]) - 1 for sec in cfg["views"][0]["sections"])
+        async with HAClient(session) as ha:
+            made = await create_sidebar_dashboard(ha, wish, {
+                "neues_dashboard": {"titel": title}, "config": cfg, "status": None,
+                "erklaerung": f"Neues Dashboard „{title}“ mit {cards} Karten, nach Räumen sortiert."})
+        ms = int((time.time() - t0) * 1000)
+        print(f"[Lokal] Dashboard „{title}“ ({cards} Karten) in {ms} ms | {wish!r}", flush=True)
+        return {"erklaerung": made["erklaerung"], "dashboard_url": made["dashboard_url"], "local": ms}
     acts = res["actions"]
     if check_actions(acts, by_id):
         print(f"[Lokal] Aktion abgelehnt ({check_actions(acts, by_id)}) | {wish!r}", flush=True)
         return None
     if any(risky_action(a, by_id) for a in acts):
+        if res["kind"] == "timer":
+            return None         # Riskantes (Tore, Schlösser) nie zeitversetzt ohne Bestätigung im Moment
         return {"confirm_actions": acts, "erklaerung": res["text"]}
+    if res["kind"] == "timer":
+        tid = start_timer(app, acts, res["seconds"], res["text"])
+        ms = int((time.time() - t0) * 1000)
+        print(f"[Lokal] Timer {res['seconds']} s gestellt in {ms} ms | {wish!r}", flush=True)
+        add_history("control", wish, f"⏱ {res['text']}", local=ms, undo={"type": "timer", "id": tid})
+        return {"done": res["text"], "local": ms}
     await run_actions(session, acts)
     ms = int((time.time() - t0) * 1000)        # ehrliche Zeit: vom Befehl bis Home Assistant geschaltet hat
     print(f"[Lokal] gesamt {ms} ms (erkannt in {res['ms']} ms) | {wish!r}", flush=True)
@@ -3503,6 +3602,7 @@ async def on_startup(app):
         app["bar_task"] = asyncio.create_task(bar_listener(app))
     asyncio.create_task(selftest(app))
     app["local"] = local_ai.LocalAI(app["session"])
+    resume_timers(app)
     asyncio.create_task(area_map(app))          # Raumliste vorab laden – der erste Befehl ist dann schon schnell
     app["voice"] = voice.Voice(app["session"])
     try:

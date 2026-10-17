@@ -1,5 +1,15 @@
 # Änderungen
 
+## 0.28.0 (Beta, Branch feat/haglo-local)
+
+- Haglo Local kann jetzt mehr direkt auf dem Hub, ohne Internet und Kontingent: Timer („in 10 Minuten Licht aus“), einfache
+  Automationen (Uhrzeit und Wochentage, Sonnenauf- und -untergang, Bewegung, Tür/Fenster, Temperatur und Luftfeuchtigkeit) und
+  neue Dashboards für Räume oder Gerätearten mit Eintrag in der Seitenleiste
+- Automationen legt Haglo Local erst nach „Ja“ an, wie bei Claude; Timer und neue Dashboards lassen sich rückgängig machen
+- Timer überstehen einen Neustart; was länger als 10 Minuten verpasst wurde, verfällt
+- Neues Sprachmodell (Qwen3-0.6B + Haglo-Adapter); „wärmer/kühler“ und Farbtemperaturen rechnet der Code, nicht das Modell
+- Was lokal nicht sicher geht (Fehlersuche, Energie-Auswertungen, Umbauten), übernimmt wie bisher Claude
+
 ## 0.27.0 (Beta, Branch feat/sprachsteuerung)
 
 - Neu: Sprachsteuerung (Beta) – Geräte per Alexa schalten, auch Google Home und Apple Home. Unter dem Eingabefeld „Sprache“

@@ -3,8 +3,10 @@
 Ablauf je Befehl:
 1. Vorauswahl hier im Code: aus allen Geräten die (höchstens 10) passenden heraussuchen – nach Name,
    Raum und Gerätart. Das hält den Text für das Modell kurz und damit schnell.
-2. Das Modell (Qwen2.5-0.5B + Haglo-Adapter, läuft mit llama.cpp lokal) antwortet mit kompaktem JSON:
-   Aktionen, eine Antwort, eine Rückfrage – oder {"c":1}: „zu komplex, bitte an Claude“.
+2. Das Modell (Qwen3-0.6B + Haglo-Adapter, läuft mit llama.cpp lokal) antwortet mit kompaktem JSON:
+   Aktionen, eine Antwort, eine Rückfrage, einen Timer ("in"), eine Automation ("au"), einen
+   Dashboard-Plan ("db") – oder {"c":1}: „zu komplex, bitte an Claude“.
+   Rechnen (wärmer/kühler), Farbwerte und das Zusammenbauen von Automation und Dashboard macht der Code.
 3. Aktionen laufen durch dieselben Prüfungen wie bei der Cloud (erlaubte Bereiche, Schlösser/Tore nur
    nach Bestätigung). Nichts verlässt das Heimnetz.
 
@@ -26,8 +28,8 @@ import aiohttp
 DIR = Path("/data/local-ai")
 STATE_FILE = Path("/data/local-ai.json")       # {"enabled": bool}
 PORT = 18180
-BASE = {"file": "qwen2.5-0.5b-instruct-q4_k_m.gguf",
-        "url": "https://huggingface.co/Qwen/Qwen2.5-0.5B-Instruct-GGUF/resolve/main/qwen2.5-0.5b-instruct-q4_k_m.gguf"}
+BASE = {"file": "Qwen3-0.6B-Q8_0.gguf",      # Apache 2.0
+        "url": "https://huggingface.co/Qwen/Qwen3-0.6B-GGUF/resolve/main/Qwen3-0.6B-Q8_0.gguf"}
 # Der Haglo-Adapter (LoRA) ist Haglo-eigen und liegt NICHT im öffentlichen Repo. Bezug: vom Haglo-Server
 # (models.json mit Teilen und Prüfsummen) – oder als Datei im Home-Assistant-Ordner /config/haglo-local/.
 MODELS_URL = "https://api.haglotech.com/v1/models/haglo-local/models.json"
@@ -38,12 +40,14 @@ SYSTEM = ("Du bist Haglo Local, der lokale Smart-Home-Assistent. Antworte nur mi
           'oder {"f":Rückfrage} oder {"c":1} wenn es zu komplex ist.')
 
 LIMIT_S = 5              # länger wartet niemand: danach übernimmt Claude
+LIMIT_PLAN_S = 25        # Timer, Automation, Dashboard dürfen länger dauern – das baut sonst Claude
 MAX_LEN = 140            # längere Wünsche sind fast nie „schalte X“ – direkt an Claude
 MAX_DEVICES = 10
 SHOWN = {"light", "switch", "cover", "climate", "lock", "media_player", "vacuum", "scene", "script",
          "fan", "input_boolean"}
 SENSOR_CLASSES = {"temperature", "humidity", "power"}
 DOOR_CLASSES = {"door", "window", "garage_door", "opening"}
+MOTION_CLASSES = {"motion", "occupancy", "presence"}
 ALLOWED_SERVICES = {
     "light": {"turn_on", "turn_off", "toggle"}, "switch": {"turn_on", "turn_off", "toggle"},
     "input_boolean": {"turn_on", "turn_off", "toggle"}, "fan": {"turn_on", "turn_off"},
@@ -63,7 +67,8 @@ HINTS = {
     "sensor:temperature": ["temperatur", "warm", "kalt", "grad", "thermometer"],
     "sensor:humidity": ["feucht"],
     "sensor:power": ["strom", "verbrauch", "leistung", "watt", "bezieh", "bezug", "einspeis", "netz"],
-    "binary_sensor": ["fenster", "tür", "tuer", "tor", "offen", "zu"],
+    "binary_sensor": ["fenster", "tür", "tuer", "tor", "offen", "zu", "aufgeht", "zugeht"],
+    "binary_sensor:motion": ["bewegung", "bewegt", "bewegungsmelder", "präsenz", "praesenz", "keiner", "niemand"],
     "lock": ["schloss", "abschließ", "abschliess", "verriegel", "aufschließ", "aufschliess", "sperr"],
     "media_player": ["musik", "lautsprecher", "fernseher", "tv", "leiser", "lauter", "pause", "lautstärke", "lautstaerke", "radio", "sonos"],
     "vacuum": ["saug", "staub", "putz"],
@@ -140,6 +145,8 @@ def state_line(st: dict) -> str | None:
         unit = a.get("unit_of_measurement") or ""
         return f"{fmt_num(s)} {unit}".strip() if unit else fmt_num(s)
     if d == "binary_sensor":
+        if a.get("device_class") in MOTION_CLASSES:
+            return "Bewegung" if s == "on" else "keine Bewegung"
         return "offen" if s == "on" else "geschlossen"
     if d == "lock":
         return {"locked": "verriegelt", "unlocked": "entriegelt"}.get(s, s)
@@ -159,6 +166,8 @@ def kind_of(st: dict) -> str | None:
         return f"sensor:{dc}"
     if d == "binary_sensor" and dc in DOOR_CLASSES:
         return "binary_sensor"
+    if d == "binary_sensor" and dc in MOTION_CLASSES:
+        return "binary_sensor:motion"
     return None
 
 
@@ -456,6 +465,193 @@ def fast_path(wish: str, states: list[dict], areas: dict[str, str]) -> dict | No
     return {"kind": "actions", "actions": [act], "text": confirm_text([act], names), "fast": True}
 
 
+# ---------------------------------------------------------------- Timer, Automation, Dashboard (Plan vom Modell, Bau im Code)
+# Wünsche, die geplant statt sofort geschaltet werden – an denen darf der Schnellweg nie sofort schalten
+PLAN = re.compile(r"\b(in|nach) (\d+|einer|ner|eine|zwei|drei|fünf|fuenf|zehn|anderthalb|halbe)\b.*(sek|min|stund)|aber erst|timer|"
+                  r"wenn |sobald|jeden |jede |täglich|taeglich|werktags|wochenende|immer |automati|bei (sonnen|bewegung)|"
+                  r"sonnen(auf|unter)gang|dashboard|übersicht|uebersicht|seitenleiste|um \d|um halb|um viertel|seite f", re.I)
+AUTO_CUE = re.compile(r"wenn |sobald|jeden |jede |täglich|taeglich|werktags|woche|immer |automati|bei |um \d|um halb|"
+                      r"um viertel|sonnen|bewegung|nachts|morgens|abends", re.I)
+DASH_CUE = re.compile(r"d\w{0,2}s\w{0,2}h?\w{0,2}b\w{0,2}r?d|board|baord|[üu]bers|seite|setie|steie|ansicht", re.I)
+TIMER_CUE = re.compile(r"\b(in|nach|erst)\b", re.I)
+RE_WARM = re.compile(r"wärmer|waermer|kalt|frier|kühl|kuehl|warm|heiß|heiss", re.I)
+RE_WARMER = re.compile(r"wärmer|waermer|kalt|frier", re.I)
+RE_COOLER = re.compile(r"zu warm|heiß|heiss|kühler|kuehler", re.I)
+DASH_KINDS = {  # Kartenart aus dem Plan → welche Geräte dazugehören
+    "licht": lambda d, dc: d == "light",
+    "heizung": lambda d, dc: d in ("climate", "water_heater"),
+    "rollo": lambda d, dc: d == "cover",
+    "medien": lambda d, dc: d == "media_player",
+    "sensoren": lambda d, dc: d == "sensor" and dc in ("temperature", "humidity", "illuminance", "co2", "pm25"),
+    "fenster": lambda d, dc: d == "binary_sensor" and dc in DOOR_CLASSES,
+    "energie": lambda d, dc: d == "sensor" and dc in ("power", "energy"),
+    "steckdosen": lambda d, dc: d in ("switch", "fan", "input_boolean"),
+    "kamera": lambda d, dc: d == "camera",
+    "wetter": lambda d, dc: d == "weather",
+    "sauger": lambda d, dc: d == "vacuum",
+    "szenen": lambda d, dc: d in ("scene", "script"),
+}
+WEEKDAYS = {"mo": "mon", "di": "tue", "mi": "wed", "do": "thu", "fr": "fri", "sa": "sat", "so": "sun"}
+
+
+def raw_prompt(user: str) -> str:
+    """Genau die Form aus dem Training (Qwen3, ohne Denken)."""
+    return (f"<|im_start|>system\n{SYSTEM}<|im_end|>\n<|im_start|>user\n{user}<|im_end|>\n"
+            "<|im_start|>assistant\n<think>\n\n</think>\n\n")
+
+
+def fix_values(wish: str, out: dict, idx: dict[int, str], by_id: dict[str, dict]) -> dict:
+    """Rechnen und Farbwerte macht der Code: „wärmer/kühler“ = Ziel ± 1,5 °C, kaltweiß 6000 K, warmweiß 2700 K."""
+    for a in out.get("a") or []:
+        d = a.get("d") if isinstance(a, dict) and isinstance(a.get("d"), dict) else None
+        if d is None:
+            continue
+        if a.get("s") == "climate.set_temperature" and RE_WARM.search(wish) and not RE_DEG.search(wish):
+            try:
+                st = by_id[idx[int((a.get("e") or [None])[0])]]
+                goal = float(st.get("attributes", {}).get("temperature"))
+            except (KeyError, TypeError, ValueError):
+                continue
+            up = bool(RE_WARMER.search(wish)) and not RE_COOLER.search(wish)
+            d["temperature"] = round(goal + (1.5 if up else -1.5), 1)
+        if a.get("s") == "light.turn_on" and "color_temp_kelvin" in d:
+            low = wish.lower()
+            d["color_temp_kelvin"] = 6000 if "kalt" in low else 2700 if "warm" in low else d["color_temp_kelvin"]
+    return out
+
+
+def plan_ok(wish: str, out: dict, idx: dict[int, str], by_id: dict[str, dict]) -> bool:
+    """Feste Prüfung von Timer/Automation/Dashboard – lieber Claude fragen als etwas Falsches anlegen."""
+    if "au" in out:
+        au = out["au"] if isinstance(out["au"], dict) else {}
+        w = au.get("w") if isinstance(au.get("w"), dict) else {}
+        if not AUTO_CUE.search(wish) or not au.get("a"):
+            return False
+        if "e" in w:
+            try:
+                st = by_id[idx[int(w["e"])]]
+            except (KeyError, TypeError, ValueError):
+                return False
+            dom = st["entity_id"].split(".")[0]
+            if "zu" in w:
+                if dom != "binary_sensor" or w["zu"] not in ("on", "off"):
+                    return False
+            elif dom != "sensor" or not any(isinstance(w.get(k), (int, float)) for k in ("über", "unter")):
+                return False
+        elif not (re.fullmatch(r"\d\d:\d\d", str(w.get("zeit") or "")) or w.get("sonne") in ("auf", "unter")):
+            return False
+        acts = to_actions({"a": au["a"]}, idx)
+        return bool(acts) and not any(x["action"].split(".")[0] in ("lock", "alarm_control_panel") for x in acts)
+    if "db" in out:
+        return bool(DASH_CUE.search(wish)) and isinstance(out["db"], dict)
+    if "in" in out:
+        try:
+            return bool(TIMER_CUE.search(wish)) and 5 <= int(out["in"]) <= 86400 and bool(out.get("a"))
+        except (TypeError, ValueError):
+            return False
+    return True
+
+
+def automation_object(au: dict, idx: dict[int, str], by_id: dict[str, dict], text: str) -> dict:
+    """Plan → Automation im Format von /api/automations/apply (gleiche Bestätigung wie bei Claude)."""
+    w, b = au["w"], au.get("b") if isinstance(au.get("b"), dict) else {}
+    trig, cond, wann = [], [], ""
+    name = lambda i: (by_id[idx[int(i)]].get("attributes") or {}).get("friendly_name") or idx[int(i)]
+    if "zeit" in w:
+        trig.append({"trigger": "time", "at": f"{w['zeit']}:00"})
+        days = [WEEKDAYS[x] for x in w.get("tage") or [] if x in WEEKDAYS]
+        if days:
+            cond.append({"condition": "time", "weekday": days})
+        wann = f"um {w['zeit']} Uhr" + ({"mon,tue,wed,thu,fri": " an Werktagen", "sat,sun": " am Wochenende"}.get(",".join(days), "") if days else " jeden Tag")
+    elif "sonne" in w:
+        t = {"trigger": "sun", "event": "sunrise" if w["sonne"] == "auf" else "sunset"}
+        m = int(w.get("min") or 0)
+        if m:
+            t["offset"] = f"{'-' if m < 0 else ''}00:{abs(m):02d}:00"
+        trig.append(t)
+        wann = ("bei Sonnenaufgang" if w["sonne"] == "auf" else "bei Sonnenuntergang") + (f" ({m:+d} min)" if m else "")
+    else:
+        eid = idx[int(w["e"])]
+        if "zu" in w:
+            t = {"trigger": "state", "entity_id": eid, "to": w["zu"]}
+            dc = (by_id[eid].get("attributes") or {}).get("device_class")
+            what = ("Bewegung" if w["zu"] == "on" else "keine Bewegung") if dc in MOTION_CLASSES else \
+                ("offen" if w["zu"] == "on" else "geschlossen")
+        else:
+            key = "über" if "über" in w else "unter"
+            t = {"trigger": "numeric_state", "entity_id": eid, ("above" if key == "über" else "below"): w[key]}
+            what = f"{key} {fmt_num(w[key])}"
+        if w.get("für"):
+            t["for"] = {"seconds": int(w["für"])}
+            what += f" für {int(w['für']) // 60} min" if int(w["für"]) >= 60 else f" für {int(w['für'])} s"
+        trig.append(t)
+        wann = f"wenn {name(w['e'])} {what}"
+    if b.get("nach") or b.get("vor"):
+        c = {"condition": "time"}
+        if b.get("nach"):
+            c["after"] = f"{b['nach']}:00"
+        if b.get("vor"):
+            c["before"] = f"{b['vor']}:00"
+        cond.append(c)
+        wann += f", nur zwischen {b.get('nach', '00:00')} und {b.get('vor', '24:00')} Uhr"
+    acts = to_actions({"a": au["a"]}, idx)
+    names = {e: (by_id[e].get("attributes") or {}).get("friendly_name") or e for e in by_id}
+    was = confirm_text(acts, names).rstrip(".")
+    alias = (re.search(r"„(.+?)“", text or "") or [None, f"{wann[:1].upper()}{wann[1:]}: {was}"])[1][:100]
+    return {"art": "automation", "alias": alias, "description": f"{wann[:1].upper()}{wann[1:]}: {was}.",
+            "mode": "single", "triggers": trig, "conditions": cond,
+            "actions": [{"action": x["action"], "target": x["target"], **({"data": x["data"]} if x.get("data") else {})} for x in acts],
+            "wann": wann, "was": was}
+
+
+def dashboard_config(plan: dict, states: list[dict], areas: dict[str, str], registry: dict | None = None) -> tuple[str, dict]:
+    """Plan → fertiges Dashboard (Sections-Ansicht, je Raum ein Abschnitt mit Kacheln)."""
+    known = sorted({r for r in areas.values() if r})
+    rooms, kinds = [], [str(k).lower() for k in plan.get("k") or [] if str(k).lower() in DASH_KINDS]
+    for r in plan.get("r") or []:
+        r = str(r)
+        if r.lower() in DASH_KINDS:
+            kinds.append(r.lower())
+            continue
+        hit = [n for n in known if norm(n) == norm(r)] or [n for n in known if similar(norm(r).strip(), norm(n).strip())]
+        if hit and hit[0] not in rooms:
+            rooms.append(hit[0])
+    kinds = list(dict.fromkeys(kinds))
+    reg = registry or {}
+    pick = []
+    for st in states:
+        eid, a = st["entity_id"], st.get("attributes") or {}
+        d, dc = eid.split(".")[0], a.get("device_class")
+        e = reg.get(eid) or {}
+        if a.get("hidden") or a.get("entity_category") or e.get("hidden_by") or e.get("entity_category") or e.get("disabled_by"):
+            continue
+        k = next((k for k, f in DASH_KINDS.items() if f(d, dc)), None)
+        if not k or (kinds and k not in kinds):
+            continue
+        room = areas.get(eid, "")
+        if k != "wetter" and rooms and room not in rooms:
+            continue
+        if k in ("energie",) and not kinds and rooms:
+            continue
+        pick.append((room, k, eid))
+    order = list(DASH_KINDS)
+    sections = []
+    for room in (rooms or sorted({p[0] for p in pick if p[0]}) + [""]):
+        cards = []
+        for _, k, eid in sorted((p for p in pick if p[0] == room and p[1] != "wetter"), key=lambda p: (order.index(p[1]), p[2]))[:24]:
+            cards.append({"type": "picture-entity", "entity": eid} if k == "kamera" else
+                         {"type": "tile", "entity": eid, **({"features": [{"type": "target-temperature"}]} if k == "heizung" else {})})
+        if cards:
+            sections.append({"type": "grid", "cards": [{"type": "heading", "heading": room or "Weitere Geräte"}] + cards})
+    weather = [p[2] for p in pick if p[1] == "wetter"][:1]
+    if weather and (not kinds or "wetter" in kinds):
+        sections.insert(0, {"type": "grid", "cards": [{"type": "heading", "heading": "Wetter"},
+                                                      {"type": "weather-forecast", "entity": weather[0], "forecast_type": "daily"}]})
+    title = str(plan.get("n") or " & ".join(rooms) or "Mein Zuhause")[:40]
+    return title, {"title": title, "views": [{"title": title, "path": "start", "type": "sections", "max_columns": 4,
+                                              "sections": sections}] if sections else []}
+
+
 class LocalAI:
     def __init__(self, session: aiohttp.ClientSession):
         self.session = session
@@ -492,14 +688,19 @@ class LocalAI:
     async def _ensure_files(self) -> tuple[Path, Path | None]:
         DIR.mkdir(parents=True, exist_ok=True)
         self.status = "lädt Modell"
-        base = DIR / BASE["file"]
-        await self._download(BASE["url"], base, part="Basismodell")
         adapter = None
         try:
             async with self.session.get(MODELS_URL, timeout=aiohttp.ClientTimeout(total=30)) as r:
                 spec = json.loads(await r.text()) if r.status == 200 else None
         except Exception:
             spec = None
+        # Der Haglo-Server sagt, welches Basismodell zum Adapter gehört (Wechsel ohne App-Update möglich)
+        bspec = (spec or {}).get("base") or BASE
+        base = DIR / bspec["file"]
+        await self._download(bspec["url"], base, bspec.get("sha256"), part="Basismodell")
+        for old in DIR.glob("*.gguf"):
+            if old != base and not old.name.startswith("haglo-local-") and spec:
+                old.unlink(missing_ok=True)       # altes Basismodell aufräumen (Speicherplatz auf dem Hub)
         if spec:
             adapter = DIR / spec["adapter"]["file"]
             if not adapter.exists() or hashlib.sha256(adapter.read_bytes()).hexdigest() != spec["adapter"]["sha256"]:
@@ -589,9 +790,11 @@ class LocalAI:
 
     # ------------------------------------------------------------ Befehl verstehen
     async def understand(self, wish: str, states: list[dict], areas: dict[str, str], use_model: bool = True) -> dict | None:
-        """Gibt {"kind": "actions"|"answer"|"question", ...} zurück – oder None (→ Claude übernimmt)."""
+        """Gibt {"kind": "actions"|"answer"|"question"|"timer"|"automation"|"dashboard", ...} zurück –
+        oder None (→ Claude übernimmt)."""
         t_start = time.time()
-        quick = fast_path(wish, states, areas)
+        planned = bool(PLAN.search(wish))
+        quick = None if planned else fast_path(wish, states, areas)
         if quick:
             quick["ms"] = self.last_ms = max(1, int((time.time() - t_start) * 1000))
             print(f"[Lokal] Schnellweg {quick['ms']} ms | {wish!r} → {quick['actions']}", flush=True)
@@ -601,32 +804,47 @@ class LocalAI:
             print(f"[Lokal] Schnellweg passt nicht, {why} | {wish!r}", flush=True)
             return None
         picks = preselect(wish, states, areas)
+        if not picks and DASH_CUE.search(wish):
+            # Für einen Dashboard-Plan braucht das Modell keine bestimmten Geräte – ein paar zur Orientierung reichen
+            picks = [{"st": st, "room": areas.get(st["entity_id"], "")} for st in states if kind_of(st)][:6]
         if not picks:
             print(f"[Lokal] kein passendes Gerät gefunden | {wish!r}", flush=True)
             return None
         user, idx = build_prompt(wish, picks)
+        by_id = {x["entity_id"]: x for x in states}
         t0 = time.time()
-        body = {"messages": [{"role": "system", "content": SYSTEM}, {"role": "user", "content": user}],
-                "temperature": 0, "max_tokens": 120, "cache_prompt": True,
-                # Bei Aktionen nach der Aktionsliste aufhören – die Bestätigung schreibt der Code (spart Zeit)
-                "stop": [',"t":']}
+        limit = LIMIT_PLAN_S if planned else LIMIT_S
+        body = {"prompt": raw_prompt(user), "temperature": 0, "n_predict": 200 if planned else 120, "cache_prompt": True,
+                # Nach der Aktionsliste aufhören – die Bestätigung schreibt der Code (spart Zeit)
+                "stop": [',"t":', "<|im_end|>"]}
         try:
-            async with self.session.post(f"http://127.0.0.1:{PORT}/v1/chat/completions", json=body,
-                                         timeout=aiohttp.ClientTimeout(total=LIMIT_S)) as r:
+            async with self.session.post(f"http://127.0.0.1:{PORT}/completion", json=body,
+                                         timeout=aiohttp.ClientTimeout(total=limit)) as r:
                 if r.status != 200:
                     return None
                 data = await r.json()
         except asyncio.TimeoutError:
-            print(f"[Lokal] über {LIMIT_S} s – Claude übernimmt: {wish!r}", flush=True)
+            print(f"[Lokal] über {limit} s – Claude übernimmt: {wish!r}", flush=True)
             return None
         except Exception:
             return None
         self.last_ms = int((time.time() - t0) * 1000)
-        text = data["choices"][0]["message"]["content"]
+        text = data.get("content") or ""
         out = parse(text)
-        print(f"[Lokal] {self.last_ms} ms | {wish!r} → {text.strip()[:200]}", flush=True)
+        print(f"[Lokal] {self.last_ms} ms | {wish!r} → {text.strip()[:240]}", flush=True)
         if not isinstance(out, dict) or out.get("c"):
             return None
+        if not plan_ok(wish, out, idx, by_id):
+            print(f"[Lokal] Prüfung: Plan passt nicht zum Wunsch → Claude | {wish!r}", flush=True)
+            return None
+        out = fix_values(wish, out, idx, by_id)
+        names = {e: (st.get("attributes") or {}).get("friendly_name") or e for e, st in by_id.items()}
+        if "au" in out:
+            obj = automation_object(out["au"], idx, by_id, str(out.get("t") or ""))
+            return {"kind": "automation", "object": obj, "ms": self.last_ms,
+                    "text": f"Soll ich die Automation „{obj['alias']}“ anlegen? {obj['description']}"}
+        if "db" in out:
+            return {"kind": "dashboard", "plan": out["db"], "ms": self.last_ms}
         if out.get("a"):
             acts = to_actions(out, idx)
             if not acts:
@@ -635,7 +853,12 @@ class LocalAI:
             if guard:
                 print(f"[Lokal] Prüfung: {guard} | {wish!r}", flush=True)
                 return None if guard["kind"] == "claude" else {**guard, "ms": self.last_ms}
-            names = {p["st"]["entity_id"]: p["st"].get("attributes", {}).get("friendly_name") or p["st"]["entity_id"] for p in picks}
+            if "in" in out:
+                sec = int(out["in"])
+                when = f"{sec} Sekunden" if sec < 60 else f"{sec // 60} Minute{'n' if sec >= 120 else ''}" if sec < 3600 \
+                    else f"{sec / 3600:g} Stunde{'n' if sec != 3600 else ''}".replace(".", ",")
+                return {"kind": "timer", "actions": acts, "seconds": sec, "ms": self.last_ms,
+                        "text": f"In {when}: {confirm_text(acts, names)}"}
             return {"kind": "actions", "actions": acts, "text": confirm_text(acts, names), "ms": self.last_ms}
         if out.get("f"):
             return {"kind": "question", "text": str(out["f"]), "ms": self.last_ms}
