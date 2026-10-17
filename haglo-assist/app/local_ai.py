@@ -472,7 +472,8 @@ PLAN = re.compile(r"\b(in|nach) (\d+|einer|ner|eine|zwei|drei|fünf|fuenf|zehn|a
                   r"sonnen(auf|unter)gang|dashboard|übersicht|uebersicht|seitenleiste|um \d|um halb|um viertel|seite f", re.I)
 AUTO_CUE = re.compile(r"wenn |sobald|jeden |jede |täglich|taeglich|werktags|woche|immer |automati|bei |um \d|um halb|"
                       r"um viertel|sonnen|bewegung|nachts|morgens|abends", re.I)
-DASH_CUE = re.compile(r"d\w{0,2}s\w{0,2}h?\w{0,2}b\w{0,2}r?d|board|baord|[üu]bers|seite|setie|steie|ansicht", re.I)
+DASH_CUE = re.compile(r"d\w{0,2}s\w{0,2}h?\w{0,2}b\w{0,2}r?d|oard|aord|dash|dahs|dsah|[üu]e?b\w{0,2}s\w{0,2}cht|seite|setie|steie|"
+                      r"ansicht", re.I)
 TIMER_CUE = re.compile(r"\b(in|nach|erst)\b", re.I)
 RE_WARM = re.compile(r"wärmer|waermer|kalt|frier|kühl|kuehl|warm|heiß|heiss", re.I)
 RE_WARMER = re.compile(r"wärmer|waermer|kalt|frier", re.I)
@@ -665,6 +666,207 @@ def dashboard_config(plan: dict, states: list[dict], areas: dict[str, str], regi
                                               "sections": sections}] if sections else []}
 
 
+# ---------------------------------------------------------------- Zahlen, Zeiten und Plausibilität macht der Code
+NUMS = {"eine": 1, "einer": 1, "ner": 1, "einen": 1, "zwei": 2, "drei": 3, "vier": 4, "fünf": 5, "fuenf": 5, "sechs": 6,
+        "sieben": 7, "acht": 8, "neun": 9, "zehn": 10, "elf": 11, "zwölf": 12, "zwoelf": 12, "fünfzehn": 15,
+        "zwanzig": 20, "dreißig": 30, "dreissig": 30, "vierzig": 40, "fünfundvierzig": 45, "neunzig": 90}
+
+
+def wish_duration(wish: str) -> int | None:
+    """„in 10 Minuten“, „nach einer halben Stunde“, „30 sek“ → Sekunden. None, wenn nicht eindeutig."""
+    w = norm(wish)
+    fixed = [(r"\bhalben? minute", 30), (r"\bviertel ?stunde", 900),
+             (r"(?<!anderthalb )\bhalben? stunde", 1800), (r"\banderthalb (stunden|std)", 5400),
+             (r"\banderthalb minuten", 90), (r"\b(einer|ner|eine) stunde", 3600), (r"\b(einer|ner|eine) minute", 60)]
+    hits = [sec for pat, sec in fixed if re.search(pat, w)]
+    for num, unit in re.findall(r"\b(\d{1,3}|" + "|".join(NUMS) + r")\s*(sekunden|sek|s\b|minuten|min\b|stunden|stunde|std)", w):
+        n = int(num) if num.isdigit() else NUMS[num]
+        hits.append(n * (1 if unit.startswith("s") and not unit.startswith("st") else 3600 if unit.startswith("st") else 60))
+    return hits[0] if len(set(hits)) == 1 else None
+
+
+def wish_clock(wish: str) -> str | None:
+    """„um 7“, „um halb 8“, „viertel nach 6“, „um 18:30“, „jeden abend um 7“ → "HH:MM"."""
+    w = re.sub(r"(\d)\.(\d\d)\b", r"\1:\2", wish.lower())
+    evening = bool(re.search(r"\babend|\babends|\bnachmittag", w))
+    m = re.search(r"\b(\d{1,2}):(\d{2})\b", w)
+    if m:
+        h, mi = int(m.group(1)), int(m.group(2))
+    elif m := re.search(r"\bhalb (\d{1,2})\b", w):
+        h, mi = int(m.group(1)) - 1, 30
+    elif m := re.search(r"\bviertel nach (\d{1,2})\b", w):
+        h, mi = int(m.group(1)), 15
+    elif m := re.search(r"\bviertel vor (\d{1,2})\b", w):
+        h, mi = int(m.group(1)) - 1, 45
+    elif m := re.search(r"\bum (\d{1,2})( uhr)?\b(?!\s*(grad|%|prozent|min|sek))", w):
+        h, mi = int(m.group(1)), 0
+    else:
+        return None
+    if evening and h < 12:
+        h += 12
+    return f"{h % 24:02d}:{mi:02d}" if 0 <= h <= 24 and 0 <= mi < 60 else None
+
+
+def wish_sun(wish: str) -> tuple[str | None, int | None]:
+    w = norm(wish)
+    side = "auf" if re.search(r"sonnenauf|sonne auf|aufgeht|aufgang|morgengrauen", w) else \
+        "unter" if re.search(r"sonnenunter|untergeht|untergang|dunkel wird|daemmerung|dämmerung", w) else None
+    m = re.search(r"(\d{1,3}) ?(minuten|min) (vor|nach) (sonnen|der sonne|dem sonnen)", w)
+    return side, ((-1 if m.group(3) == "vor" else 1) * int(m.group(1)) if m else 0)
+
+
+def rooms_named(wish: str, areas: dict[str, str]) -> set[str]:
+    """Im Wunsch genannte Räume. Ganze Wörter (mit Tippfehlern) – „Waschküche“ nennt nicht auch „Küche“."""
+    glued = norm(wish).replace(" ", "")
+    ww = words(wish)
+    out = set()
+    for r in set(areas.values()):
+        rw = words(r) if r else []
+        if not rw:
+            continue
+        if len(rw) > 1 and "".join(rw) in glued:
+            out.add(r)
+        elif all(any(similar(x, n) for x in ww) for n in rw if len(n) >= 3):
+            out.add(r)
+    return out
+
+
+def named_in_wish(wish: str, st: dict, areas: dict[str, str]) -> bool:
+    """Kommt das Gerät im Wunsch vor (Name, Gerätart oder Raum)?"""
+    a = st.get("attributes") or {}
+    ww = words(wish)
+    nw = [n for n in words(a.get("friendly_name") or st["entity_id"]) if n not in STOP]
+    if any(similar(x, n) or (len(n) >= 5 and n in x) for x in ww for n in nw):
+        return True
+    k = kind_of(st) or ""
+    return any(h in norm(wish) for h in HINTS.get(k, []))
+
+
+
+# Neue Dashboards brauchen kein Modell: Räume und Gerätearten stehen im Satz, der Baukasten macht den Rest.
+DASH_EDIT = re.compile(r"aufräum|aufraeum|schöner|schoener|änder|aender|hinzufüg|hinzufueg|füg|fueg|lösch|loesch|entfern|"
+                       r"bearbeit|umbau|anpass|verschieb|mein dashboard|meine übersicht|das dashboard|dem dashboard|warum|wieso", re.I)
+DASH_WORDS = {
+    "licht": ["licht", "lichter", "lampen", "lampe", "beleuchtung"],
+    "heizung": ["heizung", "heizungen", "thermostat", "thermostate", "klima", "heizkörper"],
+    "rollo": ["rollladen", "rollläden", "rolladen", "rollos", "rollo", "jalousie", "jalousien", "beschattung", "markise"],
+    "medien": ["musik", "lautsprecher", "medien", "fernseher", "tv", "radio"],
+    "sensoren": ["sensoren", "temperatur", "temperaturen", "luftfeuchtigkeit", "messwerte", "klimawerte"],
+    "fenster": ["fenster", "türen", "tueren", "tür", "tuer"],
+    "energie": ["strom", "stromverbrauch", "energie", "verbrauch", "leistung", "solar", "pv"],
+    "steckdosen": ["steckdosen", "steckdose", "schalter", "stecker"],
+    "kamera": ["kamera", "kameras"],
+    "wetter": ["wetter"],
+    "sauger": ["saugroboter", "staubsauger", "sauger", "mähroboter"],
+    "szenen": ["szenen", "stimmungen", "skripte"],
+}
+
+
+def dash_plan_from_wish(wish: str, areas: dict[str, str]) -> dict | None:
+    """„Dashboard für Küche und Bad“, „Übersicht über Heizungen“ → Plan ohne Modell. None: kein neues Dashboard."""
+    if not DASH_CUE.search(wish) or DASH_EDIT.search(wish) or RE_MULTI_DASH.search(wish) or RE_QUESTION.search(wish):
+        return None
+    ww = words(wish)
+    rooms = sorted(rooms_named(wish, areas), key=lambda r: norm(wish).find(norm(r).strip().split(" ")[0]))
+    kinds = [k for k, ws in DASH_WORDS.items()
+             if any(x == norm(v).strip() or (len(x) >= 5 and similar(x, norm(v).strip())) for x in ww for v in ws)]
+    name = " & ".join(rooms) if rooms else " & ".join(k.capitalize() for k in kinds) if kinds else "Mein Zuhause"
+    if rooms and kinds:
+        name = f"{' & '.join(rooms)} – {' & '.join(k.capitalize() for k in kinds)}"
+    return {"n": name[:40], "r": rooms, "k": kinds}
+
+
+RE_MULTI_DASH = re.compile(r"\b(und dann|danach|außerdem|ausserdem)\b|\b(schalte|mach) .* (an|aus)\b", re.I)
+
+
+def code_rules(wish: str, out: dict, idx: dict[int, str], by_id: dict[str, dict], areas: dict[str, str]) -> dict | None:
+    """Was das kleine Modell schlecht kann, macht der Code; was nicht zum Wunsch passt, geht an Claude (None)."""
+    low = norm(wish)
+    named = rooms_named(wish, areas)
+    acts_src = out["au"]["a"] if isinstance(out.get("au"), dict) else out.get("a") or []
+    # 1. Jedes Gerät muss im Wunsch vorkommen und – wenn Räume genannt sind – in einem davon stehen
+    for a in acts_src:
+        for e in a.get("e") or []:
+            try:
+                st = by_id[idx[int(e)]]
+            except (KeyError, TypeError, ValueError):
+                return None
+            dom = st["entity_id"].split(".")[0]
+            room = areas.get(st["entity_id"], "")
+            if dom in ("scene", "script"):
+                continue
+            if named and room and room not in named:
+                return None
+            if (len(acts_src) > 1 or "in" in out or "au" in out) and not named_in_wish(wish, st, areas):
+                return None
+    # 2. Dasselbe Gerät gleichzeitig an und aus → nicht raten
+    seen = {}
+    for a in acts_src:
+        for e in a.get("e") or []:
+            if e in seen and seen[e] != a.get("s"):
+                return None
+            seen[e] = a.get("s")
+    # „überall/alle Lichter“: alle Geräte dieser Art aus der Auswahl, nicht nur ein paar
+    if re.search(r"\b(ueberall|überall|alle\b|alles\b)", low) and not named and len(acts_src) == 1 and "au" not in out:
+        a = acts_src[0]
+        dom = str(a.get("s", "")).split(".")[0]
+        if dom in ("light", "cover", "switch", "media_player") and str(a.get("s", "")).split(".")[-1] in (
+                "turn_on", "turn_off", "open_cover", "close_cover"):
+            a["e"] = [i for i, e in idx.items() if e.startswith(dom + ".")]
+    # 3. Heller/dunkler: Richtung aus dem Wort
+    for a in acts_src:
+        d = a.get("d") if isinstance(a.get("d"), dict) else {}
+        if "brightness_step_pct" in d:
+            down = bool(re.search(r"dunkler|dunkel\b|dimm|weniger hell|nicht so hell|zu hell", low))
+            up = not down and bool(re.search(r"heller|hell\b|aufhell|mehr licht|zu dunkel", low))
+            if up != down:
+                d["brightness_step_pct"] = abs(d["brightness_step_pct"] or 20) * (1 if up else -1)
+    # 4. Timer: Dauer aus dem Satz
+    if "in" in out:
+        sec = wish_duration(wish)
+        if sec:
+            out["in"] = sec
+    # 5. Automation: Uhrzeit, Sonne, Dauer und passender Sensor aus dem Satz
+    if isinstance(out.get("au"), dict):
+        w = out["au"].get("w") if isinstance(out["au"].get("w"), dict) else {}
+        if "zeit" in w:
+            w["zeit"] = wish_clock(wish) or w["zeit"]
+            if re.search(r"jeden (tag|morgen|abend)|täglich|taeglich", low) and not re.search(r"werktag|woche", low):
+                w.pop("tage", None)
+        if "sonne" in w:
+            side, off = wish_sun(wish)
+            if side:
+                w["sonne"] = side
+            if off:
+                w["min"] = off
+            else:
+                w.pop("min", None)
+        if "zu" in w:
+            want = MOTION_CLASSES if re.search(r"beweg|präsenz|praesenz|keiner|niemand", low) else DOOR_CLASSES
+            try:
+                cur = by_id[idx[int(w["e"])]]
+            except (KeyError, TypeError, ValueError):
+                return None
+            fits = [i for i, e in idx.items() if e.startswith("binary_sensor.")
+                    and (by_id[e].get("attributes") or {}).get("device_class") in want]
+            in_room = [i for i in fits if areas.get(idx[i]) in named]
+            cur_i = int(w["e"])
+            if in_room:                      # Sensor im genannten Raum hat Vorrang
+                if cur_i not in in_room:
+                    if len(in_room) != 1:
+                        return None
+                    w["e"] = in_room[0]
+            elif cur_i not in fits:
+                if len(fits) != 1:
+                    return None
+                w["e"] = fits[0]
+            elif len(fits) > 1 and named:
+                return None                  # mehrere passende Sensoren, keiner im genannten Raum → nicht raten
+            if w.get("für"):
+                w["für"] = wish_duration(wish) or w["für"]
+    return out
+
+
 class LocalAI:
     def __init__(self, session: aiohttp.ClientSession):
         self.session = session
@@ -816,6 +1018,11 @@ class LocalAI:
             why = "Modell aus" if not use_model else f"Modell {self.status}" if self.status != "bereit" else "zu lang"
             print(f"[Lokal] Schnellweg passt nicht, {why} | {wish!r}", flush=True)
             return None
+        plan = dash_plan_from_wish(wish, areas)
+        if plan:
+            self.last_ms = max(1, int((time.time() - t_start) * 1000))
+            print(f"[Lokal] Dashboard-Plan ohne Modell {self.last_ms} ms | {wish!r} → {plan}", flush=True)
+            return {"kind": "dashboard", "plan": plan, "ms": self.last_ms}
         picks = preselect(wish, states, areas)
         if not picks and DASH_CUE.search(wish):
             # Für einen Dashboard-Plan braucht das Modell keine bestimmten Geräte – ein paar zur Orientierung reichen
@@ -850,7 +1057,10 @@ class LocalAI:
         if not plan_ok(wish, out, idx, by_id):
             print(f"[Lokal] Prüfung: Plan passt nicht zum Wunsch → Claude | {wish!r}", flush=True)
             return None
-        out = fix_values(wish, out, idx, by_id)
+        out = code_rules(wish, fix_values(wish, out, idx, by_id), idx, by_id, areas)
+        if out is None:
+            print(f"[Lokal] Prüfung: Gerät/Raum passt nicht zum Wunsch → Claude | {wish!r}", flush=True)
+            return None
         names = {e: (st.get("attributes") or {}).get("friendly_name") or e for e, st in by_id.items()}
         if "au" in out:
             obj = automation_object(out["au"], idx, by_id, str(out.get("t") or ""), areas)
