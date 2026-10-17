@@ -304,7 +304,7 @@ def to_actions(out: dict, idx: dict[int, str]) -> list[dict] | None:
 # ---------------------------------------------------------------- Schnellweg (ohne Modell, < 1 s)
 OFF_WORDS = {"aus", "ab", "ausschalten", "abschalten", "ausmachen", "abdrehen", "ausknipsen"}
 ON_WORDS = {"an", "ein", "einschalten", "anschalten", "anmachen", "aufdrehen", "anknipsen"}
-RE_OPEN = re.compile(r"\b(auf|oeffne\w*|hoch|rauf)\b")
+RE_OPEN = re.compile(r"\b(auf\w*|oeffne\w*|hoch|rauf)\b")
 RE_CLOSE = re.compile(r"\b(zu|schliess\w*|runter)\b")
 
 
@@ -319,10 +319,11 @@ def model_guard(wish: str, acts: list[dict], states: list[dict], areas: dict[str
         # Schlösser nie über das kleine Modell (auf/zu verwechselt = Haustür offen)
         if dom in ("lock", "alarm_control_panel"):
             return {"kind": "claude"}
-        # Richtung muss zum Wortlaut passen
-        if svc == "turn_on" and toks & OFF_WORDS and not toks & ON_WORDS:
+        # Richtung muss zum Wortlaut passen (Szenen/Skripte heißen oft „Alles aus“, Helligkeit ist kein An)
+        directional = dom not in ("scene", "script") and not a.get("data")
+        if directional and svc == "turn_on" and toks & OFF_WORDS and not toks & ON_WORDS:
             return {"kind": "claude"}
-        if svc == "turn_off" and toks & ON_WORDS and not toks & OFF_WORDS:
+        if directional and svc == "turn_off" and toks & ON_WORDS and not toks & OFF_WORDS:
             return {"kind": "claude"}
         if dom == "cover" and ("close" in svc and RE_OPEN.search(w) or "open" in svc and RE_CLOSE.search(w)):
             return {"kind": "claude"}
@@ -336,7 +337,10 @@ def model_guard(wish: str, acts: list[dict], states: list[dict], areas: dict[str
             rooms = sorted({areas.get(t) for t in twins if areas.get(t)})
             if set(twins) <= set(a["target"]["entity_id"]):
                 continue  # alle gemeint („überall das Licht aus“)
-            if len(twins) > 1 and len(rooms) > 1 and not any(set(words(r)) & set(words(wish)) for r in rooms):
+            ww = words(wish)
+            glued = w.replace(" ", "")
+            if len(twins) > 1 and len(rooms) > 1 and not any(
+                    norm(r).replace(" ", "") in glued or any(similar(x, n) for x in ww for n in words(r)) for r in rooms):
                 label = (by_id[e].get("attributes") or {}).get("friendly_name")
                 return {"kind": "question", "text": f"Welches meinst du? {label} in: {', '.join(rooms)}?"}
     return None
