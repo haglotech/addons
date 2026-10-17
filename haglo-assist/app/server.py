@@ -3537,7 +3537,11 @@ async def local_answer(app, wish: str, use_model: bool = True) -> dict | None:
             return None         # Riskantes (Tore, Schlösser) nie zeitversetzt ohne Bestätigung im Moment
         return {"confirm_actions": acts, "erklaerung": res["text"]}
     if res["kind"] == "timer":
-        tid = start_timer(app, acts, res["seconds"], res["text"])
+        if res.get("now"):
+            if check_actions(res["now"], by_id) or any(risky_action(x, by_id) for x in res["now"]):
+                return None
+            await run_actions(session, res["now"])          # „für 10 Minuten an“: jetzt an, Timer schaltet zurück
+        tid = start_timer(app, acts, res["seconds"], "In " + res["text"].split(" In ", 1)[-1] if res.get("now") else res["text"])
         ms = int((time.time() - t0) * 1000)
         print(f"[Lokal] Timer {res['seconds']} s gestellt in {ms} ms | {wish!r}", flush=True)
         add_history("control", wish, f"⏱ {res['text']}", local=ms, undo={"type": "timer", "id": tid})

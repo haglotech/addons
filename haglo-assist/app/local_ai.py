@@ -39,8 +39,8 @@ SYSTEM = ("Du bist Haglo Local, der lokale Smart-Home-Assistent. Antworte nur mi
           '{"a":[{"s":Dienst,"e":[Nummern],"d":{Daten}}],"t":Bestätigung} oder {"t":Antwort} '
           'oder {"f":Rückfrage} oder {"c":1} wenn es zu komplex ist.')
 
-LIMIT_S = 5              # länger wartet niemand: danach übernimmt Claude
-LIMIT_PLAN_S = 25        # Timer, Automation, Dashboard dürfen länger dauern – das baut sonst Claude
+LIMIT_S = 30             # danach übernimmt Claude (schwache Hubs, z. B. VM mit 2 GB, brauchen so lange)
+LIMIT_PLAN_S = 120       # Timer, Automation, Dashboard dürfen länger dauern – das baut sonst Claude
 MAX_LEN = 140            # längere Wünsche sind fast nie „schalte X“ – direkt an Claude
 MAX_DEVICES = 10
 SHOWN = {"light", "switch", "cover", "climate", "lock", "media_player", "vacuum", "scene", "script",
@@ -686,7 +686,9 @@ def wish_duration(wish: str) -> int | None:
              (r"(?<!anderthalb )\bhalben? stunde", 1800), (r"\banderthalb (stunden|std)", 5400),
              (r"\banderthalb minuten", 90), (r"\b(einer|ner|eine) stunde", 3600), (r"\b(einer|ner|eine) minute", 60)]
     hits = [sec for pat, sec in fixed if re.search(pat, w)]
-    for num, unit in re.findall(r"\b(\d{1,3}|" + "|".join(NUMS) + r")\s*(sekunden|sek|s\b|minuten|min\b|stunden|stunde|std)", w):
+    for num, unit in re.findall(r"\b(\d{1,3}|" + "|".join(NUMS) + r")\s*(sek\w*|s\b|min\w*|stund\w*|std)", w):
+        if num in ("einer", "ner", "eine", "einen") and re.search(r"\bhalben?\b|viertel", w):
+            continue
         n = int(num) if num.isdigit() else NUMS[num]
         hits.append(n * (1 if unit.startswith("s") and not unit.startswith("st") else 3600 if unit.startswith("st") else 60))
     return hits[0] if len(set(hits)) == 1 else None
@@ -909,6 +911,91 @@ def code_rules(wish: str, out: dict, idx: dict[int, str], by_id: dict[str, dict]
     return out
 
 
+# ---------------------------------------------------------------- Timer und Zeit-Automationen ohne Modell
+# Zeitangabe liest der Code, der Rest („Schreibtisch einschalten“) geht durch den Schnellweg. Das ist auf jedem Hub
+# sofort da – das Modell kommt nur dran, wenn der Schnellweg den Rest nicht eindeutig versteht.
+DUR_NUM = set(NUMS) | {"halbe", "halben", "viertel", "anderthalb"}
+FILLER = {"in", "nach", "fuer", "erst", "aber", "und", "zwar", "dann", "danach", "spaeter", "bitte", "danke", "pls", "bitteschoen",
+          "automatisch", "immer", "jeden", "jede", "taeglich", "werktags", "werktagen", "wochenende", "woche", "unter",
+          "montags", "freitags", "bis", "samstags", "sonntags", "morgen", "morgens", "abend", "abends", "tag", "uhr", "um", "halb",
+          "bei", "sonnenuntergang", "sonnenaufgang", "erstell", "erstelle", "automation", "timer", "stell", "stelle", "einen", "am"}
+REVERSE = {"turn_on": "turn_off", "turn_off": "turn_on", "open_cover": "close_cover", "close_cover": "open_cover"}
+
+
+def _is_dur_unit(t: str) -> bool:
+    return bool(re.fullmatch(r"(sek\w*|s|min\w*|stund\w*|std|viertelstunde)", t))
+
+
+def code_plan(wish: str, states: list[dict], areas: dict[str, str]) -> dict | None:
+    """„in 10 min Licht aus“, „Schreibtisch für 5 Minuten an“, „an und nach 10 min wieder aus“,
+    „jeden Abend um halb 8 Rollläden runter“, „bei Sonnenuntergang Licht an“ → Plan ohne Modell. Sonst None."""
+    low = norm(wish)
+    toks = low.split()
+    sec = wish_duration(wish)
+    clock = wish_clock(wish) if re.search(r"\bum\b|\d:\d\d|\bhalb\b|viertel (nach|vor)", wish.lower()) else None
+    side, off = wish_sun(wish) if re.search(r"sonnen(auf|unter)gang", low) else (None, 0)
+    if not (sec or clock or side) or RE_QUESTION.search(wish) or re.search(r"\b(wenn|falls|sobald|warum|wieso)\b", low):
+        return None
+    back = False
+    keep, skip_next = [], False
+    for i, t in enumerate(toks):
+        if skip_next:
+            skip_next = False
+            continue
+        nxt = toks[i + 1] if i + 1 < len(toks) else ""
+        if similar(t, "wieder") or (nxt in ("aus", "an", "ein", "zu", "auf") and len(t) >= 5
+                                    and difflib.SequenceMatcher(None, t, "wieder").ratio() >= 0.7):
+            back = True
+            if i + 1 < len(toks) and toks[i + 1] in ("aus", "an", "ein", "zu", "auf", "runter", "hoch"):
+                skip_next = True
+            continue
+        if t in FILLER or similar(t, "danach") or t.isdigit() or t in DUR_NUM or _is_dur_unit(t) or \
+                (len(t) >= 6 and any(similar(t, f) for f in ("danach", "minuten", "sekunden", "stunden"))):
+            continue
+        if t in ("vor",) and side:
+            continue
+        keep.append(t)
+    rest = " ".join(keep)
+    if re.search(r"\bfuer\b", low) and sec:
+        back = True                      # „für 10 Minuten an“ = jetzt an, danach wieder aus
+    if not rest or (clock and side) or (back and not sec):
+        return None
+    quick = fast_path(rest, states, areas)
+    if not quick:
+        return None
+    acts = quick["actions"]
+    names = {e: (st.get("attributes") or {}).get("friendly_name") or e for st in states for e in [st["entity_id"]]}
+    if clock or side:
+        trig = {"zeit": clock} if clock else {"sonne": side, **({"min": off} if off else {})}
+        if clock:
+            if re.search(r"werktag|montags bis freitags|unter der woche", low):
+                trig["tage"] = ["mo", "di", "mi", "do", "fr"]
+            elif re.search(r"wochenende|samstags und sonntags", low):
+                trig["tage"] = ["sa", "so"]
+        idx = {i: e for i, e in enumerate(sorted({e for a in acts for e in a["target"]["entity_id"]}), 1)}
+        inv = {e: i for i, e in idx.items()}
+        by_id = {st["entity_id"]: st for st in states}
+        plan = {"w": trig, "a": [{"s": a["action"], "e": [inv[e] for e in a["target"]["entity_id"]], **({"d": a["data"]} if a.get("data") else {})} for a in acts]}
+        obj = automation_object(plan, idx, by_id, "", areas)
+        return {"kind": "automation", "object": obj, "text": f"Soll ich die Automation „{obj['alias']}“ anlegen? {obj['description']}"}
+    if back:
+        rev = []
+        for a in acts:
+            dom, svc = a["action"].split(".")
+            if svc not in REVERSE or a.get("data"):
+                return None
+            rev.append({"action": f"{dom}.{REVERSE[svc]}", "target": a["target"]})
+        when = nice_wait(sec)
+        return {"kind": "timer", "now": acts, "actions": rev, "seconds": sec,
+                "text": f"{confirm_text(acts, names)} In {when}: {confirm_text(rev, names)}"}
+    return {"kind": "timer", "actions": acts, "seconds": sec, "text": f"In {nice_wait(sec)}: {confirm_text(acts, names)}"}
+
+
+def nice_wait(sec: int) -> str:
+    return f"{sec} Sekunden" if sec < 60 else f"{sec // 60} Minute{'n' if sec >= 120 else ''}" if sec < 3600 \
+        else f"{sec / 3600:g} Stunde{'n' if sec != 3600 else ''}".replace(".", ",")
+
+
 class LocalAI:
     def __init__(self, session: aiohttp.ClientSession):
         self.session = session
@@ -997,7 +1084,7 @@ class LocalAI:
                 asyncio.create_task(self._watch_ready())
                 async for raw in self.proc.stdout:
                     line = raw.decode(errors="replace").rstrip()
-                    if re.search(r"error|failed|listening|model loaded|lora", line, re.I):
+                    if re.search(r"error|failed|listening|model loaded|lora|prompt eval time|^\S*\s*eval time|       eval time|system_info", line, re.I):
                         print("[Lokal]", line[:300], flush=True)
                 code = await self.proc.wait()
                 if not load_state().get("enabled"):
@@ -1060,6 +1147,11 @@ class LocalAI:
             why = "Modell aus" if not use_model else f"Modell {self.status}" if self.status != "bereit" else "zu lang"
             print(f"[Lokal] Schnellweg passt nicht, {why} | {wish!r}", flush=True)
             return None
+        cp = code_plan(wish, states, areas) if planned else None
+        if cp:
+            cp["ms"] = self.last_ms = max(1, int((time.time() - t_start) * 1000))
+            print(f"[Lokal] Plan ohne Modell {cp['ms']} ms | {wish!r} → {cp['kind']}: {cp['text']}", flush=True)
+            return cp
         plan = dash_plan_from_wish(wish, areas)
         if plan:
             self.last_ms = max(1, int((time.time() - t_start) * 1000))
