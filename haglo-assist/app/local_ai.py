@@ -552,10 +552,11 @@ def plan_ok(wish: str, out: dict, idx: dict[int, str], by_id: dict[str, dict]) -
     return True
 
 
-def automation_object(au: dict, idx: dict[int, str], by_id: dict[str, dict], text: str) -> dict:
+def automation_object(au: dict, idx: dict[int, str], by_id: dict[str, dict], text: str, areas: dict[str, str] | None = None) -> dict:
     """Plan → Automation im Format von /api/automations/apply (gleiche Bestätigung wie bei Claude)."""
+    areas_of = lambda e: (areas or {}).get(e, "")
     w, b = au["w"], au.get("b") if isinstance(au.get("b"), dict) else {}
-    trig, cond, wann = [], [], ""
+    trig, cond, wann, short = [], [], "", ""
     name = lambda i: (by_id[idx[int(i)]].get("attributes") or {}).get("friendly_name") or idx[int(i)]
     if "zeit" in w:
         trig.append({"trigger": "time", "at": f"{w['zeit']}:00"})
@@ -563,6 +564,7 @@ def automation_object(au: dict, idx: dict[int, str], by_id: dict[str, dict], tex
         if days:
             cond.append({"condition": "time", "weekday": days})
         wann = f"um {w['zeit']} Uhr" + ({"mon,tue,wed,thu,fri": " an Werktagen", "sat,sun": " am Wochenende"}.get(",".join(days), "") if days else " jeden Tag")
+        short = f"{w['zeit']} Uhr" + ({"mon,tue,wed,thu,fri": " werktags", "sat,sun": " am Wochenende"}.get(",".join(days), "") if days else "") + ": {was}"
     elif "sonne" in w:
         t = {"trigger": "sun", "event": "sunrise" if w["sonne"] == "auf" else "sunset"}
         m = int(w.get("min") or 0)
@@ -570,20 +572,30 @@ def automation_object(au: dict, idx: dict[int, str], by_id: dict[str, dict], tex
             t["offset"] = f"{'-' if m < 0 else ''}00:{abs(m):02d}:00"
         trig.append(t)
         wann = ("bei Sonnenaufgang" if w["sonne"] == "auf" else "bei Sonnenuntergang") + (f" ({m:+d} min)" if m else "")
+        short = ("Sonnenaufgang" if w["sonne"] == "auf" else "Sonnenuntergang") + (f" {m:+d} min" if m else "") + ": {was}"
     else:
         eid = idx[int(w["e"])]
+        dur = ""
+        if w.get("für"):
+            dur = f"{int(w['für']) // 60} min" if int(w["für"]) >= 60 else f"{int(w['für'])} s"
         if "zu" in w:
             t = {"trigger": "state", "entity_id": eid, "to": w["zu"]}
             dc = (by_id[eid].get("attributes") or {}).get("device_class")
-            what = ("Bewegung" if w["zu"] == "on" else "keine Bewegung") if dc in MOTION_CLASSES else \
-                ("offen" if w["zu"] == "on" else "geschlossen")
+            if dc in MOTION_CLASSES:
+                what = "Bewegung meldet" if w["zu"] == "on" else "keine Bewegung mehr meldet"
+                short = ("{was} nach " + dur + " ohne Bewegung") if w["zu"] == "off" and dur else \
+                    f"Bewegung{(' ' + areas_of(eid)) if areas_of(eid) else ''}: " + "{was}"
+            else:
+                what = "geöffnet wird" if w["zu"] == "on" else "geschlossen wird"
+                short = f"{name(w['e'])} {'offen' if w['zu'] == 'on' else 'zu'}" + (f" ({dur})" if dur else "") + ": {was}"
         else:
             key = "über" if "über" in w else "unter"
             t = {"trigger": "numeric_state", "entity_id": eid, ("above" if key == "über" else "below"): w[key]}
-            what = f"{key} {fmt_num(w[key])}"
-        if w.get("für"):
+            what = f"{key} {fmt_num(w[key])} liegt"
+            short = f"{name(w['e'])} {key} {fmt_num(w[key])}: " + "{was}"
+        if dur:
             t["for"] = {"seconds": int(w["für"])}
-            what += f" für {int(w['für']) // 60} min" if int(w["für"]) >= 60 else f" für {int(w['für'])} s"
+            what += f" (für {dur})"
         trig.append(t)
         wann = f"wenn {name(w['e'])} {what}"
     if b.get("nach") or b.get("vor"):
@@ -594,10 +606,11 @@ def automation_object(au: dict, idx: dict[int, str], by_id: dict[str, dict], tex
             c["before"] = f"{b['vor']}:00"
         cond.append(c)
         wann += f", nur zwischen {b.get('nach', '00:00')} und {b.get('vor', '24:00')} Uhr"
+        short += " (nachts)" if b.get("nach", "") >= "20:00" else f" ({b.get('nach', '00:00')}–{b.get('vor', '24:00')})"
     acts = to_actions({"a": au["a"]}, idx)
     names = {e: (by_id[e].get("attributes") or {}).get("friendly_name") or e for e in by_id}
     was = confirm_text(acts, names).rstrip(".")
-    alias = (re.search(r"„(.+?)“", text or "") or [None, f"{wann[:1].upper()}{wann[1:]}: {was}"])[1][:100]
+    alias = short.replace("{was}", was)[:100]
     return {"art": "automation", "alias": alias, "description": f"{wann[:1].upper()}{wann[1:]}: {was}.",
             "mode": "single", "triggers": trig, "conditions": cond,
             "actions": [{"action": x["action"], "target": x["target"], **({"data": x["data"]} if x.get("data") else {})} for x in acts],
@@ -840,7 +853,7 @@ class LocalAI:
         out = fix_values(wish, out, idx, by_id)
         names = {e: (st.get("attributes") or {}).get("friendly_name") or e for e, st in by_id.items()}
         if "au" in out:
-            obj = automation_object(out["au"], idx, by_id, str(out.get("t") or ""))
+            obj = automation_object(out["au"], idx, by_id, str(out.get("t") or ""), areas)
             return {"kind": "automation", "object": obj, "ms": self.last_ms,
                     "text": f"Soll ich die Automation „{obj['alias']}“ anlegen? {obj['description']}"}
         if "db" in out:
