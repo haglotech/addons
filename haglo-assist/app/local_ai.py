@@ -469,7 +469,8 @@ def fast_path(wish: str, states: list[dict], areas: dict[str, str]) -> dict | No
 
 # ---------------------------------------------------------------- Timer, Automation, Dashboard (Plan vom Modell, Bau im Code)
 # Wünsche, die geplant statt sofort geschaltet werden – an denen darf der Schnellweg nie sofort schalten
-PLAN = re.compile(r"\b(in|nach) (\d+|einer|ner|eine|zwei|drei|fünf|fuenf|zehn|anderthalb|halbe)\b.*(sek|min|stund)|aber erst|timer|"
+PLAN = re.compile(r"\b(in|nach|f(ü|ue)r) (\d+|einer|ner|eine|zwei|drei|vier|fünf|fuenf|zehn|zwanzig|dreißig|anderthalb|halbe)\b.*(sek|min|stund)|"
+                  r"\bwieder (aus|an|ein|zu|auf)\b|aber erst|timer|"
                   r"wenn |sobald|jeden |jede |täglich|taeglich|werktags|wochenende|immer |automati|bei (sonnen|bewegung)|"
                   r"sonnen(auf|unter)gang|dashboard|übersicht|uebersicht|seitenleiste|um \d|um halb|um viertel|seite f", re.I)
 AUTO_CUE = re.compile(r"wenn |sobald|jeden |jede |täglich|taeglich|werktags|woche|immer |automati|bei |um \d|um halb|"

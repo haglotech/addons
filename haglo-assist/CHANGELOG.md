@@ -9,6 +9,11 @@
 - Timer überstehen einen Neustart; was länger als 10 Minuten verpasst wurde, verfällt
 - Neues Sprachmodell (Qwen3-0.6B + Haglo-Adapter); „wärmer/kühler“ und Farbtemperaturen rechnet der Code, nicht das Modell
 - Was lokal nicht sicher geht (Fehlersuche, Energie-Auswertungen, Umbauten), übernimmt wie bisher Claude
+- „Schreibtisch für 10 Minuten an“, „Licht an und in 5 Minuten wieder aus“, „in 1 Minute …“ und Zeit-Automationen
+  („jeden Abend um halb 8 …“, „bei Sonnenuntergang …“) erkennt die App sofort, ohne Sprachmodell
+- Neu: Haglo Assist als Assistent in Home Assistant – unter Einstellungen → Sprachassistenten als Konversationsagent
+  wählbar (Sprache, Companion-App, Satelliten). Die App legt dafür die Integration „Haglo Assist“ an; nach einem
+  Neustart von Home Assistant richtet sie sich selbst ein. Bestätigungen und Rückfragen beantwortet man mit „Ja“ oder „Nein“
 
 ## 0.27.0 (Beta, Branch feat/sprachsteuerung)
 

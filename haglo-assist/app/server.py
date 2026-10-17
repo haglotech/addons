@@ -3373,6 +3373,176 @@ async def voice_reset(request):
     return web.json_response({"ok": True, **request.app["voice"].info()})
 
 
+# ---------------------------------------------------------------- Haglo Assist als Assistent in Home Assistant
+# Die App legt die Integration „haglo_assist“ in /config/custom_components an. Dort ist Haglo Assist unter
+# Einstellungen → Sprachassistenten als Konversationsagent wählbar (Text, Sprache, Companion-App, Satelliten).
+# Die Integration ruft /api/agent/conversation mit einem geheimen Token – sonst bleibt die App nur über Ingress erreichbar.
+AGENT_SRC = Path(__file__).parent / "ha_integration" / "haglo_assist"
+AGENT_DST = Path("/homeassistant/custom_components/haglo_assist")
+AGENT_TOKEN_FILE = Path("/data/agent_token")
+AGENT_PENDING: dict[str, dict] = {}          # conversation_id → wartende Bestätigung oder Rückfrage
+RE_YES = re.compile(r"^\W*(ja|jo|jep|jawohl|genau|klar|ok|okay|mach|mach das|gerne|bitte|passt|yes)\b", re.I)
+RE_NO = re.compile(r"^\W*(nein|nee|ne|nö|lieber nicht|abbrechen|stopp?|no)\b", re.I)
+
+
+def agent_token() -> str:
+    try:
+        return AGENT_TOKEN_FILE.read_text().strip()
+    except OSError:
+        tok = secrets.token_urlsafe(32)
+        AGENT_TOKEN_FILE.write_text(tok)
+        return tok
+
+
+class _Req:
+    """Aufruf eines eigenen Handlers ohne HTTP (gleiche Logik wie in der Oberfläche)."""
+    def __init__(self, app, body):
+        self.app, self._body = app, body
+
+    async def json(self):
+        return self._body
+
+
+async def _call(handler, app, body) -> dict:
+    resp = await handler(_Req(app, body))
+    try:
+        return json.loads(resp.text or "{}")
+    except Exception:
+        return {}
+
+
+def _speech_of(data: dict) -> str:
+    """Antwort der App → ein gesprochener Satz (ohne Markdown)."""
+    text = str(data.get("done") or data.get("answer") or data.get("erklaerung") or "")
+    text = re.sub(r"\[([^\]]+)\]\([^)]*\)", r"\1", text)          # Links: nur der Text
+    return re.sub(r"[*_`#>]+", "", text).strip()
+
+
+async def agent_reply(app, text: str, cid: str) -> dict:
+    pend = AGENT_PENDING.pop(cid, None)
+    if pend and pend["type"] in ("objects", "actions"):
+        if RE_NO.search(text):
+            return {"speech": "Okay, ich mache nichts."}
+        if RE_YES.search(text):
+            if pend["type"] == "objects":
+                r = await _call(apply_objects, app, {"automations": pend["objects"], "wish": pend["wish"]})
+                names = ", ".join(d["alias"] for d in r.get("created") or [])
+                return {"speech": f"Angelegt: {names}." if r.get("ok") else f"Das hat nicht geklappt: {r.get('error')}"}
+            r = await _call(run_confirmed_actions, app, {"actions": pend["actions"], "wish": pend["wish"],
+                                                         "erklaerung": pend["text"]})
+            return {"speech": "Erledigt." if r.get("ok") else f"Das hat nicht geklappt: {r.get('error')}"}
+        # weder ja noch nein: neuer Wunsch – die Bestätigung verfällt
+    body = {"wish": text}
+    if pend and pend["type"] == "question":
+        body = {"wish": pend["wish"], "dialog": pend["dialog"] + [{"frage": pend["frage"], "antwort": text}]}
+    data = await _call(generate, app, body)
+    wish = body["wish"]
+    if data.get("question"):
+        q = data["question"]
+        opts = [str(o) for o in q.get("optionen") or []][:4]
+        AGENT_PENDING[cid] = {"type": "question", "wish": wish, "frage": q.get("frage", ""), "dialog": body.get("dialog") or []}
+        return {"speech": q.get("frage", "") + (f" Zum Beispiel: {', '.join(opts)}." if opts else ""), "continue": True}
+    if data.get("objects"):
+        AGENT_PENDING[cid] = {"type": "objects", "wish": wish, "objects": data["objects"]}
+        intro = _speech_of(data) or "Ich würde das so anlegen."
+        if "anlegen?" not in intro:
+            intro += " Soll ich das anlegen?"
+        return {"speech": intro + " Sag ja oder nein.", "continue": True}
+    if data.get("confirm_actions"):
+        AGENT_PENDING[cid] = {"type": "actions", "wish": wish, "actions": data["confirm_actions"], "text": _speech_of(data)}
+        return {"speech": (_speech_of(data) or "Das ist eine sicherheitsrelevante Aktion.") + " Soll ich das wirklich machen? Sag ja oder nein.",
+                "continue": True}
+    if any(k in data for k in ("need_consent", "need_diagnose_consent", "need_logs_consent", "need_yaml_consent",
+                               "need_integrations_consent", "need_history_consent", "need_dashboard_consent",
+                               "confirm_repair", "confirm_integration", "confirm_device")):
+        return {"speech": "Dafür brauche ich einmal deine Freigabe in der App Haglo Assist. Öffne sie in der Seitenleiste "
+                          "und stell die Frage dort."}
+    if not data.get("ok", True) or data.get("error"):
+        err = data.get("error")
+        if err == "consent_required":
+            return {"speech": "Bitte öffne einmal die App Haglo Assist und stimm den Bedingungen zu."}
+        if err == "trial_expired":
+            return {"speech": "Dein Kontingent ist gerade aufgebraucht. Details stehen in der App Haglo Assist."}
+        return {"speech": f"Das hat nicht geklappt: {err}"}
+    return {"speech": _speech_of(data) or "Erledigt."}
+
+
+@routes.post("/api/agent/conversation")
+async def agent_conversation(request):
+    try:
+        body = await request.json()
+    except Exception:
+        body = {}
+    text = str(body.get("text") or "").strip()[:500]
+    cid = str(body.get("conversation_id") or "")[:80]
+    if not text:
+        return web.json_response({"speech": "Ich habe nichts verstanden."})
+    try:
+        out = await agent_reply(request.app, text, cid)
+    except Exception as e:
+        print(f"[Assistent] Fehler: {e}", flush=True)
+        out = {"speech": f"Da ist etwas schiefgelaufen: {str(e)[:120]}"}
+    print(f"[Assistent] {text!r} → {out['speech'][:160]!r}", flush=True)
+    return web.json_response(out)
+
+
+AGENT_READY = {"notification_id": "haglo_assist_agent", "title": "Haglo Assist als Assistent",
+               "message": "Haglo Assist ist jetzt als Assistent verfügbar: **Einstellungen → Sprachassistenten** – beim "
+                          "Assistenten (oder „Assistent hinzufügen“) als *Konversationsagent* „Haglo Assist“ wählen."}
+
+
+async def install_agent(app):
+    """Integration anlegen/aktualisieren und – sobald Home Assistant sie kennt – einrichten."""
+    if not Path("/homeassistant").is_dir() or not AGENT_SRC.is_dir():
+        return
+    try:
+        info = await supervisor_get(app["session"], "/addons/self/info")
+        host = "127.0.0.1" if info.get("host_network") else (info.get("hostname") or info.get("ip_address"))
+        conn = {"url": f"http://{host}:8099", "token": agent_token()}
+        fresh = not (AGENT_DST / "manifest.json").exists()
+        AGENT_DST.mkdir(parents=True, exist_ok=True)
+        changed = False
+        for src in AGENT_SRC.rglob("*"):
+            if src.is_file() and "__pycache__" not in src.parts:
+                dst = AGENT_DST / src.relative_to(AGENT_SRC)
+                dst.parent.mkdir(parents=True, exist_ok=True)
+                if not dst.exists() or dst.read_bytes() != src.read_bytes():
+                    dst.write_bytes(src.read_bytes())
+                    changed = True
+        conn_file = AGENT_DST / "connection.json"
+        if not conn_file.exists() or json.loads(conn_file.read_text() or "{}") != conn:
+            conn_file.write_text(json.dumps(conn))
+        session = app["session"]
+        status, entries = await core(session, "GET", "/config/config_entries/entry?domain=haglo_assist")
+        if status == 200 and not entries:
+            st, flow = await core(session, "POST", "/config/config_entries/flow", {"handler": "haglo_assist"})
+            if st != 200 and not app.get("agent_retry"):
+                # Home Assistant kennt die Integration erst nach einem Neustart – bis dahin jede Minute nachsehen
+                async def retry():
+                    while True:
+                        await asyncio.sleep(60)
+                        s2, e2 = await core(session, "GET", "/config/config_entries/entry?domain=haglo_assist")
+                        if s2 == 200 and e2:
+                            return
+                        s3, f3 = await core(session, "POST", "/config/config_entries/flow", {"handler": "haglo_assist"})
+                        if s3 == 200 and f3.get("type") == "create_entry":
+                            print("[Assistent] Integration eingerichtet", flush=True)
+                            await core(session, "POST", "/services/persistent_notification/create", AGENT_READY)
+                            return
+                app["agent_retry"] = asyncio.create_task(retry())
+            if st == 200 and flow.get("type") == "create_entry":
+                print("[Assistent] Integration eingerichtet – unter Einstellungen → Sprachassistenten auswählbar", flush=True)
+                await core(session, "POST", "/services/persistent_notification/create", AGENT_READY)
+            elif fresh or changed:
+                print("[Assistent] Integration abgelegt – Home Assistant einmal neu starten", flush=True)
+                await core(session, "POST", "/services/persistent_notification/create", {
+                    "notification_id": "haglo_assist_agent", "title": "Haglo Assist als Assistent",
+                    "message": "Damit du Haglo Assist auch als Sprach- und Textassistent auswählen kannst, starte Home "
+                               "Assistant einmal neu (Einstellungen → System → Neu starten)."})
+    except Exception as e:
+        print(f"[Assistent] Einrichtung übersprungen: {e}", flush=True)
+
+
 # ---------------------------------------------------------------- Haglo Local (eigenes Modell auf dem Hub)
 def ram_gb() -> float:
     try:
@@ -3492,7 +3662,8 @@ async def local_answer(app, wish: str, use_model: bool = True) -> dict | None:
         print(f"[Lokal] komplex → nicht lokal | {wish!r}", flush=True)
         return None
     session = app["session"]
-    if app.get("areas_cache"):
+    if app.get("areas_cache") or local_ai.PLAN.search(wish):
+        # Planwünsche (Timer, Automation, Dashboard) brauchen die Räume – darauf lohnt sich das Warten
         states, areas = await asyncio.gather(all_states(session), area_map(app))
     else:
         # Raumliste noch nicht da (gerade gestartet): nicht darauf warten – Namen reichen fürs Schalten
@@ -3584,6 +3755,9 @@ INGRESS_IPS = {"172.30.32.2"}                # nur der Ingress-Proxy von Home As
 
 @web.middleware
 async def only_ingress(request, handler):
+    if request.path == "/api/agent/conversation" and secrets.compare_digest(
+            request.headers.get("Authorization", ""), f"Bearer {agent_token()}"):
+        return await handler(request)            # Haglo-Integration in Home Assistant (Token, siehe install_agent)
     if request.remote not in INGRESS_IPS:
         return web.Response(status=403, text="Haglo Assist ist nur über Home Assistant erreichbar.")
     return await handler(request)
@@ -3607,6 +3781,7 @@ async def on_startup(app):
     asyncio.create_task(selftest(app))
     app["local"] = local_ai.LocalAI(app["session"])
     resume_timers(app)
+    asyncio.create_task(install_agent(app))
     asyncio.create_task(area_map(app))          # Raumliste vorab laden – der erste Befehl ist dann schon schnell
     app["voice"] = voice.Voice(app["session"])
     try:
