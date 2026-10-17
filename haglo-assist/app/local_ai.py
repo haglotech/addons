@@ -302,6 +302,46 @@ def to_actions(out: dict, idx: dict[int, str]) -> list[dict] | None:
 
 
 # ---------------------------------------------------------------- Schnellweg (ohne Modell, < 1 s)
+OFF_WORDS = {"aus", "ab", "ausschalten", "abschalten", "ausmachen", "abdrehen", "ausknipsen"}
+ON_WORDS = {"an", "ein", "einschalten", "anschalten", "anmachen", "aufdrehen", "anknipsen"}
+RE_OPEN = re.compile(r"\b(auf|oeffne\w*|hoch|rauf)\b")
+RE_CLOSE = re.compile(r"\b(zu|schliess\w*|runter)\b")
+
+
+def model_guard(wish: str, acts: list[dict], states: list[dict], areas: dict[str, str]) -> dict | None:
+    """Prüft die Aktionen des kleinen Modells gegen den Wortlaut, bevor etwas schaltet.
+    → None: in Ordnung. → {"kind": "question", ...}: lieber nachfragen. → {"kind": "claude"}: Claude übernimmt."""
+    w = norm(wish)
+    toks = set(w.split())
+    by_id = {s["entity_id"]: s for s in states}
+    for a in acts:
+        dom, svc = a["action"].split(".", 1)
+        # Schlösser nie über das kleine Modell (auf/zu verwechselt = Haustür offen)
+        if dom in ("lock", "alarm_control_panel"):
+            return {"kind": "claude"}
+        # Richtung muss zum Wortlaut passen
+        if svc == "turn_on" and toks & OFF_WORDS and not toks & ON_WORDS:
+            return {"kind": "claude"}
+        if svc == "turn_off" and toks & ON_WORDS and not toks & OFF_WORDS:
+            return {"kind": "claude"}
+        if dom == "cover" and ("close" in svc and RE_OPEN.search(w) or "open" in svc and RE_CLOSE.search(w)):
+            return {"kind": "claude"}
+        # Gleicher Name in mehreren Räumen und kein Raum genannt → nachfragen statt raten
+        for e in a["target"]["entity_id"]:
+            name = norm((by_id.get(e, {}).get("attributes") or {}).get("friendly_name") or "").strip()
+            if not name:
+                continue
+            twins = [s["entity_id"] for s in states if s["entity_id"].split(".")[0] in ACTIONABLE
+                     and norm((s.get("attributes") or {}).get("friendly_name") or "").strip() == name]
+            rooms = sorted({areas.get(t) for t in twins if areas.get(t)})
+            if set(twins) <= set(a["target"]["entity_id"]):
+                continue  # alle gemeint („überall das Licht aus“)
+            if len(twins) > 1 and len(rooms) > 1 and not any(set(words(r)) & set(words(wish)) for r in rooms):
+                label = (by_id[e].get("attributes") or {}).get("friendly_name")
+                return {"kind": "question", "text": f"Welches meinst du? {label} in: {', '.join(rooms)}?"}
+    return None
+
+
 RE_QUESTION = re.compile(r"\?|^\W*(ist|is|isst|sind|wie|was|welche|wieviel|wie ?viel|läuft|laeuft|hab|habe|warum|wann|wo|status)\b", re.I)
 RE_MULTI = re.compile(r"\b(und|dann|danach|außerdem|ausserdem|sowie|wenn|falls|sobald)\b|,(?!\d)", re.I)
 RE_PCT = re.compile(r"(\d{1,3})\s*(%|prozent)", re.I)
@@ -579,6 +619,10 @@ class LocalAI:
             acts = to_actions(out, idx)
             if not acts:
                 return None
+            guard = model_guard(wish, acts, states, areas)
+            if guard:
+                print(f"[Lokal] Prüfung: {guard} | {wish!r}", flush=True)
+                return None if guard["kind"] == "claude" else {**guard, "ms": self.last_ms}
             names = {p["st"]["entity_id"]: p["st"].get("attributes", {}).get("friendly_name") or p["st"]["entity_id"] for p in picks}
             return {"kind": "actions", "actions": acts, "text": confirm_text(acts, names), "ms": self.last_ms}
         if out.get("f"):
