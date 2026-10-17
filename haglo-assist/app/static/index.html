@@ -429,7 +429,7 @@
       <div class="tools">
         <div class="mode" role="group" aria-label="Antwortart">
           <button type="button" data-mode="auto" title="Auto: Haglo Assist entscheidet selbst – Schaltbefehle sofort direkt auf dem Hub, einfache Wünsche mit Haglo Local, große Aufgaben mit Claude Präzise. Empfohlen.">Auto</button>
-          <button type="button" data-mode="lokal" title="Lokal: Haglo Local versteht einfache Befehle direkt auf deinem Hub – ohne Internet, ohne Kontingent. Was es nicht kann, übernimmt automatisch Claude.">⚡ Lokal</button>
+          <button type="button" data-mode="lokal" title="Lokal: Haglo Local versteht einfache Befehle direkt auf deinem Hub – ohne Internet, ohne Kontingent. Claude wird in diesem Modus nie gefragt.">⚡ Lokal</button>
           <button type="button" data-mode="schnell" title="Schnell: einfache Schaltbefehle sofort direkt auf dem Hub, alles andere zügig über Claude. Verbraucht wenig vom Kontingent.">Schnell</button>
           <button type="button" data-mode="praezise" title="Präzise: denkt gründlicher nach – für große Dashboards, Reparaturen und Einstellungen. Dauert etwas länger und verbraucht mehr vom Kontingent.">Präzise</button>
         </div>
@@ -496,7 +496,7 @@
     <div class="sheet wide">
       <button class="close" id="localClose" aria-label="Schließen">×</button>
       <h3>Haglo Local <span class="kind">Beta</span></h3>
-      <p class="now">Das eigene Haglo-Sprachmodell läuft direkt auf deinem Hub. Einfache Befehle – schalten, dimmen, Rollläden, Heizung, Szenen, Fragen nach Werten – versteht es ohne Internet und ohne dein Kontingent. Für alles Größere (Dashboards, Automationen, Reparaturen) übernimmt wie gewohnt Claude.</p>
+      <p class="now">Das eigene Haglo-Sprachmodell läuft direkt auf deinem Hub. Einfache Befehle – schalten, dimmen, Rollläden, Heizung, Szenen, Fragen nach Werten – versteht es ohne Internet und ohne dein Kontingent. Für alles Größere (Dashboards, Automationen, Reparaturen) den Modus „Auto“ wählen – im Modus „Lokal“ wird Claude nie gefragt.</p>
       <label class="vtoggle"><input type="checkbox" id="lOn"><span><b>Modus „⚡ Lokal“ verwenden</b><br>Gleich wie der Knopf unter dem Eingabefeld. Beim ersten Mal lädt der Hub das Modell (etwa 400 MB).</span></label>
       <div class="vpair" id="lState">–</div>
       <p class="hint">Probier es: „Schreibtisch aus“, „mach es im Büro wärmer“, „ist die Garage zu?“. Antworten von Haglo Local tragen das Zeichen ⚡.</p>
