@@ -405,7 +405,9 @@ def fast_path(wish: str, states: list[dict], areas: dict[str, str]) -> dict | No
     if all_lights or (generic_light and room):
         lights = [{"st": s_, "room": areas.get(s_["entity_id"], "")} for s_ in states if s_["entity_id"].startswith("light.")
                   and not s_.get("attributes", {}).get("hidden")]
-        targets = [p for p in lights if in_room(p)] if room else (lights if all_lights else [])
+        # Raum genannt: Geräte, die dort stehen – nur wenn keins dort steht, auch solche mit dem Raum im Namen
+        targets = ([p for p in lights if p["room"] == room] or [p for p in lights if in_room(p)]) if room else \
+            (lights if all_lights else [])
         # „das Licht im Hobbyraum“ und dort heißt ein Gerät schlicht „Licht“: genau das ist gemeint
         named = [p for p in targets if name_words(p) == ["licht"]]
         if room and not all_lights and len(named) == 1:
@@ -456,7 +458,8 @@ def fast_path(wish: str, states: list[dict], areas: dict[str, str]) -> dict | No
         elif UP.search(w) and not DOWN.search(w):
             act = {"action": "cover.open_cover"}
     elif dom == "climate" and deg:
-        act = {"action": "climate.set_temperature", "data": {"temperature": float(deg.group(1).replace(",", "."))}}
+        t = float(deg.group(1).replace(",", "."))
+        act = {"action": "climate.set_temperature", "data": {"temperature": int(t) if t.is_integer() else t}}
     elif dom in SWITCHY:
         on, off = bool(ON.search(w)), bool(OFF.search(w))
         if on != off:
@@ -699,7 +702,7 @@ def wish_duration(wish: str) -> int | None:
 def wish_clock(wish: str) -> str | None:
     """„um 7“, „um halb 8“, „viertel nach 6“, „um 18:30“, „jeden abend um 7“ → "HH:MM"."""
     w = re.sub(r"(\d)\.(\d\d)\b", r"\1:\2", wish.lower())
-    evening = bool(re.search(r"\babend|\babends|\bnachmittag", w))
+    evening = bool(re.search(r"\b(abends?|nachmittags?)\b", w))
     m = re.search(r"\b(\d{1,2}):(\d{2})\b", w)
     if m:
         h, mi = int(m.group(1)), int(m.group(2))
@@ -795,7 +798,8 @@ def dash_plan_from_wish(wish: str, areas: dict[str, str]) -> dict | None:
     ww = words(wish)
     rooms = sorted(rooms_named(wish, areas), key=lambda r: norm(wish).find(norm(r).strip().split(" ")[0]))
     kinds = [k for k, ws in DASH_WORDS.items()
-             if any(x == norm(v).strip() or (len(x) >= 5 and similar(x, norm(v).strip())) for x in ww for v in ws)]
+             if any(x == norm(v).strip() or (len(x) >= 6 and difflib.SequenceMatcher(None, x, norm(v).strip()).ratio() >= 0.85)
+                    for x in ww for v in ws)]
     name = " & ".join(rooms) if rooms else " & ".join(k.capitalize() for k in kinds) if kinds else "Mein Zuhause"
     if rooms and kinds:
         name = f"{' & '.join(rooms)} – {' & '.join(k.capitalize() for k in kinds)}"
@@ -920,7 +924,7 @@ def code_rules(wish: str, out: dict, idx: dict[int, str], by_id: dict[str, dict]
 # Zeitangabe liest der Code, der Rest („Schreibtisch einschalten“) geht durch den Schnellweg. Das ist auf jedem Hub
 # sofort da – das Modell kommt nur dran, wenn der Schnellweg den Rest nicht eindeutig versteht.
 DUR_NUM = set(NUMS) | {"halbe", "halben", "viertel", "anderthalb"}
-FILLER = {"in", "nach", "fuer", "erst", "aber", "und", "zwar", "dann", "danach", "spaeter", "bitte", "danke", "pls", "bitteschoen",
+FILLER = {"in", "nach", "fuer", "erst", "aber", "zwar", "dann", "danach", "spaeter", "bitte", "danke", "pls", "bitteschoen",
           "automatisch", "immer", "jeden", "jede", "taeglich", "werktags", "werktagen", "wochenende", "woche", "unter",
           "montags", "freitags", "bis", "samstags", "sonntags", "morgen", "morgens", "abend", "abends", "tag", "uhr", "um", "halb",
           "bei", "sonnenuntergang", "sonnenaufgang", "erstell", "erstelle", "automation", "timer", "stell", "stelle", "einen", "am"}
@@ -985,11 +989,14 @@ def code_plan(wish: str, states: list[dict], areas: dict[str, str]) -> dict | No
     """„in 10 min Licht aus“, „Schreibtisch für 5 Minuten an“, „an und nach 10 min wieder aus“,
     „jeden Abend um halb 8 Rollläden runter“, „bei Sonnenuntergang Licht an“ → Plan ohne Modell. Sonst None."""
     low = norm(wish)
-    toks = low.split()
+    # Werte des Befehls schützen: „20,5°“ → 20komma5 grad, „50%“ → 50 prozent (Zeitangaben bleiben normale Zahlen)
+    valued = re.sub(r"(\d+)[.,](\d+)\s*(°|grad)", r"\1komma\2 grad", wish.lower())
+    valued = re.sub(r"(\d+)\s*°", r"\1 grad", re.sub(r"(\d+)\s*%", r"\1 prozent", valued))
+    toks = norm(valued).split()
     sec = wish_duration(wish)
     clock = wish_clock(wish) if re.search(r"\bum\b|\d:\d\d|\bhalb\b|viertel (nach|vor)", wish.lower()) else None
     side, off = wish_sun(wish) if re.search(r"sonnen(auf|unter)gang", low) else (None, 0)
-    if not (sec or clock or side) or RE_QUESTION.search(wish) or re.search(r"\b(wenn|falls|sobald|warum|wieso)\b", low):
+    if not (sec or clock or side) or RE_QUESTION.search(wish) or re.search(r"\b(wenn|falls|sobald|warum|wieso)\b|beweg|keiner|niemand", low):
         return None
     back = False
     keep, skip_next = [], False
@@ -1004,35 +1011,44 @@ def code_plan(wish: str, states: list[dict], areas: dict[str, str]) -> dict | No
             if i + 1 < len(toks) and toks[i + 1] in ("aus", "an", "ein", "zu", "auf", "runter", "hoch"):
                 skip_next = True
             continue
+        if (t.isdigit() or re.fullmatch(r"\d+komma\d+", t)) and nxt in ("prozent", "grad"):
+            keep.append(t.replace("komma", ","))   # Wert des Befehls („auf 20,5 grad“), keine Zeitangabe
+            continue
         if t in FILLER or similar(t, "danach") or t.isdigit() or t in DUR_NUM or _is_dur_unit(t) or \
                 (len(t) >= 6 and any(similar(t, f) for f in ("danach", "minuten", "sekunden", "stunden"))):
             continue
         if t in ("vor",) and side:
             continue
+        if t == "und" and (i + 1 >= len(toks) or toks[i + 1] in ("zwar", "danach", "dann", "wieder", "nach", "in", "erst")):
+            continue                             # „und zwar in 5 min“ – kein zweiter Befehl
         keep.append(t)
     rest = " ".join(keep)
     if re.search(r"\bfuer\b", low) and sec:
         back = True                      # „für 10 Minuten an“ = jetzt an, danach wieder aus
     if not rest or (clock and side) or (back and not sec):
         return None
-    quick = fast_path(rest, states, areas)
-    if not quick:
+    acts = rule_actions(rest, states, areas)
+    if not acts:
         return None
-    acts = quick["actions"]
     names = {e: (st.get("attributes") or {}).get("friendly_name") or e for st in states for e in [st["entity_id"]]}
     if clock or side:
         trig = {"zeit": clock} if clock else {"sonne": side, **({"min": off} if off else {})}
         if clock:
-            if re.search(r"werktag|montags bis freitags|unter der woche", low):
+            fz = lambda word: any(t == word or (len(t) >= 5 and similar(t, word)) for t in toks)
+            if re.search(r"werktag|montags bis freitags|unter der woche", low) or fz("werktags") or fz("werktagen") or \
+                    (fz("woche") and "unter" in toks):
                 trig["tage"] = ["mo", "di", "mi", "do", "fr"]
-            elif re.search(r"wochenende|samstags und sonntags", low):
+            elif re.search(r"wochenende|samstags und sonntags", low) or fz("wochenende") or (fz("samstags") and fz("sonntags")):
                 trig["tage"] = ["sa", "so"]
+            elif any(fz(d) for d in ("montags", "dienstags", "mittwochs", "donnerstags", "freitags", "samstags", "sonntags", "woche")):
+                return None                      # einzelne Wochentage o. Ä.: lieber das Modell / Claude
         idx = {i: e for i, e in enumerate(sorted({e for a in acts for e in a["target"]["entity_id"]}), 1)}
         inv = {e: i for i, e in idx.items()}
         by_id = {st["entity_id"]: st for st in states}
         plan = {"w": trig, "a": [{"s": a["action"], "e": [inv[e] for e in a["target"]["entity_id"]], **({"d": a["data"]} if a.get("data") else {})} for a in acts]}
         obj = automation_object(plan, idx, by_id, "", areas)
-        return {"kind": "automation", "object": obj, "text": f"Soll ich die Automation „{obj['alias']}“ anlegen? {obj['description']}"}
+        return {"kind": "automation", "object": obj, "plan_e": {**plan, "a": [{**x, "e": [idx[i] for i in x["e"]]} for x in plan["a"]]},
+                "text": f"Soll ich die Automation „{obj['alias']}“ anlegen? {obj['description']}"}
     if back:
         rev = []
         for a in acts:
@@ -1049,6 +1065,254 @@ def code_plan(wish: str, states: list[dict], areas: dict[str, str]) -> dict | No
 def nice_wait(sec: int) -> str:
     return f"{sec} Sekunden" if sec < 60 else f"{sec // 60} Minute{'n' if sec >= 120 else ''}" if sec < 3600 \
         else f"{sec / 3600:g} Stunde{'n' if sec != 3600 else ''}".replace(".", ",")
+
+
+# ---------------------------------------------------------------- Regel-Maschine: häufige Wünsche ohne Modell
+# Jede Regel findet das Gerät wie der Schnellweg und liefert dasselbe wie das Modell – die Prüfungen danach gelten genauso.
+# Was keine Regel sicher versteht, bekommt das Modell (oder Claude).
+COLORS = {"rot": "red", "gruen": "green", "blau": "blue", "gelb": "yellow", "orange": "orange", "lila": "purple",
+          "violett": "violet", "pink": "pink", "rosa": "pink", "tuerkis": "turquoise"}
+RE_BRIGHT = re.compile(r"\b(heller|dunkler|dimm\w*|aufhellen)\b|weniger hell|zu hell|zu dunkel|mehr licht|weniger licht", re.I)
+RE_TEMP_REL = re.compile(r"\b(waermer|kuehler|kalt|kaelter|warm|heiss|friere|friert|frier)\b", re.I)
+RE_SEP = re.compile(r"\s*(?:,|;|\bund dann\b|\bund danach\b|\bund\b|\bdann\b|\bdanach\b|\baußerdem\b|\bausserdem\b|\bsowie\b)\s*", re.I)
+FILL = {"bitte", "danke", "pls", "mal", "doch", "kannst", "du", "mach", "mache", "machen", "schalte", "schalt", "stell", "stelle",
+        "es", "mir", "ist", "zu", "etwas", "ein", "bisschen", "wenig", "noch", "die", "der", "das", "den", "im", "in", "am", "beim"}
+
+
+CUE_WORDS = ("minuten", "minute", "sekunden", "sekunde", "stunden", "stunde", "taeglich", "wochenende", "werktags", "werktagen",
+             "automatisch", "automation", "morgens", "abends", "nachts", "sonnenuntergang", "sonnenaufgang", "bewegung",
+             "bewegungsmelder", "dashboard", "uebersicht", "seitenleiste", "timer", "spaeter", "jeden", "immer")
+
+
+def time_cue(wish: str) -> bool:
+    """Klingt der Wunsch nach später, Zeitplan, Bedingung oder Dashboard – auch mit Tippfehlern? Dann nie sofort schalten."""
+    if PLAN.search(wish) or re.search(r"\b(um|ab|bis) \d|\d[:.]\d\d|\buhr\b|\b(wenn|sobald|falls|erst)\b|ohne bewegung|\bbei (bewegung|ueber|mehr|unter|weniger|sonnen)|"
+                                      r"\bnach (\d|ein|ner|zwei|drei|vier|fuenf|zehn|zwanzig|dreissig|halb|anderthalb)|\b\d+ ?(s|sek|min|h|std)\b",
+                                      norm(wish)):
+        return True
+    return any(t == c or (len(t) >= 6 and similar(t, c)) for t in norm(wish).split() for c in CUE_WORDS)
+
+
+def _clean(text: str, drop: set[str]) -> str:
+    return " ".join(t for t in norm(text).split() if t not in drop and t not in FILL)
+
+
+def _pick(text: str, states: list[dict], areas: dict[str, str], doms: set[str]) -> list[str] | None:
+    """Zielgerät(e) einer Art: erst wie der Schnellweg (Name/Raum), sonst das einzige dieser Art im genannten Raum."""
+    if text.strip():
+        for verb in (" an", " hoch", " auf 20 grad"):
+            q = fast_path(text + verb, states, areas)
+            if q and len(q["actions"]) == 1:
+                ids = q["actions"][0]["target"]["entity_id"]
+                if ids and all(i.split(".")[0] in doms for i in ids):
+                    return ids
+    rooms = rooms_named(text, areas)
+    if not rooms:
+        return None
+    c = [s["entity_id"] for s in states if s["entity_id"].split(".")[0] in doms and areas.get(s["entity_id"]) in rooms
+         and not (s.get("attributes") or {}).get("hidden")]
+    return c if len(c) == 1 else None
+
+
+def _one_rule(wish: str, states: list[dict], areas: dict[str, str]) -> list[dict] | None:
+    """Ein einzelner Befehl → Aktionen (Format wie run_actions) oder None."""
+    low = norm(wish)
+    by_id = {s["entity_id"]: s for s in states}
+    q = fast_path(wish, states, areas)
+    if q:
+        return q["actions"]
+    # Helligkeit relativ
+    if RE_BRIGHT.search(low):
+        ids = _pick(_clean(wish, {"heller", "dunkler", "hell", "dunkel", "dimmen", "dimm", "weniger", "mehr", "licht"} - {"licht"}),
+                    states, areas, {"light"}) or _pick(_clean(wish, {"heller", "dunkler", "dimmen", "weniger", "mehr"}) or "licht",
+                                                       states, areas, {"light"})
+        if not ids:
+            return None
+        pct = RE_PCT.search(wish)
+        if pct:
+            return [{"action": "light.turn_on", "target": {"entity_id": ids}, "data": {"brightness_pct": max(1, min(100, int(pct.group(1))))}}]
+        down = bool(re.search(r"dunkler|dimm|weniger hell|zu hell|weniger licht", low))
+        return [{"action": "light.turn_on", "target": {"entity_id": ids}, "data": {"brightness_step_pct": -20 if down else 20}}]
+    # wärmer / kälter (nicht: warmweiß/kaltweiß)
+    if RE_TEMP_REL.search(low) and not re.search(r"weiss|licht", low) and not RE_DEG.search(wish):
+        ids = _pick(_clean(wish, {"waermer", "kuehler", "kalt", "kaelter", "warm", "heiss", "friere", "friert", "frier", "zu"}),
+                    states, areas, {"climate"})
+        if not ids or len(ids) != 1:
+            return None
+        a = by_id[ids[0]].get("attributes") or {}
+        step = 1.5 if re.search(r"waermer|kalt|kaelter|frier", low) and not re.search(r"zu warm|heiss|kuehler", low) else -1.5
+        if isinstance(a.get("temperature"), (int, float)):
+            data = {"temperature": round(a["temperature"] + step, 1)}
+        elif isinstance(a.get("target_temp_low"), (int, float)) and isinstance(a.get("target_temp_high"), (int, float)):
+            data = {"target_temp_low": round(a["target_temp_low"] + step, 1), "target_temp_high": round(a["target_temp_high"] + step, 1)}
+        else:
+            return None
+        return [{"action": "climate.set_temperature", "target": {"entity_id": ids}, "data": data}]
+    # Farbe / Farbtemperatur
+    color = next((c for c in COLORS if re.search(rf"\b{c}\b", low)), None)
+    ct = 6000 if re.search(r"kalt ?weiss|kaltes licht|tageslicht", low) else 2700 if re.search(r"warm ?weiss|warmes licht|gemuetlich", low) else None
+    if color or ct:
+        ids = _pick(_clean(wish, set(COLORS) | {"kaltweiss", "warmweiss", "kalt", "warm", "weiss", "kaltes", "warmes", "licht",
+                                                 "tageslicht", "gemuetlich", "auf", "farbe", "machen"}) or "licht", states, areas, {"light"})
+        if not ids:
+            return None
+        return [{"action": "light.turn_on", "target": {"entity_id": ids},
+                 "data": {"color_name": COLORS[color]} if color else {"color_temp_kelvin": ct}}]
+    # Heizung aus / an
+    if re.search(r"\b(heizung|heizkoerper|thermostat|klima\w*|fussbodenheizung|radiator)\b", low) and (ON.search(wish) or OFF.search(wish)) \
+            and not RE_DEG.search(wish):
+        on, off = bool(ON.search(wish)), bool(OFF.search(wish))
+        if on == off:
+            return None
+        ids = _pick(_clean(wish, {"an", "aus", "ein", "ausschalten", "einschalten", "anmachen", "ausmachen", "abschalten"}),
+                    states, areas, {"climate"})
+        if not ids:
+            return None
+        return [{"action": "climate.set_hvac_mode", "target": {"entity_id": ids}, "data": {"hvac_mode": "heat" if on else "off"}}]
+    # Musik / Medien
+    if re.search(r"\b(lauter|leiser|pause|pausier\w*|weiter|fortsetzen|abspielen|play|lautstaerke|volume)\b", low):
+        ids = _pick(_clean(wish, {"lauter", "leiser", "pause", "pausieren", "weiter", "fortsetzen", "abspielen", "play",
+                                  "lautstaerke", "volume", "auf", "prozent", "musik"}), states, areas, {"media_player"})
+        if not ids:
+            mp = [s["entity_id"] for s in states if s["entity_id"].startswith("media_player.") and s.get("state") in ("playing", "paused")]
+            ids = mp if len(mp) == 1 else None
+        if not ids:
+            return None
+        pct = RE_PCT.search(wish) or re.search(r"lautst\w* (?:auf )?(\d{1,3})", low)
+        svc, data = ("volume_set", {"volume_level": round(min(100, int(pct.group(1))) / 100, 2)}) if pct else \
+            ("volume_up", {}) if "lauter" in low else ("volume_down", {}) if "leiser" in low else \
+            ("media_pause", {}) if re.search(r"pause|pausier", low) else ("media_play", {})
+        return [{"action": f"media_player.{svc}", "target": {"entity_id": ids}, **({"data": data} if data else {})}]
+    # Saugroboter
+    if re.search(r"\b(saug\w*|staubsaug\w*|putz\w*|wisch\w*)\b", low):
+        ids = _pick(_clean(wish, {"starte", "starten", "start", "los", "zurueck", "station", "laden", "nach", "hause", "schick",
+                                  "fahr", "fahre"}) or "sauger", states, areas, {"vacuum"})
+        if not ids:
+            vs = [s["entity_id"] for s in states if s["entity_id"].startswith("vacuum.")]
+            ids = vs if len(vs) == 1 else None
+        if not ids:
+            return None
+        back = bool(re.search(r"station|zurueck|nach hause|laden|basis", low))
+        return [{"action": f"vacuum.{'return_to_base' if back else 'start'}", "target": {"entity_id": ids}}]
+    return None
+
+
+def _trigger(trig: str, act_ids: list[str], states: list[dict], areas: dict[str, str]) -> tuple[dict, str] | None:
+    """Auslöser aus Text → ({"e": entity, "zu"/"über"/"unter", "für"?}, Art) oder None."""
+    low = norm(trig)
+    rooms = rooms_named(trig, areas) or {areas.get(e) for e in act_ids if areas.get(e)}
+    dur = wish_duration(trig)
+    if not dur and any(len(t) >= 5 and any(similar(t, u) for u in ("minuten", "sekunden", "stunden")) for t in low.split()):
+        return None                                   # Dauer genannt, aber nicht sicher lesbar
+
+    def sensor(pred):
+        c = [s for s in states if pred(s)]
+        here = [s for s in c if areas.get(s["entity_id"]) in rooms] if rooms else []
+        named = [s for s in c if name_hit(trig, s)]
+        for group in (named if len(named) == 1 else [], here, c):
+            if len(group) == 1:
+                return group[0]["entity_id"]
+        return None
+    dc = lambda s: (s.get("attributes") or {}).get("device_class")
+    if re.search(r"beweg|jemand|keiner|niemand|praesenz", low):
+        e = sensor(lambda s: s["entity_id"].startswith("binary_sensor.") and dc(s) in MOTION_CLASSES)
+        if not e:
+            return None
+        off = bool(re.search(r"keine bewegung|keiner|niemand|nicht mehr|ohne bewegung", low))
+        return ({"e": e, "zu": "off" if off else "on", **({"für": dur} if dur else {})}, "motion")
+    if re.search(r"\b(tuer|fenster|tor|haustuer|terrassentuer|balkontuer)\w*", low):
+        e = sensor(lambda s: s["entity_id"].startswith("binary_sensor.") and dc(s) in DOOR_CLASSES)
+        if not e:
+            return None
+        opened = bool(re.search(r"\b(auf|offen|geoeffnet|aufgeht|aufgemacht|oeffnet)\b", low))
+        closed = bool(re.search(r"\b(zu|geschlossen|zugeht|zugemacht|schliesst)\b", low))
+        if opened == closed:
+            return None
+        return ({"e": e, "zu": "on" if opened else "off", **({"für": dur} if dur else {})}, "door")
+    m = re.search(r"(ueber|mehr als|groesser als|hoeher als|unter|weniger als|kleiner als|niedriger als)\s+(-?\d+(?:[.,]\d+)?)", low)
+    if m and re.search(r"temperatur|grad|warm|kalt|feucht", low):
+        hum = "feucht" in low
+        e = sensor(lambda s: s["entity_id"].startswith("sensor.") and dc(s) == ("humidity" if hum else "temperature"))
+        if not e:
+            return None
+        key = "über" if m.group(1) in ("ueber", "mehr als", "groesser als", "hoeher als") else "unter"
+        v = float(m.group(2).replace(",", "."))
+        return ({"e": e, key: int(v) if v.is_integer() else v}, "value")
+    return None
+
+
+RE_IF_THEN = re.compile(r"^\W*(?:immer wenn|wenn|sobald|falls)\s+(.+?)(?:\s*,\s*|\s+dann\s+|\s+soll(?:en)?\s+)(.+)$", re.I)
+RE_IF_IST = re.compile(r"^\W*(?:immer wenn|wenn|sobald|falls)\s+(.+?\s(?:ist|sind|hat|wird|geht|aufgeht|zugeht|anschlägt|anschlaegt))\s+(.+)$", re.I)
+RE_THEN_IF = re.compile(r"^(.+?)\s*,?\s+(?:immer wenn|wenn|sobald|falls)\s+(.+)$", re.I)
+RE_NO_MOTION = re.compile(r"^\W*((?:nach\s+)?\S+\s+\S+\s+(?:lang\s+)?ohne bewegung(?:\s+(?:im|in der|auf dem|auf der)\s+\S+)?)\s+(.+)$", re.I)
+RE_AT_MOTION = re.compile(r"^(.+?)\s+(bei bewegung(?:\s+(?:im|in der|auf dem|auf der)\s+\S+)?)\s*(?:an|ein|anmachen|einschalten|anschalten)?\W*$", re.I)
+RE_AT_MOTION2 = re.compile(r"^\W*(bei bewegung(?:\s+(?:im|in der|auf dem|auf der)\s+\S+)?)\s+(.+)$", re.I)
+RE_AT_VALUE = re.compile(r"^\W*(bei\s+(?:über|ueber|mehr als|unter|weniger als)\s+-?\d+(?:[.,]\d+)?\s*(?:%|grad|°)?(?:\s+(?:im|in der|auf dem|auf der)\s+\S+)?)\s+(.+)$", re.I)
+RE_MOTION_SHOULD = re.compile(r"^\W*(?:der |die |das )?(bewegungsmelder(?:\s+(?:im|in der|auf dem|auf der)\s+\S+)?)\s+soll\s+(.+)$", re.I)
+
+
+def rule_automation(wish: str, states: list[dict], areas: dict[str, str]) -> dict | None:
+    """„Wenn im Flur Bewegung ist, Licht an“, „Licht aus wenn 5 Minuten keiner im Bad ist“, „wenn die Haustür aufgeht …“."""
+    text = re.sub(r"^\W*(erstell\w* (eine |mir eine )?automation:?|automatisch)\s*", "", wish.strip(), flags=re.I)
+    trig = act = None
+    for rx, order in ((RE_IF_THEN, "ta"), (RE_IF_IST, "ta"), (RE_THEN_IF, "at"), (RE_NO_MOTION, "ta"), (RE_AT_MOTION, "at"), (RE_AT_MOTION2, "ta"),
+                      (RE_AT_VALUE, "ta"), (RE_MOTION_SHOULD, "ta")):
+        m = rx.match(text)
+        if m:
+            trig, act = (m.group(1), m.group(2)) if order == "ta" else (m.group(2), m.group(1))
+            break
+    if not trig:
+        return None
+    night = bool(re.search(r"nur nachts|nachts|in der nacht", norm(text)))
+    act = re.sub(r"\b(aber )?nur (nachts|in der nacht)\b|\bnachts\b|\(.*?\)", "", act, flags=re.I).strip(" ,")
+    trig = re.sub(r"\b(aber )?nur (nachts|in der nacht)\b|\(.*?\)", "", trig, flags=re.I).strip(" ,")
+    acts = _one_rule(act, states, areas)
+    if not acts or any(a["action"].split(".")[0] in ("lock", "alarm_control_panel") for a in acts):
+        return None
+    t = _trigger(trig, [e for a in acts for e in a["target"]["entity_id"]], states, areas)
+    if not t:
+        return None
+    w, _ = t
+    by_id = {s["entity_id"]: s for s in states}
+    ents = sorted({w["e"]} | {e for a in acts for e in a["target"]["entity_id"]})
+    idx = {i: e for i, e in enumerate(ents, 1)}
+    inv = {e: i for i, e in idx.items()}
+    plan = {"w": {**w, "e": inv[w["e"]]},
+            "a": [{"s": a["action"], "e": [inv[e] for e in a["target"]["entity_id"]], **({"d": a["data"]} if a.get("data") else {})} for a in acts]}
+    if night:
+        plan["b"] = {"nach": "22:00", "vor": "06:00"}
+    obj = automation_object(plan, idx, by_id, "", areas)
+    return {"kind": "automation", "object": obj, "plan_e": {**plan, "w": w, "a": [{**x, "e": [idx[i] for i in x["e"]]} for x in plan["a"]]},
+            "text": f"Soll ich die Automation „{obj['alias']}“ anlegen? {obj['description']}"}
+
+
+def rule_actions(text: str, states: list[dict], areas: dict[str, str]) -> list[dict] | None:
+    """Ein oder mehrere Befehle („Licht an und Rollladen runter“) → Aktionen. Alle Teile müssen sicher passen."""
+    parts = [p for p in RE_SEP.split(text) if p and p.strip() and not RE_SEP.fullmatch(p)]
+    if len(parts) >= 2:
+        acts = []
+        for p in parts:
+            a = _one_rule(p, states, areas)
+            if not a:
+                return None
+            acts += a
+        return acts
+    return _one_rule(text, states, areas)
+
+
+def rule_engine(wish: str, states: list[dict], areas: dict[str, str]) -> dict | None:
+    """Häufige Wünsche ohne Modell: Einzelbefehle, mehrere Befehle, Wenn-dann-Automationen mit Sensoren."""
+    if RE_QUESTION.search(wish) and not re.search(r"\b(lauter|leiser)\b", norm(wish)):
+        return None
+    if time_cue(wish):
+        return rule_automation(wish, states, areas)       # Zeitpläne macht code_plan; hier nur Sensor-Bedingungen
+    names = {s["entity_id"]: (s.get("attributes") or {}).get("friendly_name") or s["entity_id"] for s in states}
+    acts = rule_actions(wish, states, areas)
+    if not acts:
+        return None
+    if any(a["action"].split(".")[0] in ("lock", "alarm_control_panel") for a in acts):
+        return None
+    return {"kind": "actions", "actions": acts, "text": confirm_text(acts, names)}
 
 
 class LocalAI:
@@ -1194,7 +1458,7 @@ class LocalAI:
         """Gibt {"kind": "actions"|"answer"|"question"|"timer"|"automation"|"dashboard", ...} zurück –
         oder None (→ Claude übernimmt)."""
         t_start = time.time()
-        planned = bool(PLAN.search(wish))
+        planned = time_cue(wish)
         quick = None if planned else fast_path(wish, states, areas)
         if quick:
             quick["ms"] = self.last_ms = max(1, int((time.time() - t_start) * 1000))
@@ -1219,6 +1483,11 @@ class LocalAI:
             self.last_ms = max(1, int((time.time() - t_start) * 1000))
             print(f"[Lokal] Dashboard-Plan ohne Modell {self.last_ms} ms | {wish!r} → {plan}", flush=True)
             return {"kind": "dashboard", "plan": plan, "ms": self.last_ms}
+        rule = rule_engine(wish, states, areas)
+        if rule:
+            rule["ms"] = self.last_ms = max(1, int((time.time() - t_start) * 1000))
+            print(f"[Lokal] Regel ohne Modell {rule['ms']} ms | {wish!r} → {rule['kind']}: {rule['text']}", flush=True)
+            return rule
         picks = preselect(wish, states, areas)
         if not picks and DASH_CUE.search(wish):
             # Für einen Dashboard-Plan braucht das Modell keine bestimmten Geräte – ein paar zur Orientierung reichen

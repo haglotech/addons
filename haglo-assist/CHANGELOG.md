@@ -2,6 +2,10 @@
 
 ## 0.28.0 (Beta, Branch feat/haglo-local)
 
+- Viel mehr ohne Sprachmodell, sofort auch auf schwachen Hubs: Statusfragen, Watt-Fragen, heller/dunkler, wärmer/kälter,
+  Farben, Musik (lauter, leiser, Pause, weiter), Saugroboter, Heizung an/aus, mehrere Befehle in einem Satz und
+  Wenn-dann-Automationen mit Bewegung, Tür/Fenster und Temperatur/Luftfeuchtigkeit
+- Sicherheit: Klingt ein Wunsch nach später, Zeitplan oder Bedingung (auch mit Tippfehlern), wird nie sofort geschaltet
 - Nur noch drei Stufen: **Auto** (erst direkt auf dem Hub, sonst Cloud), **Lokal** (nie Cloud) und **Cloud**. Ob die Cloud-KI
   schnell oder gründlich arbeitet, wählt Haglo Assist selbst; scheitert die schnelle Antwort, versucht es die gründliche
 - Haglo Local kann jetzt mehr direkt auf dem Hub, ohne Internet und Kontingent: Timer („in 10 Minuten Licht aus“), einfache
