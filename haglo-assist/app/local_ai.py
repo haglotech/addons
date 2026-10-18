@@ -684,9 +684,32 @@ NUMS = {"eine": 1, "einer": 1, "ner": 1, "einen": 1, "zwei": 2, "drei": 3, "vier
         "zwanzig": 20, "dreißig": 30, "dreissig": 30, "vierzig": 40, "fünfundvierzig": 45, "neunzig": 90}
 
 
+def fuzzy_is(t: str, target: str) -> bool:
+    """Wort mit Tippfehler (auch vertauschte Buchstaben: „ewnn“, „mniute“)?"""
+    return t == target or (len(t) >= 4 and (sorted(t) == sorted(target) or
+                                             (len(t) >= 5 and difflib.SequenceMatcher(None, t, target).ratio() >= 0.8)))
+
+
+def kw_is(t: str, kw: str) -> bool:
+    """wenn/sobald/falls mit Tippfehler – Buchstabendreher („ewnn“) oder ähnlich mit gleichem Anfang (nicht „alles“)."""
+    t = t.lower()
+    return t == kw or (len(t) >= 4 and (sorted(t) == sorted(kw) or
+                                        (t[0] == kw[0] and difflib.SequenceMatcher(None, t, kw).ratio() >= 0.8)))
+
+
+UNIT_FIX = {"sekunden": "sekunden", "sekunde": "sekunde", "minuten": "minuten", "minute": "minute", "stunden": "stunden",
+            "stunde": "stunde"}
+
+
 def wish_duration(wish: str) -> int | None:
     """„in 10 Minuten“, „nach einer halben Stunde“, „30 sek“ → Sekunden. None, wenn nicht eindeutig."""
-    w = norm(wish)
+    def unit(t):
+        if len(t) < 5 or t.isdigit() or t in UNIT_FIX or re.fullmatch(r"(sek|min|std)\w*", t):
+            return t
+        best = max(UNIT_FIX, key=lambda u: (sorted(t) == sorted(u), difflib.SequenceMatcher(None, t, u).ratio()))
+        r = difflib.SequenceMatcher(None, t, best).ratio()
+        return best if sorted(t) == sorted(best) or r >= 0.85 else t
+    w = " ".join(unit(t) for t in norm(wish).split())
     fixed = [(r"\bhalben? minute", 30), (r"\bviertel ?stunde", 900),
              (r"(?<!anderthalb )\bhalben? stunde", 1800), (r"\banderthalb (stunden|std)", 5400),
              (r"\banderthalb minuten", 90), (r"\b(einer|ner|eine) stunde", 3600), (r"\b(einer|ner|eine) minute", 60)]
@@ -1090,7 +1113,10 @@ def time_cue(wish: str) -> bool:
                                       r"\bnach (\d|ein|ner|zwei|drei|vier|fuenf|zehn|zwanzig|dreissig|halb|anderthalb)|\b\d+ ?(s|sek|min|h|std)\b",
                                       norm(wish)):
         return True
-    return any(t == c or (len(t) >= 6 and similar(t, c)) for t in norm(wish).split() for c in CUE_WORDS)
+    toks = norm(wish).split()
+    if any(kw_is(t, k) for t in toks for k in ("wenn", "sobald", "falls")):
+        return True                       # auch „ewnn“, „sboald“, „Falsl“
+    return any(t == c or (len(t) >= 6 and similar(t, c)) for t in toks for c in CUE_WORDS)
 
 
 def _clean(text: str, drop: set[str]) -> str:
@@ -1254,6 +1280,8 @@ RE_MOTION_SHOULD = re.compile(r"^\W*(?:der |die |das )?(bewegungsmelder(?:\s+(?:
 def rule_automation(wish: str, states: list[dict], areas: dict[str, str]) -> dict | None:
     """„Wenn im Flur Bewegung ist, Licht an“, „Licht aus wenn 5 Minuten keiner im Bad ist“, „wenn die Haustür aufgeht …“."""
     text = re.sub(r"^\W*(erstell\w* (eine |mir eine )?automation:?|automatisch)\s*", "", wish.strip(), flags=re.I)
+    # Schlüsselwörter mit Tippfehlern („ewnn“, „sboald“, „Falsl“) zurechtrücken
+    text = " ".join(next((k for k in ("wenn", "sobald", "falls") if kw_is(t, k)), t) for t in text.split(" "))
     trig = act = None
     for rx, order in ((RE_IF_THEN, "ta"), (RE_IF_IST, "ta"), (RE_THEN_IF, "at"), (RE_NO_MOTION, "ta"), (RE_AT_MOTION, "at"), (RE_AT_MOTION2, "ta"),
                       (RE_AT_VALUE, "ta"), (RE_MOTION_SHOULD, "ta")):
@@ -1521,6 +1549,9 @@ class LocalAI:
             return None
         if not plan_ok(wish, out, idx, by_id):
             print(f"[Lokal] Prüfung: Plan passt nicht zum Wunsch → Claude | {wish!r}", flush=True)
+            return None
+        if planned and out.get("a") and "in" not in out and not out.get("au"):
+            print(f"[Lokal] Prüfung: Wunsch klingt nach später/Bedingung, Modell will sofort schalten → Claude | {wish!r}", flush=True)
             return None
         out = code_rules(wish, fix_values(wish, out, idx, by_id), idx, by_id, areas)
         if out is None:
