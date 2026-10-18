@@ -846,8 +846,8 @@ function historyMsg(h) {
       <span class="tx"><b>${esc(s.title)}</b>${s.sub ? `<small>${esc(s.sub)}</small>` : ""}</span>
       ${s.url ? '<span class="go2" aria-hidden="true">›</span>' : ""}</a>`).join("")}</div>` : "";
   const undo = h.can_undo ? `<div class="links"><button class="undo" data-undo="${esc(h.id)}">Rückgängig</button></div>` : "";
-  const lok = h.local ? `<div class="lok">⚡ Direkt auf dem Hub · ${h.local < 1000 ? h.local + " ms" : (h.local / 1000).toFixed(1).replace(".", ",") + " s"} · ohne Internet, ohne Kontingent</div>`
-    : h.route ? `<div class="lok cloud">☁ Cloud${h.route.via === "praezise" ? " · gründlich" : ""}${h.route.auto ? " · von Auto gewählt" : ""}${upsell(h)}</div>` : "";
+  const lok = h.local ? `<div class="lok" title="Direkt auf dem Hub, ohne Internet und Kontingent">⚡ Lokal</div>`
+    : h.route ? `<div class="lok cloud">☁ Cloud${upsell(h)}</div>` : "";
   return (h.wish ? `<div class="msg user"><div class="bub">${esc(h.wish)}</div></div>` : "")
     + `<div class="msg bot${h.undone ? " was" : ""}"><div class="bub">${body}${steps}${open ? `<div class="actions">${open}</div>` : ""}${undo}${undone}${lok}</div>
        <span class="when2">${stamp(h.ts)}</span></div>`;
