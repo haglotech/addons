@@ -657,6 +657,8 @@ def dashboard_config(plan: dict, states: list[dict], areas: dict[str, str], regi
         room = areas.get(eid, "")
         if k != "wetter" and rooms and room not in rooms:
             continue
+        if plan.get("q") and not any(similar(x, n) or x in n for x in plan["q"] for n in words(a.get("friendly_name") or eid)):
+            continue                               # „Dashboard für den Speicher“: nur Geräte mit diesem Namen
         if k in ("energie",) and not kinds and rooms:
             continue
         pick.append((room, k, eid))
@@ -824,10 +826,18 @@ def dash_plan_from_wish(wish: str, areas: dict[str, str]) -> dict | None:
     kinds = [k for k, ws in DASH_WORDS.items()
              if any(x == norm(v).strip() or (len(x) >= 6 and difflib.SequenceMatcher(None, x, norm(v).strip()).ratio() >= 0.85)
                     for x in ww for v in ws)]
+    dash_words = {"dashboard", "uebersicht", "seite", "eigenen", "eigene", "seitenleiste", "ansicht", "zeig", "zeige", "bau", "baue",
+                  "mach", "mache", "erstelle", "erstell", "neue", "neues", "fuer", "vom", "von", "alles", "allem", "mit", "nur",
+                  "brauch", "brauche", "haette", "gern", "gerne", "will", "moechte", "ganzes", "haus", "zuhause", "schoenes", "einer"}
+    taken = {norm(r).strip() for r in rooms} | {x for x in ww for k in kinds for v in DASH_WORDS[k] if x == norm(v).strip()}
+    q = [x for x in ww if x not in dash_words and x not in taken and not any(similar(x, w) for r in rooms for w in words(r))
+         and len(x) >= 4]
     name = " & ".join(rooms) if rooms else " & ".join(k.capitalize() for k in kinds) if kinds else "Mein Zuhause"
+    if q and not rooms and not kinds:
+        name = " ".join(x.capitalize() for x in q)
     if rooms and kinds:
         name = f"{' & '.join(rooms)} – {' & '.join(k.capitalize() for k in kinds)}"
-    return {"n": name[:40], "r": rooms, "k": kinds}
+    return {"n": name[:40], "r": rooms, "k": kinds, **({"q": q} if q else {})}
 
 
 RE_MULTI_DASH = re.compile(r"\b(und dann|danach|außerdem|ausserdem)\b|\b(schalte|mach) .* (an|aus)\b", re.I)
@@ -1029,6 +1039,11 @@ def value_answer(wish: str, states: list[dict], areas: dict[str, str]) -> str | 
         if best <= 0:
             return None
         top = [st for sc, st in scored if sc == best]
+        if len(top) > 1:                           # Gleichstand: der kürzere (eigens benannte) Name ist meist gemeint
+            ln = lambda st: len(words((st.get("attributes") or {}).get("friendly_name") or ""))
+            shortest = min(ln(st) for st in top)
+            if sum(1 for st in top if ln(st) == shortest) == 1:
+                top = [st for st in top if ln(st) == shortest]
         if len(top) > 1 and kind == "power":       # „Leistung Speicher“ schlägt „Input 1 Power“: Wort „Leistung/Total“ im Namen
             pref = [st for st in top if re.search(r"leistung|total|gesamt|output", norm((st.get("attributes") or {}).get("friendly_name") or ""))]
             top = pref[:1] if len(pref) >= 1 and len(pref) < len(top) else top
