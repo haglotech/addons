@@ -2684,12 +2684,8 @@ async def generate(request):
             return web.json_response({"ok": True, **done})
     if mode == "lokal":
         # Lokal heißt lokal: nie still an Claude weitergeben. Ehrlich sagen, was lokal nicht geht.
-        text = ("Das kann ich lokal nicht sicher. Lokal schalte ich Geräte, stelle Timer, lege einfache Automationen "
-                "(Uhrzeit, Sonne, Bewegung, Tür/Fenster, Temperatur) und Dashboards für Räume an. Fehlersuche, "
-                "Energie-Auswertungen und Umbauten macht „Auto“ oder „Cloud“.") if complex_wish else \
-               ("Das habe ich lokal nicht sicher verstanden. Lokal schalte ich Geräte, stelle Helligkeit, Temperatur "
-                "und Rollläden ein, stelle Timer und sage dir, ob etwas an ist. Gerätename oder Raum genauer nennen – "
-                "oder für alles andere „Auto“ oder „Cloud“ wählen.")
+        text = ("Das geht lokal nicht – dafür „Auto“ oder „Cloud“ wählen.") if complex_wish else \
+               ("Das habe ich lokal nicht sicher verstanden. Gerät oder Raum genauer nennen – oder „Auto“ wählen.")
         print(f"[Lokal] nicht lokal lösbar, Claude NICHT gefragt (Modus Lokal) | {wish!r}", flush=True)
         add_history("answer", wish, text, local=1)
         return web.json_response({"ok": True, "answer": text, "local": 1})

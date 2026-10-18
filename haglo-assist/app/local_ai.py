@@ -772,7 +772,8 @@ def name_hit(wish: str, st: dict) -> bool:
     """Steht ein Wort aus dem Gerätenamen im Wunsch (ohne Raum- und Füllwörter)?"""
     a = st.get("attributes") or {}
     ww = words(wish)
-    return any(similar(x, n) for x in ww for n in words(a.get("friendly_name") or "") if n not in STOP and len(n) >= 3)
+    return any(similar(x, n) for x in ww for n in words(a.get("friendly_name") or "")
+               if n not in STOP and len(n) >= 3 and not n.isdigit())
 
 
 def exact_hit(wish: str, st: dict, skip: set[str] = frozenset()) -> bool:
@@ -786,7 +787,7 @@ def named_in_wish(wish: str, st: dict, areas: dict[str, str]) -> bool:
     """Kommt das Gerät im Wunsch vor (Name, Gerätart oder Raum)?"""
     a = st.get("attributes") or {}
     ww = words(wish)
-    nw = [n for n in words(a.get("friendly_name") or st["entity_id"]) if n not in STOP]
+    nw = [n for n in words(a.get("friendly_name") or st["entity_id"]) if n not in STOP and not n.isdigit()]
     if any(similar(x, n) or (len(n) >= 5 and n in x) for x in ww for n in nw):
         return True
     k = kind_of(st) or ""
@@ -987,6 +988,84 @@ def status_answer(wish: str, states: list[dict], areas: dict[str, str]) -> str |
         return None
     name = (st.get("attributes") or {}).get("friendly_name") or eid
     return f"{name} ist {line}." if not re.match(r"^-?\d", line) else f"{name}: {line.replace('.', ',')}."
+
+
+MEASURE = {"power": r"\bwatt\b|leistung|strom|verbrauch|\bzieht\b|\blast\b",
+           "temperature": r"\bwarm\b|waerme|temperatur|\bgrad\b|\bkalt\b|heiss",
+           "humidity": r"feucht"}
+MEASURE_WORDS = {"watt", "leistung", "strom", "verbrauch", "verbraucht", "verbrauche", "zieht", "last", "warm", "temperatur",
+                 "grad", "kalt", "heiss", "feucht", "feuchtigkeit", "luftfeuchtigkeit", "luftfeuchte", "wie", "viel", "wieviel",
+                 "hoch", "ist", "gerade", "aktuell", "jetzt", "hat", "der", "die", "das", "im", "in", "am", "es"}
+
+
+def _name_score(words_wish: list[str], st: dict) -> float:
+    nw = [n for n in words((st.get("attributes") or {}).get("friendly_name") or "") if n not in STOP and not n.isdigit()]
+    return sum(1.0 if x in nw else 0.7 if any(similar(x, n) for n in nw) else 0 for x in words_wish)
+
+
+def value_answer(wish: str, states: list[dict], areas: dict[str, str]) -> str | None:
+    """„Wie viel Leistung hat der Speicher?“, „Wie warm ist es im Bad?“ → Messwert(e) des passendsten Sensors."""
+    low = norm(wish)
+    if not re.search(r"\bwie ?viel|\bwieviel|\bwie (warm|hoch|kalt|feucht)|\bwelche temperatur|\bwas (zieht|zeigt|hat)|"
+                     r"\btemperatur (im|in|vom|von|der|des)|\bwie ist die (temperatur|luftfeuchtigkeit|leistung)", low):
+        return None
+    if re.search(r"heute|gestern|woche|monat|jahr|kosten|insgesamt|morgen|prognose|erwart", low):
+        return None
+    kind = next((k for k, rx in MEASURE.items() if re.search(rx, low)), None)
+    if not kind:
+        return None
+    ww = [x for x in words(wish) if x not in MEASURE_WORDS]
+    rooms = rooms_named(wish, areas)
+    num = lambda st: re.fullmatch(r"-?\d+(\.\d+)?", str(st.get("state")))
+    cands = [st for st in states if st["entity_id"].startswith("sensor.") and (st.get("attributes") or {}).get("device_class") == kind
+             and num(st) and not (st.get("attributes") or {}).get("hidden")]
+    if rooms:
+        cands = [st for st in cands if areas.get(st["entity_id"]) in rooms] or cands
+    if ww:
+        said = {x for x in words(wish) if x in ("leistung", "strom", "verbrauch", "temperatur", "feuchtigkeit", "luftfeuchtigkeit")}
+        bonus = lambda st: 0.5 * len(said & set(words((st.get("attributes") or {}).get("friendly_name") or "")))
+        scored = [(_name_score(ww, st) + bonus(st) + (1 if areas.get(st["entity_id"]) in rooms else 0), st) for st in cands]
+        best = max((sc for sc, _ in scored), default=0)
+        if best <= 0:
+            return None
+        top = [st for sc, st in scored if sc == best]
+        if len(top) > 1 and kind == "power":       # „Leistung Speicher“ schlägt „Input 1 Power“: Wort „Leistung/Total“ im Namen
+            pref = [st for st in top if re.search(r"leistung|total|gesamt|output", norm((st.get("attributes") or {}).get("friendly_name") or ""))]
+            top = pref[:1] if len(pref) >= 1 and len(pref) < len(top) else top
+    else:
+        if kind != "power" or not re.search(r"\b(ich|wir|haus|hausverbrauch|gesamt|netz)\b", low):
+            return None
+        nm = lambda st: norm((st.get("attributes") or {}).get("friendly_name") or "")
+        top = [st for st in cands if re.search(r"netz|bezug|haus|verbrauch|current load|gesamt|total load", nm(st))
+               and not re.search(r"einspeis|erzeug|produktion|production|solar|pv\b", nm(st))]
+        exact = [st for st in top if re.search(r"\bnetzbezug\b|\bhausverbrauch\b|\bverbrauch\b", nm(st))]
+        top = exact[:1] if exact else top
+    if not top or len(top) > 3:
+        return None
+    fmt = lambda st: f"{(st.get('attributes') or {}).get('friendly_name')}: {fmt_num(st['state']).replace('.', ',')} {(st.get('attributes') or {}).get('unit_of_measurement') or ''}".strip()
+    return ", ".join(fmt(st) for st in top) + "."
+
+
+def any_status(wish: str, states: list[dict], areas: dict[str, str]) -> str | None:
+    """Status beliebiger Sensoren („Ist Post im Briefkasten?“, „Ist die Klappe offen?“) – bester Namenstreffer, eindeutig."""
+    if not RE_STATUS.search(wish):
+        return None
+    ww = [x for x in words(wish) if x not in STATUS_WORDS and x not in ("offen", "geschlossen", "auf")]
+    if not ww:
+        return None
+    cands = [st for st in states if st["entity_id"].split(".")[0] in ("binary_sensor", "sensor", "lock", "cover", "switch", "light")
+             and not (st.get("attributes") or {}).get("hidden") and not (st.get("attributes") or {}).get("entity_category")]
+    scored = sorted(((_name_score(ww, st), st) for st in cands), key=lambda x: -x[0])
+    if not scored or scored[0][0] < max(1.0, len(ww) * 0.6) or (len(scored) > 1 and scored[1][0] == scored[0][0]):
+        return None
+    st = scored[0][1]
+    a = st.get("attributes") or {}
+    if st["entity_id"].startswith("binary_sensor.") and not a.get("device_class"):
+        line = "ja" if st.get("state") == "on" else "nein" if st.get("state") == "off" else "nicht erreichbar"
+        return f"{a.get('friendly_name')}: {line}."
+    line = state_line(st)
+    return f"{a.get('friendly_name')} ist {line}." if line and not re.match(r"^-?\d", line) else \
+        (f"{a.get('friendly_name')}: {line.replace('.', ',')}." if line else None)
 
 
 def power_answer(wish: str, states: list[dict], areas: dict[str, str]) -> str | None:
@@ -1255,6 +1334,11 @@ def _trigger(trig: str, act_ids: list[str], states: list[dict], areas: dict[str,
         if opened == closed:
             return None
         return ({"e": e, "zu": "on" if opened else "off", **({"für": dur} if dur else {})}, "door")
+    # beliebiger Ein/Aus-Sensor beim Namen („wenn Post im Briefkasten ist“)
+    named_bin = [s for s in states if s["entity_id"].startswith("binary_sensor.") and name_hit(trig, s)]
+    if len(named_bin) == 1 and not re.search(r"(ueber|unter|mehr als|weniger als)\s+-?\d", low):
+        neg = bool(re.search(r"\b(nicht|kein|keine|leer|weg|nichts)\b", low))
+        return ({"e": named_bin[0]["entity_id"], "zu": "off" if neg else "on", **({"für": dur} if dur else {})}, "binary")
     m = re.search(r"(ueber|mehr als|groesser als|hoeher als|unter|weniger als|kleiner als|niedriger als)\s+(-?\d+(?:[.,]\d+)?)", low)
     if m and re.search(r"temperatur|grad|warm|kalt|feucht", low):
         hum = "feucht" in low
@@ -1317,6 +1401,11 @@ def rule_automation(wish: str, states: list[dict], areas: dict[str, str]) -> dic
 def rule_actions(text: str, states: list[dict], areas: dict[str, str]) -> list[dict] | None:
     """Ein oder mehrere Befehle („Licht an und Rollladen runter“) → Aktionen. Alle Teile müssen sicher passen."""
     parts = [p for p in RE_SEP.split(text) if p and p.strip() and not RE_SEP.fullmatch(p)]
+    verb = re.compile(r"\b(an|ein|aus|ab|auf|zu|hoch|runter|einschalten|ausschalten|anmachen|ausmachen|abschalten|starten|"
+                      r"stoppen|öffnen|oeffnen|schließen|schliessen|pausieren|lauter|leiser|heller|dunkler)\b", re.I)
+    if len(parts) >= 2 and not verb.search(parts[0]) and verb.search(parts[-1]):
+        last = verb.findall(parts[-1])[-1]
+        parts = [p if verb.search(p) else f"{p} {last}" for p in parts]   # „Schreibtisch und Pumpe aus“
     if len(parts) >= 2:
         acts = []
         for p in parts:
@@ -1386,6 +1475,21 @@ class LocalAI:
                 spec = json.loads(await r.text()) if r.status == 200 else None
         except Exception:
             spec = None
+        # Komplett-Modell in einer Datei (ab Haglo Local v1.0.2: Qwen3-0.6B + Haglo verschmolzen, z. B. von Hugging Face)
+        full = (spec or {}).get("model")
+        if full:
+            path = DIR / full["file"]
+            await self._download(full["url"], path, full.get("sha256"), part="Haglo Local")
+            for old in DIR.glob("*.gguf"):
+                if old != path:
+                    old.unlink(missing_ok=True)         # alte Basis/Adapter aufräumen (Speicher auf dem Hub)
+            self.short = full.get("prompt", "kurz") == "kurz"
+            return path, None
+        local_full = sorted((f for d in [DIR, *EXTRA_DIRS] if d.exists() for f in d.glob("haglo-local-*.gguf")
+                             if f.stat().st_size > 100_000_000), key=lambda f: f.name)
+        if not spec and local_full:
+            self.short = True
+            return local_full[-1], None
         # Der Haglo-Server sagt, welches Basismodell zum Adapter gehört (Wechsel ohne App-Update möglich)
         bspec = (spec or {}).get("base") or BASE
         base = DIR / bspec["file"]
@@ -1410,7 +1514,8 @@ class LocalAI:
                     adapter.unlink(missing_ok=True)
                     raise RuntimeError("Haglo-Adapter beschädigt")
         else:
-            found = sorted(f for d in [DIR, *EXTRA_DIRS] if d.exists() for f in d.glob("haglo-local-*.gguf"))
+            found = sorted(f for d in [DIR, *EXTRA_DIRS] if d.exists() for f in d.glob("haglo-local-*.gguf")
+                           if f.stat().st_size <= 100_000_000)
             adapter = found[-1] if found else None
         self.short = bool(adapter and "kurz" in adapter.name) or (spec or {}).get("prompt") == "kurz"
         return base, adapter
@@ -1496,7 +1601,8 @@ class LocalAI:
             why = "Modell aus" if not use_model else f"Modell {self.status}" if self.status != "bereit" else "zu lang"
             print(f"[Lokal] Schnellweg passt nicht, {why} | {wish!r}", flush=True)
             return None
-        pa = power_answer(wish, states, areas) or status_answer(wish, states, areas)
+        pa = power_answer(wish, states, areas) or value_answer(wish, states, areas) or status_answer(wish, states, areas) \
+            or any_status(wish, states, areas)
         if pa:
             self.last_ms = max(1, int((time.time() - t_start) * 1000))
             print(f"[Lokal] Messwert ohne Modell {self.last_ms} ms | {wish!r} → {pa}", flush=True)
