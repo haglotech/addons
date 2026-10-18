@@ -932,6 +932,36 @@ def _is_dur_unit(t: str) -> bool:
 
 
 
+RE_STATUS = re.compile(r"^\W*(ist|sind|is|isst|läuft|laeuft|lauft|status|zustand|wie ist|wie steht|steht|brennt|leuchtet)\b", re.I)
+STATUS_WORDS = {"ist", "sind", "is", "isst", "laeuft", "lauft", "status", "zustand", "wie", "steht", "brennt", "leuchtet",
+                "von", "vom", "gerade", "noch", "eigentlich", "jetzt", "aktuell", "ein", "an", "aus", "auf", "zu", "offen",
+                "der", "die", "das", "den", "mal", "bitte", "danke", "pls"}
+
+
+def status_answer(wish: str, states: list[dict], areas: dict[str, str]) -> str | None:
+    """„Ist der Schreibtisch an?“ → Zustand direkt aus Home Assistant (ohne Modell). Gerät wie beim Schnellweg finden."""
+    if not RE_STATUS.search(wish) or re.search(r"\b(wenn|warum|wieso|wie viel|wieviel|welche|alle|alles|ueberall|überall)\b", norm(wish)):
+        return None
+    rest = " ".join(t for t in norm(wish).split() if t not in STATUS_WORDS)
+    if not rest:
+        return None
+    quick = None
+    for verb in (" an", " hoch", " auf 20 grad"):        # Schalter/Licht, Rollladen, Heizung
+        quick = fast_path(rest + verb, states, areas)
+        if quick and len(quick["actions"]) == 1 and len(quick["actions"][0]["target"]["entity_id"]) == 1:
+            break
+        quick = None
+    if not quick:
+        return None
+    eid = quick["actions"][0]["target"]["entity_id"][0]
+    st = next((x for x in states if x["entity_id"] == eid), None)
+    line = state_line(st) if st else None
+    if not line:
+        return None
+    name = (st.get("attributes") or {}).get("friendly_name") or eid
+    return f"{name} ist {line}." if not re.match(r"^-?\d", line) else f"{name}: {line.replace('.', ',')}."
+
+
 def power_answer(wish: str, states: list[dict], areas: dict[str, str]) -> str | None:
     """„Wie viel Watt zieht die Garage?“ → Messwert direkt aus dem Leistungssensor (ohne Modell)."""
     low = norm(wish)
@@ -1174,7 +1204,7 @@ class LocalAI:
             why = "Modell aus" if not use_model else f"Modell {self.status}" if self.status != "bereit" else "zu lang"
             print(f"[Lokal] Schnellweg passt nicht, {why} | {wish!r}", flush=True)
             return None
-        pa = power_answer(wish, states, areas)
+        pa = power_answer(wish, states, areas) or status_answer(wish, states, areas)
         if pa:
             self.last_ms = max(1, int((time.time() - t_start) * 1000))
             print(f"[Lokal] Messwert ohne Modell {self.last_ms} ms | {wish!r} → {pa}", flush=True)
