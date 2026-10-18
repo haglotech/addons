@@ -764,7 +764,8 @@ def named_in_wish(wish: str, st: dict, areas: dict[str, str]) -> bool:
     if any(similar(x, n) or (len(n) >= 5 and n in x) for x in ww for n in nw):
         return True
     k = kind_of(st) or ""
-    return any(h in norm(wish) for h in HINTS.get(k, []))
+    low = norm(wish)
+    return any(h in low or (" " not in h and len(h) >= 5 and any(similar(x, h) for x in ww)) for h in HINTS.get(k, []))
 
 
 
@@ -810,6 +811,15 @@ def code_rules(wish: str, out: dict, idx: dict[int, str], by_id: dict[str, dict]
     named = rooms_named(wish, areas)
     room_words = {x for r in set(areas.values()) for x in words(r)}
     acts_src = out["au"]["a"] if isinstance(out.get("au"), dict) else out.get("a") or []
+    # „überall/alle Lichter“: alle Geräte dieser Art aus der Auswahl, nicht nur ein paar
+    all_mode = False
+    if re.search(r"\b(ueberall|überall|alle\b|alles\b)", low) and not named and len(acts_src) == 1 and "au" not in out:
+        a = acts_src[0]
+        dom = str(a.get("s", "")).split(".")[0]
+        if dom in ("light", "cover", "switch", "media_player") and str(a.get("s", "")).split(".")[-1] in (
+                "turn_on", "turn_off", "open_cover", "close_cover"):
+            a["e"] = [i for i, e in idx.items() if e.startswith(dom + ".")]
+            all_mode = True
     # 1. Jedes Gerät muss im Wunsch vorkommen und – wenn Räume genannt sind – in einem davon stehen
     for a in acts_src:
         for pos, e in enumerate(list(a.get("e") or [])):
@@ -843,8 +853,8 @@ def code_rules(wish: str, out: dict, idx: dict[int, str], by_id: dict[str, dict]
                 if len(exact) == 1:
                     a["e"][pos] = exact[0]
                     st = by_id[idx[exact[0]]]
-            if (len(acts_src) > 1 or "in" in out or "au" in out) and not named_in_wish(wish, st, areas):
-                return None
+            if not all_mode and not named_in_wish(wish, st, areas):
+                return None             # Gerät passt weder nach Name noch nach Art zum Wunsch („Staubsauger“ → Lampe)
     # 2. Dasselbe Gerät gleichzeitig an und aus → nicht raten
     seen = {}
     for a in acts_src:
@@ -852,13 +862,6 @@ def code_rules(wish: str, out: dict, idx: dict[int, str], by_id: dict[str, dict]
             if e in seen and seen[e] != a.get("s"):
                 return None
             seen[e] = a.get("s")
-    # „überall/alle Lichter“: alle Geräte dieser Art aus der Auswahl, nicht nur ein paar
-    if re.search(r"\b(ueberall|überall|alle\b|alles\b)", low) and not named and len(acts_src) == 1 and "au" not in out:
-        a = acts_src[0]
-        dom = str(a.get("s", "")).split(".")[0]
-        if dom in ("light", "cover", "switch", "media_player") and str(a.get("s", "")).split(".")[-1] in (
-                "turn_on", "turn_off", "open_cover", "close_cover"):
-            a["e"] = [i for i, e in idx.items() if e.startswith(dom + ".")]
     # 3. Heller/dunkler: Richtung aus dem Wort
     for a in acts_src:
         d = a.get("d") if isinstance(a.get("d"), dict) else {}
@@ -926,6 +929,26 @@ REVERSE = {"turn_on": "turn_off", "turn_off": "turn_on", "open_cover": "close_co
 
 def _is_dur_unit(t: str) -> bool:
     return bool(re.fullmatch(r"(sek\w*|s|min\w*|stund\w*|std|viertelstunde)", t))
+
+
+
+def power_answer(wish: str, states: list[dict], areas: dict[str, str]) -> str | None:
+    """„Wie viel Watt zieht die Garage?“ → Messwert direkt aus dem Leistungssensor (ohne Modell)."""
+    low = norm(wish)
+    if not re.search(r"\bwatt\b|strom|verbrauch|leistung|\bzieht\b", low) or not re.search(r"\bwie ?viel|\bwieviel|\bwas zieht|\bwie hoch", low):
+        return None
+    if re.search(r"heute|gestern|woche|monat|jahr|kosten|insgesamt|gesamt", low):
+        return None                       # Verlauf und Summen sind Sache von Claude
+    rooms = rooms_named(wish, areas)
+    sensors = [st for st in states if st["entity_id"].startswith("sensor.")
+               and (st.get("attributes") or {}).get("device_class") == "power"
+               and re.fullmatch(r"-?\d+(\.\d+)?", str(st.get("state")))]
+    hits = [st for st in sensors if name_hit(wish, st) or (rooms and areas.get(st["entity_id"]) in rooms)]
+    if len(hits) != 1:
+        return None
+    st = hits[0]
+    a = st.get("attributes") or {}
+    return f"{a.get('friendly_name') or st['entity_id']}: gerade {fmt_num(st['state']).replace('.', ',')} {a.get('unit_of_measurement') or 'W'}."
 
 
 def code_plan(wish: str, states: list[dict], areas: dict[str, str]) -> dict | None:
@@ -1151,6 +1174,11 @@ class LocalAI:
             why = "Modell aus" if not use_model else f"Modell {self.status}" if self.status != "bereit" else "zu lang"
             print(f"[Lokal] Schnellweg passt nicht, {why} | {wish!r}", flush=True)
             return None
+        pa = power_answer(wish, states, areas)
+        if pa:
+            self.last_ms = max(1, int((time.time() - t_start) * 1000))
+            print(f"[Lokal] Messwert ohne Modell {self.last_ms} ms | {wish!r} → {pa}", flush=True)
+            return {"kind": "answer", "text": pa, "ms": self.last_ms}
         cp = code_plan(wish, states, areas) if planned else None
         if cp:
             cp["ms"] = self.last_ms = max(1, int((time.time() - t_start) * 1000))
