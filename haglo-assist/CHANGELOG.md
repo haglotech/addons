@@ -2,6 +2,8 @@
 
 ## 0.28.0 (Beta, Branch feat/haglo-local)
 
+- Nur noch drei Stufen: **Auto** (erst direkt auf dem Hub, sonst Cloud), **Lokal** (nie Cloud) und **Cloud**. Ob die Cloud-KI
+  schnell oder gründlich arbeitet, wählt Haglo Assist selbst; scheitert die schnelle Antwort, versucht es die gründliche
 - Haglo Local kann jetzt mehr direkt auf dem Hub, ohne Internet und Kontingent: Timer („in 10 Minuten Licht aus“), einfache
   Automationen (Uhrzeit und Wochentage, Sonnenauf- und -untergang, Bewegung, Tür/Fenster, Temperatur und Luftfeuchtigkeit) und
   neue Dashboards für Räume oder Gerätearten mit Eintrag in der Seitenleiste

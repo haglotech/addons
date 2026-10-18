@@ -2416,7 +2416,7 @@ async def build_dashboard(app, wish: str, refine: bool, dialog: list, can_ask: b
                          "danach erledige ich das selbst."]),
                      "automations": await own_objects(session, raw)}
         payload = {
-            "wish": wish, "entities": entities, "mode": app.get("effective_mode") or {"lokal": "schnell", "auto": "schnell"}.get(load_prefs().get("mode", ""), load_prefs().get("mode", "")),
+            "wish": wish, "entities": entities, "mode": app.get("effective_mode") or ("praezise" if is_complex(wish) else "schnell"),
             "previous": None if rebuild or locked else (strip_bar(before) if own else before),
             "refine": not rebuild, "foreign": not rebuild and not built_by_haglo, "dialog": dialog, "can_ask": can_ask,
             "dashboard_locked": locked,
@@ -2668,14 +2668,15 @@ async def generate(request):
     if not wish:
         return web.json_response({"ok": False, "error": "Bitte einen Wunsch eingeben."}, status=400)
     talk_touch()        # eine Nachricht ist auch eine Regung; nach langer Pause beginnt hier das neue Gespräch
-    mode = load_prefs().get("mode") or "auto"
+    mode = user_mode()
     complex_wish = is_complex(wish)
-    if not dialog and not refine and mode in ("auto", "lokal", "schnell"):
+    if not dialog and not refine:
         # Schnellweg (Auto, Lokal, Schnell) und Haglo Local (Auto bei einfachen Wünschen, Lokal immer):
         # direkt auf dem Hub, ohne Internet und Kontingent
         try:
-            done = await local_answer(request.app, wish,
-                                      use_model=mode == "lokal" or (mode == "auto" and (not complex_wish or bool(local_ai.PLAN.search(wish)))))
+            # Cloud: nur der Schnellweg (eindeutige Schaltbefehle ohne KI, kostet nichts) – alles andere Claude
+            done = await local_answer(request.app, wish, use_model=mode == "lokal" or (
+                mode == "auto" and (not complex_wish or bool(local_ai.PLAN.search(wish)))), code_only=mode == "cloud")
         except Exception as e:
             print(f"[Lokal] übersprungen: {e}", flush=True)
             done = None
@@ -2685,16 +2686,15 @@ async def generate(request):
         # Lokal heißt lokal: nie still an Claude weitergeben. Ehrlich sagen, was lokal nicht geht.
         text = ("Das kann ich lokal nicht sicher. Lokal schalte ich Geräte, stelle Timer, lege einfache Automationen "
                 "(Uhrzeit, Sonne, Bewegung, Tür/Fenster, Temperatur) und Dashboards für Räume an. Fehlersuche, "
-                "Energie-Auswertungen und Umbauten macht „Auto“ oder „Präzise“.") if complex_wish else \
+                "Energie-Auswertungen und Umbauten macht „Auto“ oder „Cloud“.") if complex_wish else \
                ("Das habe ich lokal nicht sicher verstanden. Lokal schalte ich Geräte, stelle Helligkeit, Temperatur "
                 "und Rollläden ein, stelle Timer und sage dir, ob etwas an ist. Gerätename oder Raum genauer nennen – "
-                "oder für alles andere „Auto“ wählen.")
+                "oder für alles andere „Auto“ oder „Cloud“ wählen.")
         print(f"[Lokal] nicht lokal lösbar, Claude NICHT gefragt (Modus Lokal) | {wish!r}", flush=True)
         add_history("answer", wish, text, local=1)
         return web.json_response({"ok": True, "answer": text, "local": 1})
-    # Welche Claude-Stufe? Auto entscheidet nach dem Wunsch, sonst gilt die Wahl des Kunden.
-    cloud_mode = ("praezise" if complex_wish else "schnell") if mode == "auto" else \
-        ("schnell" if mode == "lokal" else mode)
+    # Welche Claude-Stufe? Die App wählt selbst: große Aufgaben, Rückfragen und Verfeinern gründlich, sonst schnell.
+    cloud_mode = "praezise" if (complex_wish or refine or dialog) else "schnell"
     request.app["effective_mode"] = cloud_mode
     global ROUTE
     ROUTE = {"auto": mode == "auto", "via": cloud_mode}
@@ -2710,14 +2710,27 @@ async def generate(request):
     dashboard = body.get("dashboard") if isinstance(body.get("dashboard"), str) else None
     # Merken, dass gerade gebaut wird: Wer die Seite verlässt und zurückkommt, sieht das weiterhin.
     request.app["job"] = {"wish": wish, "since": int(time.time())}
+    def build():
+        return build_dashboard(request.app, wish, refine, dialog, can_ask=True, dashboard=dashboard,
+                               can_automate=True, allow_states=bool(body.get("allow_states")),
+                               allow_diagnose=bool(body.get("allow_diagnose")),
+                               allow_integrations=bool(body.get("allow_integrations")),
+                               allow_logs=bool(body.get("allow_logs")),
+                               allow_yaml=bool(body.get("allow_yaml")),
+                               allow_history=bool(body.get("allow_history")))
     try:
-        result = await build_dashboard(request.app, wish, refine, dialog, can_ask=True, dashboard=dashboard,
-                                       can_automate=True, allow_states=bool(body.get("allow_states")),
-                                       allow_diagnose=bool(body.get("allow_diagnose")),
-                                       allow_integrations=bool(body.get("allow_integrations")),
-                                       allow_logs=bool(body.get("allow_logs")),
-                                       allow_yaml=bool(body.get("allow_yaml")),
-                                       allow_history=bool(body.get("allow_history")))
+        try:
+            result = await build()
+        except BackendError:
+            raise                   # Kontingent, Zustimmung, Server: nicht nochmal versuchen
+        except Exception as e:
+            if cloud_mode != "schnell":
+                raise
+            # schnelles Modell gescheitert → einmal gründlich
+            print(f"[Cloud] schnell gescheitert ({str(e)[:120]}) – gründlich nochmal", flush=True)
+            request.app["effective_mode"] = "praezise"
+            ROUTE["via"] = "praezise"
+            result = await build()
     except BackendError as e:
         return backend_failure(e)
     except Exception as e:
@@ -3160,8 +3173,8 @@ async def prefs_route(request):
             prefs[key] = body[key]
     if isinstance(body.get("dashboard"), str) and len(body["dashboard"]) <= 100:
         prefs["dashboard"] = body["dashboard"]
-    if body.get("mode") in ("auto", "lokal", "schnell", "praezise"):
-        prefs["mode"] = body["mode"]          # Auto, Lokal, Schnell oder Präzise – gilt für alle Anfragen
+    if body.get("mode") in ("auto", "lokal", "cloud", "schnell", "praezise"):
+        prefs["mode"] = "cloud" if body["mode"] in ("schnell", "praezise") else body["mode"]   # Auto, Lokal oder Cloud
     write_prefs(prefs)
     if "mode" in body and request.app.get("local"):
         # Haglo Local starten (lädt beim ersten Mal das Modell), wenn Lokal gewählt ist – oder Auto auf einem
@@ -3650,7 +3663,13 @@ def resume_timers(app) -> None:
         app.setdefault("timer_tasks", {})[tid] = asyncio.create_task(run_timer(app, tid))
 
 
-async def local_answer(app, wish: str, use_model: bool = True) -> dict | None:
+def user_mode() -> str:
+    """Auto, Lokal oder Cloud. Frühere Wahl „Schnell“/„Präzise“ heißt jetzt Cloud (Stufe wählt die App)."""
+    m = load_prefs().get("mode") or "auto"
+    return "cloud" if m in ("schnell", "praezise") else m if m in ("auto", "lokal", "cloud") else "auto"
+
+
+async def local_answer(app, wish: str, use_model: bool = True, code_only: bool = False) -> dict | None:
     loc = app.get("local")
     if not loc:
         return None
@@ -3661,6 +3680,8 @@ async def local_answer(app, wish: str, use_model: bool = True) -> dict | None:
     if is_complex(wish) and not local_ai.PLAN.search(wish):
         print(f"[Lokal] komplex → nicht lokal | {wish!r}", flush=True)
         return None
+    if code_only and local_ai.DASH_CUE.search(wish):
+        return None             # Cloud: Dashboards baut Claude (schöner als der Baukasten)
     session = app["session"]
     if app.get("areas_cache") or local_ai.PLAN.search(wish):
         # Planwünsche (Timer, Automation, Dashboard) brauchen die Räume – darauf lohnt sich das Warten

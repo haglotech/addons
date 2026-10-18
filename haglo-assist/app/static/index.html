@@ -366,7 +366,7 @@
     .crow { flex-wrap: nowrap; }
     .talk .long { display: none; }
     .tool { font-size: 12px; padding: 4px 9px; gap: 4px; }
-    /* Handy: Verlauf, Automationen, Versionen nur als Symbol – sonst passt die Zeile mit Schnell/Präzise nicht */
+    /* Handy: Verlauf, Automationen, Versionen nur als Symbol – sonst passt die Zeile mit Auto/Lokal/Cloud nicht */
     .tool { font-size: 0; gap: 0; padding: 7px 9px; }
     .tool svg { width: 16px; height: 16px; }
     .mode button { padding: 4px 9px; font-size: 12px; }
@@ -428,10 +428,9 @@
       <button type="button" class="talk hidden" id="talk" title="Neues Gespräch beginnen"><i></i><span id="talkText"></span></button>
       <div class="tools">
         <div class="mode" role="group" aria-label="Antwortart">
-          <button type="button" data-mode="auto" title="Auto: Haglo Assist entscheidet selbst – Schaltbefehle sofort direkt auf dem Hub, einfache Wünsche mit Haglo Local, große Aufgaben mit Claude Präzise. Empfohlen.">Auto</button>
-          <button type="button" data-mode="lokal" title="Lokal: Haglo Local versteht einfache Befehle direkt auf deinem Hub – ohne Internet, ohne Kontingent. Claude wird in diesem Modus nie gefragt.">⚡ Lokal</button>
-          <button type="button" data-mode="schnell" title="Schnell: einfache Schaltbefehle sofort direkt auf dem Hub, alles andere zügig über Claude. Verbraucht wenig vom Kontingent.">Schnell</button>
-          <button type="button" data-mode="praezise" title="Präzise: denkt gründlicher nach – für große Dashboards, Reparaturen und Einstellungen. Dauert etwas länger und verbraucht mehr vom Kontingent.">Präzise</button>
+          <button type="button" data-mode="auto" title="Auto: erst direkt auf dem Hub (Schnellweg, Haglo Local), was dort nicht geht, über die Cloud. Empfohlen.">Auto</button>
+          <button type="button" data-mode="lokal" title="Lokal: nur direkt auf deinem Hub – ohne Internet, ohne Kontingent. Die Cloud wird nie gefragt.">⚡ Lokal</button>
+          <button type="button" data-mode="cloud" title="Cloud: alles über die Cloud-KI. Haglo Assist wählt selbst, ob schnell oder gründlich – große Aufgaben bekommen mehr Denkzeit.">☁ Cloud</button>
         </div>
         <button type="button" class="tool" id="histLink" title="Verlauf" aria-label="Verlauf"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 12a9 9 0 1 0 3-6.7"/><path d="M3 4v5h5"/><path d="M12 8v4l3 2"/></svg>Verlauf</button>
         <button type="button" class="tool hidden" id="autosLink" title="Automationen" aria-label="Automationen"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M13 2L4 14h7l-1 8 9-12h-7z"/></svg>Automationen</button>
@@ -584,9 +583,9 @@ async function api(path, body) {
   return data;
 }
 
-// Schnell / Präzise: Voreinstellung ist Schnell
+// Auto / Lokal / Cloud: Voreinstellung ist Auto
 function showMode(m) {
-  const mode = ["lokal", "schnell", "praezise"].includes(m) ? m : "auto";
+  const mode = ["schnell", "praezise"].includes(m) ? "cloud" : ["lokal", "cloud"].includes(m) ? m : "auto";
   document.querySelectorAll(".mode [data-mode]").forEach((b) => b.classList.toggle("on", b.dataset.mode === mode));
 }
 document.querySelectorAll(".mode [data-mode]").forEach((b) => b.addEventListener("click", async () => {
@@ -833,7 +832,7 @@ function upsell(h) {
   if (!trial || !trial.window || (trial.subscription && trial.subscription.active && trial.level === "max")) return "";
   const pct = Math.max(trial.window.used_pct || 0, (trial.week && trial.week.used_pct) || 0);
   if (pct < 50) return "";
-  return ` · <a role="button" tabindex="0" data-plans-open>${pct >= 80 ? "Kontingent fast aufgebraucht – mehr mit einem größeren Plan" : "Mehr Präzise-Antworten mit einem größeren Plan"} ›</a>`;
+  return ` · <a role="button" tabindex="0" data-plans-open>${pct >= 80 ? "Kontingent fast aufgebraucht – mehr mit einem größeren Plan" : "Mehr Cloud-Antworten mit einem größeren Plan"} ›</a>`;
 }
 
 function historyMsg(h) {
@@ -848,7 +847,7 @@ function historyMsg(h) {
       ${s.url ? '<span class="go2" aria-hidden="true">›</span>' : ""}</a>`).join("")}</div>` : "";
   const undo = h.can_undo ? `<div class="links"><button class="undo" data-undo="${esc(h.id)}">Rückgängig</button></div>` : "";
   const lok = h.local ? `<div class="lok">⚡ Direkt auf dem Hub · ${h.local < 1000 ? h.local + " ms" : (h.local / 1000).toFixed(1).replace(".", ",") + " s"} · ohne Internet, ohne Kontingent</div>`
-    : h.route ? `<div class="lok cloud">☁ Claude ${h.route.via === "praezise" ? "Präzise" : "Schnell"}${h.route.auto ? " · von Auto gewählt" : ""}${upsell(h)}</div>` : "";
+    : h.route ? `<div class="lok cloud">☁ Cloud${h.route.via === "praezise" ? " · gründlich" : ""}${h.route.auto ? " · von Auto gewählt" : ""}${upsell(h)}</div>` : "";
   return (h.wish ? `<div class="msg user"><div class="bub">${esc(h.wish)}</div></div>` : "")
     + `<div class="msg bot${h.undone ? " was" : ""}"><div class="bub">${body}${steps}${open ? `<div class="actions">${open}</div>` : ""}${undo}${undone}${lok}</div>
        <span class="when2">${stamp(h.ts)}</span></div>`;
