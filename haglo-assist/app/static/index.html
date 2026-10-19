@@ -53,6 +53,15 @@
   /* Zeile unter der Eingabe: links, woran gearbeitet wird – rechts, was man nachsehen kann */
   .crow { display: flex; align-items: center; justify-content: space-between; gap: 8px 12px; flex-wrap: wrap; padding: 10px 4px 0; }
   .tools { display: flex; gap: 6px; flex-wrap: wrap; margin-left: auto; }
+  /* „⋯“-Menü oben rechts: Sprachsteuerung, Haglo Local, Versionen */
+  .more { position: relative; }
+  .menu { position: absolute; right: 0; top: calc(100% + 6px); z-index: 60; min-width: 240px; display: flex; flex-direction: column; gap: 2px;
+          background: var(--surface); border: 1px solid var(--line); border-radius: 12px; padding: 6px; box-shadow: 0 8px 24px rgba(0,0,0,.12); }
+  .menu.hidden { display: none; }
+  .menu .tool.mi { font-size: 14px !important; gap: 10px !important; padding: 9px 10px !important; border: 0; border-radius: 8px;
+                   justify-content: flex-start; width: 100%; color: var(--text); white-space: nowrap; text-align: left; }
+  .menu .tool.mi.hidden { display: none; }
+  .menu .tool.mi svg { width: 16px !important; height: 16px !important; color: var(--brand); }
   .tool { display: inline-flex; align-items: center; gap: 6px; font: inherit; font-size: 13px; color: var(--muted); background: transparent;
           border: 1px solid var(--line); border-radius: 999px; padding: 6px 12px; cursor: pointer; transition: color .15s, border-color .15s, background .15s; }
   .tool:hover { color: var(--brand); border-color: var(--brand); background: var(--brand-soft); }
@@ -399,7 +408,13 @@
       <option value="lite">Lite inklusive (Haglo-Gerät)</option><option value="pro">Pro</option><option value="max">Max</option>
     </select>
     <button id="devReset">Limits zurücksetzen</button></div></div><a id="pill" class="pill hidden" role="button" tabindex="0"></a>
-    <button class="btn2" id="feedback" type="button"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12a8 8 0 0 1-11.6 7.1L4 20l1-4.6A8 8 0 1 1 21 12z"/></svg><span>Feedback</span></button></div>
+    <button class="btn2" id="feedback" type="button"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12a8 8 0 0 1-11.6 7.1L4 20l1-4.6A8 8 0 1 1 21 12z"/></svg><span>Feedback</span></button>
+    <div class="more"><button class="btn2" id="moreBtn" type="button" aria-label="Mehr" aria-haspopup="true" aria-expanded="false" title="Mehr"><svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><circle cx="5" cy="12" r="1.8"/><circle cx="12" cy="12" r="1.8"/><circle cx="19" cy="12" r="1.8"/></svg></button>
+      <div class="menu hidden" id="moreMenu" role="menu">
+        <button type="button" class="tool mi" id="voiceLink" title="Sprachsteuerung (Alexa)" aria-label="Sprachsteuerung"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="2" width="6" height="12" rx="3"/><path d="M5 10a7 7 0 0 0 14 0"/><path d="M12 17v4"/></svg>Sprachsteuerung (Alexa)</button>
+        <button type="button" class="tool mi hidden" id="localLink" title="Haglo Local – KI direkt auf dem Hub" aria-label="Haglo Local"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="4" y="4" width="16" height="16" rx="2"/><rect x="9" y="9" width="6" height="6"/><path d="M9 1v3M15 1v3M9 20v3M15 20v3M20 9h3M20 14h3M1 9h3M1 14h3"/></svg>Lokal</button>
+        <button type="button" class="tool mi" id="versionsLink" title="Versionen" aria-label="Versionen"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3l9 5-9 5-9-5z"/><path d="M3 13l9 5 9-5"/></svg>Versionen</button>
+      </div></div></div>
 
   <main id="main">
     <div class="brand">
@@ -412,12 +427,6 @@
   </main>
 
   <div class="composer">
-    <div class="chips" id="chips">
-      <button class="chip" data-w="Erstelle eine übersichtliche Startseite mit allen Räumen. Pro Raum Licht, Heizung, Fenster und wichtige Sensoren."><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 11l9-7 9 7"/><path d="M5 10v10h14V10"/></svg>Alle Räume</button>
-      <button class="chip" data-w="Erstelle eine Energie-Seite: Stromverbrauch, PV-Erzeugung, Speicher und Verläufe der letzten 24 Stunden."><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M13 2L4 14h7l-1 8 9-12h-7z"/></svg>Energie &amp; PV</button>
-      <button class="chip" data-w="Erstelle eine Seite für Licht und Klima: alle Lichter zum Schalten, Thermostate und Temperaturen mit Verlauf."><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 18h6M10 21h4"/><path d="M12 3a6 6 0 0 0-4 10.5c.7.7 1 1.5 1 2.5h6c0-1 .3-1.800 1-2.500A6 6 0 0 0 12 3z"/></svg>Licht &amp; Klima</button>
-      <button class="chip" data-w="Erstelle eine Sicherheits-Seite: Türen, Fenster, Bewegungsmelder, Rauchmelder und Kameras."><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3l8 3v6c0 5-3.500 8-8 9-4.500-1-8-4-8-9V6z"/></svg>Sicherheit</button>
-    </div>
     <form class="search" id="form">
       <input id="wish" autocomplete="off" placeholder="Was soll ich bauen, ändern oder schalten?">
       <button class="send" id="send" aria-label="Los">
@@ -434,9 +443,6 @@
         </div>
         <button type="button" class="tool" id="histLink" title="Verlauf" aria-label="Verlauf"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 12a9 9 0 1 0 3-6.7"/><path d="M3 4v5h5"/><path d="M12 8v4l3 2"/></svg>Verlauf</button>
         <button type="button" class="tool hidden" id="autosLink" title="Automationen" aria-label="Automationen"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M13 2L4 14h7l-1 8 9-12h-7z"/></svg>Automationen</button>
-        <button type="button" class="tool" id="voiceLink" title="Sprachsteuerung (Alexa)" aria-label="Sprachsteuerung"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="2" width="6" height="12" rx="3"/><path d="M5 10a7 7 0 0 0 14 0"/><path d="M12 17v4"/></svg>Sprache</button>
-        <button type="button" class="tool hidden" id="localLink" title="Haglo Local – KI direkt auf dem Hub" aria-label="Haglo Local"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="4" y="4" width="16" height="16" rx="2"/><rect x="9" y="9" width="6" height="6"/><path d="M9 1v3M15 1v3M9 20v3M15 20v3M20 9h3M20 14h3M1 9h3M1 14h3"/></svg>Lokal</button>
-        <button type="button" class="tool" id="versionsLink" title="Versionen" aria-label="Versionen"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3l9 5-9 5-9-5z"/><path d="M3 13l9 5 9-5"/></svg>Versionen</button>
       </div>
     </div>
   </div>
@@ -940,6 +946,11 @@ async function init() {
 
 $("wish").addEventListener("input", () => mem.set("draft", $("wish").value));
 $("form").addEventListener("submit", (e) => { e.preventDefault(); run($("wish").value.trim()); });
+// „⋯“-Menü: öffnen/schließen; ein Klick auf einen Eintrag schließt es wieder
+$("moreBtn").addEventListener("click", (e) => { e.stopPropagation(); const m = $("moreMenu"); m.classList.toggle("hidden");
+  $("moreBtn").setAttribute("aria-expanded", String(!m.classList.contains("hidden"))); });
+document.addEventListener("click", (e) => { if (!e.target.closest(".more")) $("moreMenu").classList.add("hidden"); });
+$("moreMenu").addEventListener("click", () => setTimeout(() => $("moreMenu").classList.add("hidden"), 0));
 document.querySelectorAll(".chip").forEach((c) => c.addEventListener("click", () => run(c.dataset.w, c.textContent)));
 
 function run(wish, label) {
