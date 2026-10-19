@@ -1,5 +1,5 @@
 name: Haglo Assist
-version: "0.28.0"
+version: "0.27.0"
 slug: haglo-assist
 description: KI-Assistent von Haglo – erstellt dein Dashboard auf Deutsch
 url: https://haglotech.com
@@ -15,7 +15,6 @@ panel_title: Haglo Assist
 homeassistant_api: true
 # Sprachsteuerung (Matter) braucht mDNS und IPv6 im Heimnetz. Die Oberfläche bleibt trotzdem nur über
 # Home Assistant erreichbar (server.py prüft die Absender-Adresse).
-host_network: true
 hassio_api: true
 # Konfigurationsdateien lesen und (nach Bestätigung, mit Sicherung) ändern – für Reparaturen
 map:
