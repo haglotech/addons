@@ -1,5 +1,10 @@
 # Änderungen
 
+## 0.27.1
+
+- Behoben: Bei bereits eingerichtetem Home Assistant wurde die Ersteinrichtung der App bei jedem Start wiederholt
+- Protokoll aufgeräumt (keine Warnungen mehr bei jedem Befehl)
+
 ## 0.27.0
 
 - Drei Stufen unter dem Eingabefeld: **Auto** (erst direkt auf dem Hub, sonst Cloud), **Lokal** (nie Cloud) und **Cloud** –
