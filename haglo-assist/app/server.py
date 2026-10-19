@@ -15,12 +15,16 @@ import json
 import os
 import re
 import secrets
+import shutil
 import time
 from pathlib import Path
 from urllib.parse import quote
 
 import aiohttp
 from aiohttp import web
+
+import local_ai
+import voice
 
 OPTIONS_FILE = Path("/data/options.json")
 BACKUP_DIR = Path("/data/backups")
@@ -38,7 +42,7 @@ SKIP_DOMAINS = {
     "zone", "persistent_notification", "assist_satellite", "ai_task",
 }
 
-ADDON_VERSION = "0.26.2"
+ADDON_VERSION = "0.28.0"
 MAX_VERSIONS = 30                      # so viele Dashboard-Versionen bleiben lokal gespeichert
 BAR_ENTITY = "input_text.haglo_assist"           # Eingabeleiste im Dashboard
 BAR_STATUS = "input_text.haglo_assist_status"    # Rückmeldung darunter
@@ -149,6 +153,50 @@ async def supervisor_get(session, path: str) -> dict:
         if r.status != 200:
             raise RuntimeError(f"HTTP {r.status}")
         return (await r.json()).get("data") or {}
+
+
+async def update_info(session) -> dict | None:
+    """Neue Version der App verfügbar? → {version, current, notes, url}. Neuerungen aus dem Changelog dieser Version."""
+    try:
+        info = await supervisor_get(session, "/addons/self/info")
+    except Exception:
+        return None
+    latest, current = info.get("version_latest"), info.get("version")
+    if not info.get("update_available") or not latest or latest == current:
+        return None
+    notes = []
+    try:
+        async with session.get("http://supervisor/addons/self/changelog", headers={"Authorization": f"Bearer {TOKEN}"},
+                               timeout=aiohttp.ClientTimeout(total=10)) as r:
+            text = await r.text() if r.status == 200 else ""
+        # Abschnitt der neuen Version: von „## <version>“ bis zur nächsten Überschrift
+        m = re.search(rf"^##\s*{re.escape(latest)}\b.*?$(.*?)(?=^##\s|\Z)", text, re.M | re.S)
+        for line in (m.group(1) if m else "").splitlines():
+            line = line.strip()
+            if line.startswith("- "):
+                notes.append(line[2:])
+            elif line and notes and not line.startswith("#"):
+                notes[-1] += " " + line            # umbrochene Zeile gehört zum vorigen Punkt
+    except Exception:
+        pass
+    return {"version": latest, "current": current, "notes": [n.replace("**", "") for n in notes][:6],
+            "url": f"/hassio/addon/{info.get('slug') or 'self'}/info"}
+
+
+def note_terms(status: dict | None) -> None:
+    """Merkt sich, welcher Bedingungsversion zugestimmt wurde. Wer früher schon zugestimmt hat und der Haglo-Server
+    nennt eine neuere Version, muss neu zustimmen (terms_update) – vorher geht nichts, auch nicht lokal."""
+    if not status or not status.get("terms_version"):
+        return
+    prefs = load_prefs()
+    before = dict(prefs)
+    if status.get("accepted"):
+        prefs["accepted_terms"] = status["terms_version"]
+        prefs["terms_update"] = False
+    elif prefs.get("accepted_terms"):
+        prefs["terms_update"] = prefs["accepted_terms"] != status["terms_version"]
+    if prefs != before:
+        write_prefs(prefs)
 
 
 PREFS_FILE = Path("/data/prefs.json")
@@ -702,6 +750,7 @@ def trial_info(status: dict | None) -> dict:
         "limit": status["limit"],
         "subscription": status["subscription"],
         "terms_version": status.get("terms_version"),
+        "trial_offer_days": status.get("trial_offer_days", 0),
         "terms_url": status["terms_url"],
         "privacy_url": status["privacy_url"],
         "booking_url": status["booking_url"],
@@ -1161,12 +1210,29 @@ def save_history(items: list) -> None:
     HISTORY_FILE.write_text(json.dumps(items[-MAX_HISTORY:], ensure_ascii=False))
 
 
+ROUTE: dict | None = None      # Weg der gerade laufenden Anfrage (für die Anzeige im Verlauf)
+
+# Woran Auto erkennt, dass ein Wunsch Claude Präzise braucht
+COMPLEX = re.compile(
+    r"dashboard|übersicht|seite|reiter|karte|kachel|layout|automati|(wenn|falls) .+ (dann|soll|sollen)|immer wenn|sobald|"
+    r"jeden (tag|morgen|abend)|am meisten|welche geräte|"
+    r"zeitplan|um \d{1,2}(:\d\d)? ?uhr|warum|wieso|weshalb|erklär|fehler|repar|kaputt|geht nicht|funktioniert nicht|"
+    r"einricht|integration|hinzufüg|verbind|update|aktualisier|umbenenn|benenn|lösch|loesch|entfern|kennung|aufräum|optimier|vorschl|plan|analys|"
+    r"verbrauch der letzten|verlauf|statistik|vergleich|yaml|konfigur|skript (bau|erstell|schreib)|bau|erstell", re.I)
+
+
+def is_complex(wish: str) -> bool:
+    return len(wish) > 120 or len(wish.split()) > 18 or bool(COMPLEX.search(wish))
+
+
 def add_history(kind: str, wish: str, text: str, **extra) -> str:
     """Merkt sich, was gemacht wurde – das ist der Gesprächsverlauf in der Oberfläche. Bleibt auf dem
     Gerät. `undo` beschreibt, wie sich der Eintrag zurücknehmen lässt:
     {"type": "version", "id": <Datei>} oder {"type": "objects", "items": [{"id", "backup"}]}."""
     items = load_history()
     hid = f"{int(time.time() * 1000)}"
+    if ROUTE and "local" not in extra:
+        extra = {**extra, "route": ROUTE}      # über welchen Weg (Claude Schnell/Präzise, Auto) beantwortet
     items.append({"id": hid, "ts": int(time.time()), "kind": kind, "wish": wish[:300], "text": text[:6000],
                   **{k: v for k, v in extra.items() if v is not None}})
     save_history(items)
@@ -1181,6 +1247,8 @@ def can_undo(entry: dict, reg: dict) -> bool:
         return (BACKUP_DIR / str(undo["id"])).exists()
     if undo["type"] == "new_dashboard":
         return True
+    if undo["type"] == "timer":
+        return undo["id"] in load_timers()
     return any((i.get("backup") and (AUTO_BACKUP_DIR / i["backup"]).exists()) or i["id"] in reg for i in undo.get("items", []))
 
 
@@ -2230,13 +2298,14 @@ async def rename_items(session, items: list) -> list[dict]:
     return steps
 
 
-async def action_steps(session, actions: list, by_id: dict) -> list[dict]:
+async def action_steps(session, actions: list, by_id: dict, registry: dict | None = None) -> list[dict]:
     """Was geschaltet wurde, für die Anzeige: je Gerät eine Zeile mit Link."""
-    try:
-        async with HAClient(session) as ha:
-            registry = {e["entity_id"]: e for e in await ha.call("config/entity_registry/list") or []}
-    except Exception:
-        registry = {}
+    if registry is None:
+        try:
+            async with HAClient(session) as ha:
+                registry = {e["entity_id"]: e for e in await ha.call("config/entity_registry/list") or []}
+        except Exception:
+            registry = {}
     words = {"turn_on": ("on", "eingeschaltet"), "turn_off": ("off", "ausgeschaltet"), "toggle": ("action", "umgeschaltet"),
              "open_cover": ("on", "geöffnet"), "close_cover": ("off", "geschlossen"), "lock": ("off", "verriegelt"), "unlock": ("on", "entriegelt")}
     steps = []
@@ -2393,7 +2462,7 @@ async def build_dashboard(app, wish: str, refine: bool, dialog: list, can_ask: b
                          "danach erledige ich das selbst."]),
                      "automations": await own_objects(session, raw)}
         payload = {
-            "wish": wish, "entities": entities, "mode": load_prefs().get("mode", ""),
+            "wish": wish, "entities": entities, "mode": app.get("effective_mode") or ("praezise" if is_complex(wish) else "schnell"),
             "previous": None if rebuild or locked else (strip_bar(before) if own else before),
             "refine": not rebuild, "foreign": not rebuild and not built_by_haglo, "dialog": dialog, "can_ask": can_ask,
             "dashboard_locked": locked,
@@ -2593,11 +2662,14 @@ async def status(request):
         await welcome_done(session)
     try:
         st = (await backend(session, "GET", "/v1/status"))["status"]
+        note_terms(st)
         trial = trial_info(await identify(request.app, st))
     except BackendError:
         trial = trial_info(None)
     return web.json_response({
         "ok": True,
+        "terms_update": bool(load_prefs().get("terms_update")),
+        "update": await update_info(session),
         "entities": len(entities),
         "areas": sorted({e["area"] for e in entities if e["area"]}),
         "has_dashboard": cfg is not None,
@@ -2606,7 +2678,7 @@ async def status(request):
         "api_key": True,  # Der Schlüssel liegt im Backend; Feld bleibt für die Oberfläche.
         "backups": len(version_files()),
         "prefs": load_prefs(),
-        "features": {"automations": True, "control": True},
+        "features": {"automations": True, "control": True, **FEATURES},
         # Rein lokal: "sicher" = Geräte-Zettel der Haglo-Einrichtung, "vermutlich" = nur das Modell passt
         "preinstalled": looks_like_haglo(),
         "haglo_marker": bool(load_marker()),
@@ -2629,6 +2701,7 @@ async def consent(request):
         data = await backend(request.app["session"], "POST", "/v1/consent",
                              {"version": body.get("version") or TERMS_VERSION})
         st = await identify(request.app, data["status"])
+        note_terms(data["status"])
     except BackendError as e:
         return backend_failure(e)
     await welcome_done(request.app["session"])
@@ -2645,6 +2718,36 @@ async def generate(request):
     if not wish:
         return web.json_response({"ok": False, "error": "Bitte einen Wunsch eingeben."}, status=400)
     talk_touch()        # eine Nachricht ist auch eine Regung; nach langer Pause beginnt hier das neue Gespräch
+    if load_prefs().get("terms_update"):
+        # neue Nutzungsbedingungen/Datenschutzerklärung: erst zustimmen – auch für lokale Antworten
+        return web.json_response({"ok": False, "error": "consent_required", "terms_update": True}, status=403)
+    mode = user_mode()
+    complex_wish = is_complex(wish)
+    if not dialog and not refine:
+        # Schnellweg (Auto, Lokal, Schnell) und Haglo Local (Auto bei einfachen Wünschen, Lokal immer):
+        # direkt auf dem Hub, ohne Internet und Kontingent
+        try:
+            # Cloud: nur der Schnellweg (eindeutige Schaltbefehle ohne KI, kostet nichts) – alles andere Claude
+            done = await local_answer(request.app, wish, use_model=mode == "lokal" or (
+                mode == "auto" and (not complex_wish or bool(local_ai.PLAN.search(wish)) or bool(local_ai.DASH_CUE.search(wish)))),
+                code_only=mode == "cloud")
+        except Exception as e:
+            print(f"[Lokal] übersprungen: {e}", flush=True)
+            done = None
+        if done:
+            return web.json_response({"ok": True, **done})
+    if mode == "lokal":
+        # Lokal heißt lokal: nie still an Claude weitergeben. Ehrlich sagen, was lokal nicht geht.
+        text = ("Das geht lokal nicht – dafür „Auto“ oder „Cloud“ wählen.") if complex_wish else \
+               ("Das habe ich lokal nicht sicher verstanden. Gerät oder Raum genauer nennen – oder „Auto“ wählen.")
+        print(f"[Lokal] nicht lokal lösbar, Cloud NICHT gefragt (Modus Lokal) | {wish!r}", flush=True)
+        add_history("answer", wish, text, local=1)
+        return web.json_response({"ok": True, "answer": text, "local": 1})
+    # Welche Claude-Stufe? Die App wählt selbst: große Aufgaben, Rückfragen und Verfeinern gründlich, sonst schnell.
+    cloud_mode = "praezise" if (complex_wish or refine or dialog) else "schnell"
+    request.app["effective_mode"] = cloud_mode
+    global ROUTE
+    ROUTE = {"auto": mode == "auto", "via": cloud_mode}
     try:
         # Vorab prüfen, damit ohne Zustimmung oder Kontingent keine Gerätedaten gesendet werden.
         trial = trial_info((await backend(session, "GET", "/v1/status"))["status"])
@@ -2657,20 +2760,35 @@ async def generate(request):
     dashboard = body.get("dashboard") if isinstance(body.get("dashboard"), str) else None
     # Merken, dass gerade gebaut wird: Wer die Seite verlässt und zurückkommt, sieht das weiterhin.
     request.app["job"] = {"wish": wish, "since": int(time.time())}
+    def build():
+        return build_dashboard(request.app, wish, refine, dialog, can_ask=True, dashboard=dashboard,
+                               can_automate=True, allow_states=bool(body.get("allow_states")),
+                               allow_diagnose=bool(body.get("allow_diagnose")),
+                               allow_integrations=bool(body.get("allow_integrations")),
+                               allow_logs=bool(body.get("allow_logs")),
+                               allow_yaml=bool(body.get("allow_yaml")),
+                               allow_history=bool(body.get("allow_history")))
     try:
-        result = await build_dashboard(request.app, wish, refine, dialog, can_ask=True, dashboard=dashboard,
-                                       can_automate=True, allow_states=bool(body.get("allow_states")),
-                                       allow_diagnose=bool(body.get("allow_diagnose")),
-                                       allow_integrations=bool(body.get("allow_integrations")),
-                                       allow_logs=bool(body.get("allow_logs")),
-                                       allow_yaml=bool(body.get("allow_yaml")),
-                                       allow_history=bool(body.get("allow_history")))
+        try:
+            result = await build()
+        except BackendError:
+            raise                   # Kontingent, Zustimmung, Server: nicht nochmal versuchen
+        except Exception as e:
+            if cloud_mode != "schnell":
+                raise
+            # schnelles Modell gescheitert → einmal gründlich
+            print(f"[Cloud] schnell gescheitert ({str(e)[:120]}) – gründlich nochmal", flush=True)
+            request.app["effective_mode"] = "praezise"
+            ROUTE["via"] = "praezise"
+            result = await build()
     except BackendError as e:
         return backend_failure(e)
     except Exception as e:
         return web.json_response({"ok": False, "error": str(e)}, status=500)
     finally:
         request.app["job"] = None
+        request.app["effective_mode"] = None
+        ROUTE = None
     for key in ("objects", "confirm_actions", "confirm_device", "need_consent", "need_history_consent", "need_diagnose_consent", "need_integrations_consent", "confirm_integration", "need_logs_consent", "confirm_repair", "need_yaml_consent", "need_dashboard_consent", "done", "answer"):
         if key in result:
             return web.json_response({"ok": True, key: result[key], "erklaerung": result.get("erklaerung", ""),
@@ -2768,6 +2886,8 @@ async def undo_history(request):
         if undo["type"] == "version":
             # keep=True: Der jetzige Stand wird vorher gesichert, das Rückgängig lässt sich also selbst zurücknehmen
             await restore_version(request.app, BACKUP_DIR / undo["id"], keep=True, log=False)
+        elif undo["type"] == "timer":
+            cancel_timer(request.app, undo["id"])
         elif undo["type"] == "new_dashboard":
             # neu angelegtes Dashboard wieder löschen (verschwindet aus der Seitenleiste)
             async with HAClient(session) as ha:
@@ -3103,9 +3223,16 @@ async def prefs_route(request):
             prefs[key] = body[key]
     if isinstance(body.get("dashboard"), str) and len(body["dashboard"]) <= 100:
         prefs["dashboard"] = body["dashboard"]
-    if body.get("mode") in ("schnell", "praezise"):
-        prefs["mode"] = body["mode"]          # Schnell oder Präzise – vom Kunden gewählt, gilt für alle Anfragen
+    if body.get("mode") in ("auto", "lokal", "cloud", "schnell", "praezise"):
+        prefs["mode"] = "cloud" if body["mode"] in ("schnell", "praezise") else body["mode"]   # Auto, Lokal oder Cloud
     write_prefs(prefs)
+    if "mode" in body and request.app.get("local"):
+        # Haglo Local starten (lädt beim ersten Mal das Modell), wenn Lokal gewählt ist – oder Auto auf einem
+        # Gerät mit genug Arbeitsspeicher; sonst Speicher wieder freigeben
+        want = local_wanted(prefs.get("mode"))
+        if want != bool(local_ai.load_state().get("enabled")):
+            local_ai.save_state({**local_ai.load_state(), "enabled": want})
+            await (request.app["local"].start() if want else request.app["local"].stop())
     return web.json_response({"ok": True, "prefs": prefs})
 
 
@@ -3254,6 +3381,473 @@ async def portal(request):
     return await forward(request, "/v1/billing/portal")
 
 
+
+# ---------------------------------------------------------------- Sprachsteuerung (Alexa & Co. über Matter)
+@routes.get("/api/voice")
+async def voice_status(request):
+    """Stand der Sprachsteuerung und die Geräte, die man freigeben kann."""
+    v = request.app["voice"]
+    try:
+        async with HAClient(request.app["session"]) as ha:
+            items = await voice.candidates(ha)
+    except Exception as e:
+        return web.json_response({"ok": False, "error": str(e)}, status=500)
+    return web.json_response({"ok": True, **v.info(), "items": items})
+
+
+@routes.post("/api/voice")
+async def voice_set(request):
+    """Ein-/Ausschalten und Geräteauswahl. Ausgewählte Geräte bekommen in Home Assistant das Label „Sprachsteuerung“."""
+    v = request.app["voice"]
+    try:
+        body = await request.json()
+    except Exception:
+        body = {}
+    try:
+        changed = 0
+        if isinstance(body.get("entities"), list):
+            wanted = {str(e) for e in body["entities"] if isinstance(e, str)}
+            async with HAClient(request.app["session"]) as ha:
+                allowed = {c["id"] for c in await voice.candidates(ha)}
+                changed = await voice.set_selected(ha, wanted & allowed)
+        state = voice.load_state()
+        if isinstance(body.get("enabled"), bool) and body["enabled"] != bool(state.get("enabled")):
+            voice.save_state({**state, "enabled": body["enabled"]})
+            if body["enabled"]:
+                await v.start()
+                add_history("answer", "Sprachsteuerung eingeschaltet", "Sprachsteuerung ist an. Jetzt in der Alexa-App koppeln.")
+            else:
+                await v.stop()
+                add_history("answer", "Sprachsteuerung ausgeschaltet", "Sprachsteuerung ist aus. Alexa sieht die Geräte nicht mehr.")
+        elif changed and state.get("enabled"):
+            await v.restart()   # neu freigegebene Geräte erscheinen nach dem Neustart in Alexa
+    except Exception as e:
+        return web.json_response({"ok": False, "error": str(e)}, status=500)
+    return web.json_response({"ok": True, "changed": changed, **v.info()})
+
+
+@routes.post("/api/voice/reset")
+async def voice_reset(request):
+    """Kopplung löschen (z. B. Alexa-Konto gewechselt) – danach gibt es einen neuen Kopplungscode."""
+    try:
+        await request.app["voice"].reset_pairing()
+    except Exception as e:
+        return web.json_response({"ok": False, "error": str(e)}, status=500)
+    return web.json_response({"ok": True, **request.app["voice"].info()})
+
+
+# ---------------------------------------------------------------- Haglo Assist als Assistent in Home Assistant
+# Die App legt die Integration „haglo_assist“ in /config/custom_components an. Dort ist Haglo Assist unter
+# Einstellungen → Sprachassistenten als Konversationsagent wählbar (Text, Sprache, Companion-App, Satelliten).
+# Die Integration ruft /api/agent/conversation mit einem geheimen Token – sonst bleibt die App nur über Ingress erreichbar.
+AGENT_SRC = Path(__file__).parent / "ha_integration" / "haglo_assist"
+AGENT_DST = Path("/homeassistant/custom_components/haglo_assist")
+AGENT_TOKEN_FILE = Path("/data/agent_token")
+AGENT_PENDING: dict[str, dict] = {}          # conversation_id → wartende Bestätigung oder Rückfrage
+RE_YES = re.compile(r"^\W*(ja|jo|jep|jawohl|genau|klar|ok|okay|mach|mach das|gerne|bitte|passt|yes)\b", re.I)
+RE_NO = re.compile(r"^\W*(nein|nee|ne|nö|lieber nicht|abbrechen|stopp?|no)\b", re.I)
+
+
+def agent_token() -> str:
+    try:
+        return AGENT_TOKEN_FILE.read_text().strip()
+    except OSError:
+        tok = secrets.token_urlsafe(32)
+        AGENT_TOKEN_FILE.write_text(tok)
+        return tok
+
+
+class _Req:
+    """Aufruf eines eigenen Handlers ohne HTTP (gleiche Logik wie in der Oberfläche)."""
+    def __init__(self, app, body):
+        self.app, self._body = app, body
+
+    async def json(self):
+        return self._body
+
+
+async def _call(handler, app, body) -> dict:
+    resp = await handler(_Req(app, body))
+    try:
+        return json.loads(resp.text or "{}")
+    except Exception:
+        return {}
+
+
+def _speech_of(data: dict) -> str:
+    """Antwort der App → ein gesprochener Satz (ohne Markdown)."""
+    text = str(data.get("done") or data.get("answer") or data.get("erklaerung") or "")
+    text = re.sub(r"\[([^\]]+)\]\([^)]*\)", r"\1", text)          # Links: nur der Text
+    return re.sub(r"[*_`#>]+", "", text).strip()
+
+
+async def agent_reply(app, text: str, cid: str) -> dict:
+    pend = AGENT_PENDING.pop(cid, None)
+    if pend and pend["type"] in ("objects", "actions"):
+        if RE_NO.search(text):
+            return {"speech": "Okay, ich mache nichts."}
+        if RE_YES.search(text):
+            if pend["type"] == "objects":
+                r = await _call(apply_objects, app, {"automations": pend["objects"], "wish": pend["wish"]})
+                names = ", ".join(d["alias"] for d in r.get("created") or [])
+                return {"speech": f"Angelegt: {names}." if r.get("ok") else f"Das hat nicht geklappt: {r.get('error')}"}
+            r = await _call(run_confirmed_actions, app, {"actions": pend["actions"], "wish": pend["wish"],
+                                                         "erklaerung": pend["text"]})
+            return {"speech": "Erledigt." if r.get("ok") else f"Das hat nicht geklappt: {r.get('error')}"}
+        # weder ja noch nein: neuer Wunsch – die Bestätigung verfällt
+    body = {"wish": text}
+    if pend and pend["type"] == "question":
+        body = {"wish": pend["wish"], "dialog": pend["dialog"] + [{"frage": pend["frage"], "antwort": text}]}
+    data = await _call(generate, app, body)
+    wish = body["wish"]
+    if data.get("question"):
+        q = data["question"]
+        opts = [str(o) for o in q.get("optionen") or []][:4]
+        AGENT_PENDING[cid] = {"type": "question", "wish": wish, "frage": q.get("frage", ""), "dialog": body.get("dialog") or []}
+        return {"speech": q.get("frage", "") + (f" Zum Beispiel: {', '.join(opts)}." if opts else ""), "continue": True}
+    if data.get("objects"):
+        AGENT_PENDING[cid] = {"type": "objects", "wish": wish, "objects": data["objects"]}
+        intro = _speech_of(data) or "Ich würde das so anlegen."
+        if "anlegen?" not in intro:
+            intro += " Soll ich das anlegen?"
+        return {"speech": intro + " Sag ja oder nein.", "continue": True}
+    if data.get("confirm_actions"):
+        AGENT_PENDING[cid] = {"type": "actions", "wish": wish, "actions": data["confirm_actions"], "text": _speech_of(data)}
+        return {"speech": (_speech_of(data) or "Das ist eine sicherheitsrelevante Aktion.") + " Soll ich das wirklich machen? Sag ja oder nein.",
+                "continue": True}
+    if any(k in data for k in ("need_consent", "need_diagnose_consent", "need_logs_consent", "need_yaml_consent",
+                               "need_integrations_consent", "need_history_consent", "need_dashboard_consent",
+                               "confirm_repair", "confirm_integration", "confirm_device")):
+        return {"speech": "Dafür brauche ich einmal deine Freigabe in der App Haglo Assist. Öffne sie in der Seitenleiste "
+                          "und stell die Frage dort."}
+    if not data.get("ok", True) or data.get("error"):
+        err = data.get("error")
+        if err == "consent_required":
+            if data.get("terms_update"):
+                return {"speech": "Es gibt neue Nutzungsbedingungen. Bitte öffne einmal die App Haglo Assist und stimm zu."}
+            return {"speech": "Bitte öffne einmal die App Haglo Assist und stimm den Bedingungen zu."}
+        if err == "trial_expired":
+            return {"speech": "Dein Kontingent ist gerade aufgebraucht. Details stehen in der App Haglo Assist."}
+        return {"speech": f"Das hat nicht geklappt: {err}"}
+    return {"speech": _speech_of(data) or "Erledigt."}
+
+
+@routes.post("/api/agent/conversation")
+async def agent_conversation(request):
+    try:
+        body = await request.json()
+    except Exception:
+        body = {}
+    text = str(body.get("text") or "").strip()[:500]
+    cid = str(body.get("conversation_id") or "")[:80]
+    if not text:
+        return web.json_response({"speech": "Ich habe nichts verstanden."})
+    try:
+        out = await agent_reply(request.app, text, cid)
+    except Exception as e:
+        print(f"[Assistent] Fehler: {e}", flush=True)
+        out = {"speech": f"Da ist etwas schiefgelaufen: {str(e)[:120]}"}
+    print(f"[Assistent] {text!r} → {out['speech'][:160]!r}", flush=True)
+    return web.json_response(out)
+
+
+AGENT_READY = {"notification_id": "haglo_assist_agent", "title": "Haglo Assist als Assistent",
+               "message": "Haglo Assist ist jetzt als Assistent verfügbar: **Einstellungen → Sprachassistenten** – beim "
+                          "Assistenten (oder „Assistent hinzufügen“) als *Konversationsagent* „Haglo Assist“ wählen."}
+
+
+async def install_agent(app):
+    """Integration anlegen/aktualisieren und – sobald Home Assistant sie kennt – einrichten."""
+    if not Path("/homeassistant").is_dir() or not AGENT_SRC.is_dir():
+        return
+    try:
+        info = await supervisor_get(app["session"], "/addons/self/info")
+        host = "127.0.0.1" if info.get("host_network") else (info.get("hostname") or info.get("ip_address"))
+        conn = {"url": f"http://{host}:8099", "token": agent_token()}
+        fresh = not (AGENT_DST / "manifest.json").exists()
+        AGENT_DST.mkdir(parents=True, exist_ok=True)
+        changed = False
+        for src in AGENT_SRC.rglob("*"):
+            if src.is_file() and "__pycache__" not in src.parts:
+                dst = AGENT_DST / src.relative_to(AGENT_SRC)
+                dst.parent.mkdir(parents=True, exist_ok=True)
+                if not dst.exists() or dst.read_bytes() != src.read_bytes():
+                    dst.write_bytes(src.read_bytes())
+                    changed = True
+        conn_file = AGENT_DST / "connection.json"
+        if not conn_file.exists() or json.loads(conn_file.read_text() or "{}") != conn:
+            conn_file.write_text(json.dumps(conn))
+        session = app["session"]
+        status, entries = await core(session, "GET", "/config/config_entries/entry?domain=haglo_assist")
+        if status == 200 and not entries:
+            st, flow = await core(session, "POST", "/config/config_entries/flow", {"handler": "haglo_assist"})
+            if st != 200 and not app.get("agent_retry"):
+                # Home Assistant kennt die Integration erst nach einem Neustart – bis dahin jede Minute nachsehen
+                async def retry():
+                    while True:
+                        await asyncio.sleep(60)
+                        s2, e2 = await core(session, "GET", "/config/config_entries/entry?domain=haglo_assist")
+                        if s2 == 200 and e2:
+                            return
+                        s3, f3 = await core(session, "POST", "/config/config_entries/flow", {"handler": "haglo_assist"})
+                        if s3 == 200 and f3.get("type") == "create_entry":
+                            print("[Assistent] Integration eingerichtet", flush=True)
+                            await core(session, "POST", "/services/persistent_notification/create", AGENT_READY)
+                            return
+                app["agent_retry"] = asyncio.create_task(retry())
+            if st == 200 and flow.get("type") == "create_entry":
+                print("[Assistent] Integration eingerichtet – unter Einstellungen → Sprachassistenten auswählbar", flush=True)
+                await core(session, "POST", "/services/persistent_notification/create", AGENT_READY)
+            elif fresh or changed:
+                print("[Assistent] Integration abgelegt – Home Assistant einmal neu starten", flush=True)
+                await core(session, "POST", "/services/persistent_notification/create", {
+                    "notification_id": "haglo_assist_agent", "title": "Haglo Assist als Assistent",
+                    "message": "Damit du Haglo Assist auch als Sprach- und Textassistent auswählen kannst, starte Home "
+                               "Assistant einmal neu (Einstellungen → System → Neu starten)."})
+    except Exception as e:
+        print(f"[Assistent] Einrichtung übersprungen: {e}", flush=True)
+
+
+# ---------------------------------------------------------------- Haglo Local (eigenes Modell auf dem Hub)
+def ram_gb() -> float:
+    try:
+        return os.sysconf("SC_PAGE_SIZE") * os.sysconf("SC_PHYS_PAGES") / 1024 ** 3
+    except (ValueError, OSError):
+        return 0
+
+
+# Was das Image mitbringt: Die schlanke Ausgabe (main) hat weder llama.cpp noch Matterbridge – dann gibt es kein
+# Sprachmodell (die Regeln laufen trotzdem) und keine Alexa-Sprachsteuerung; die Oberfläche blendet beides aus.
+FEATURES = {"model": shutil.which("llama-server") is not None, "voice": shutil.which("matterbridge") is not None}
+
+
+def local_wanted(mode: str | None) -> bool:
+    """Modell laden? Bei „Lokal“ immer, bei „Auto“ ab 3 GB Arbeitsspeicher (Wyse 5070 / T630 mit 8 GB)."""
+    if not FEATURES["model"]:
+        return False
+    return mode == "lokal" or ((mode or "auto") == "auto" and ram_gb() >= 3)
+
+
+async def area_map(app, force: bool = False) -> dict[str, str]:
+    """entity_id → Raumname. Zwischengespeichert, nach einer Minute im Hintergrund aufgefrischt."""
+    cached = app.get("areas_cache")
+    if cached and not force and time.time() - cached[0] < 600:
+        if time.time() - cached[0] > 60 and not app.get("areas_refresh"):
+            # im Hintergrund auffrischen – der Befehl wartet nicht darauf
+            async def refresh():
+                try:
+                    await area_map(app, force=True)
+                except Exception:
+                    pass
+                finally:
+                    app["areas_refresh"] = None
+            app["areas_refresh"] = asyncio.create_task(refresh())
+        return cached[1]
+    async with HAClient(app["session"]) as ha:
+        ents = await ha.call("config/entity_registry/list") or []
+        devs = {d["id"]: d for d in await ha.call("config/device_registry/list") or []}
+        names = {a["area_id"]: a["name"] for a in await ha.call("config/area_registry/list") or []}
+    app["registry_cache"] = {e["entity_id"]: e for e in ents}
+    out = {}
+    for e in ents:
+        aid = e.get("area_id") or (devs.get(e.get("device_id") or "") or {}).get("area_id")
+        if aid in names:
+            out[e["entity_id"]] = names[aid]
+    app["areas_cache"] = (time.time(), out)
+    return out
+
+
+# Timer von Haglo Local („in 10 Minuten Licht aus“). Liegen in /data, damit sie einen Neustart überstehen.
+TIMERS_FILE = Path("/data/timers.json")
+
+
+def load_timers() -> dict:
+    try:
+        return json.loads(TIMERS_FILE.read_text())
+    except Exception:
+        return {}
+
+
+def save_timers(timers: dict) -> None:
+    TIMERS_FILE.write_text(json.dumps(timers, ensure_ascii=False))
+
+
+async def run_timer(app, tid: str):
+    t = load_timers().get(tid)
+    if not t:
+        return
+    await asyncio.sleep(max(0, t["at"] - time.time()))
+    timers = load_timers()
+    if tid not in timers:
+        return              # inzwischen zurückgenommen
+    timers.pop(tid)
+    save_timers(timers)
+    try:
+        await run_actions(app["session"], t["actions"])
+        print(f"[Timer] ausgeführt: {t['text']}", flush=True)
+    except Exception as e:
+        print(f"[Timer] fehlgeschlagen: {t['text']} – {e}", flush=True)
+    finally:
+        app.setdefault("timer_tasks", {}).pop(tid, None)
+
+
+def start_timer(app, actions: list, seconds: int, text: str) -> str:
+    tid = f"t{int(time.time() * 1000)}"
+    timers = load_timers()
+    timers[tid] = {"at": time.time() + seconds, "actions": actions, "text": text}
+    save_timers(timers)
+    app.setdefault("timer_tasks", {})[tid] = asyncio.create_task(run_timer(app, tid))
+    return tid
+
+
+def cancel_timer(app, tid: str) -> None:
+    timers = load_timers()
+    timers.pop(tid, None)
+    save_timers(timers)
+    task = app.setdefault("timer_tasks", {}).pop(tid, None)
+    if task:
+        task.cancel()
+
+
+def resume_timers(app) -> None:
+    """Nach einem Neustart: offene Timer weiterlaufen lassen. Bis 10 Minuten verpasste holen wir nach,
+    ältere verfallen (nachts um drei soll nicht plötzlich das Licht angehen)."""
+    timers = load_timers()
+    stale = [k for k, t in timers.items() if t["at"] < time.time() - 600]
+    for k in stale:
+        timers.pop(k)
+    if stale:
+        save_timers(timers)
+    for tid in timers:
+        app.setdefault("timer_tasks", {})[tid] = asyncio.create_task(run_timer(app, tid))
+
+
+def user_mode() -> str:
+    """Auto, Lokal oder Cloud. Frühere Wahl „Schnell“/„Präzise“ heißt jetzt Cloud (Stufe wählt die App)."""
+    m = load_prefs().get("mode") or "auto"
+    return "cloud" if m in ("schnell", "praezise") else m if m in ("auto", "lokal", "cloud") else "auto"
+
+
+async def local_answer(app, wish: str, use_model: bool = True, code_only: bool = False) -> dict | None:
+    loc = app.get("local")
+    if not loc:
+        return None
+    t0 = time.time()
+    # Sicherheit: Wenn-dann-Wünsche, Zeitpläne, Automationen und Dashboards schaltet der Schnellweg nie sofort.
+    # Das Modell darf sie planen (Timer, Automation mit Bestätigung, neues Dashboard mit Rückgängig);
+    # Fehlersuche und alles andere Komplexe geht an Claude.
+    if is_complex(wish) and not (local_ai.PLAN.search(wish) or local_ai.DASH_CUE.search(wish) or local_ai.time_cue(wish)):
+        print(f"[Lokal] komplex → nicht lokal | {wish!r}", flush=True)
+        return None
+    if code_only and local_ai.DASH_CUE.search(wish):
+        return None             # Cloud: Dashboards baut Claude (schöner als der Baukasten)
+    session = app["session"]
+    if app.get("areas_cache") or local_ai.PLAN.search(wish):
+        # Planwünsche (Timer, Automation, Dashboard) brauchen die Räume – darauf lohnt sich das Warten
+        states, areas = await asyncio.gather(all_states(session), area_map(app))
+    else:
+        # Raumliste noch nicht da (gerade gestartet): nicht darauf warten – Namen reichen fürs Schalten
+        if not app.get("areas_refresh"):
+            app["areas_refresh"] = asyncio.create_task(area_map(app, force=True))
+            app["areas_refresh"].add_done_callback(lambda _t: app.__setitem__("areas_refresh", None))
+        states, areas = await all_states(session), {}
+    res = await loc.understand(wish, states, areas, use_model=use_model)
+    if not res:
+        return None
+    if res["kind"] in ("answer", "question"):
+        ms = int((time.time() - t0) * 1000)
+        add_history("answer", wish, res["text"], local=ms)
+        return {"answer": res["text"], "local": ms}
+    by_id = {x["entity_id"]: x for x in states}
+    if res["kind"] == "automation":
+        obj = res["object"]
+        if check_actions(obj["actions"], by_id):
+            print(f"[Lokal] Automation abgelehnt ({check_actions(obj['actions'], by_id)}) | {wish!r}", flush=True)
+            return None
+        # gleiche Bestätigungskarte wie bei Claude – angelegt wird erst nach „Ja“
+        return {"objects": [obj], "erklaerung": res["text"], "local": int((time.time() - t0) * 1000)}
+    if res["kind"] == "dashboard":
+        title, cfg = local_ai.dashboard_config(res["plan"], states, areas, app.get("registry_cache"))
+        if not cfg.get("views"):
+            print(f"[Lokal] Dashboard-Plan ohne passende Geräte → Cloud | {wish!r}", flush=True)
+            return None
+        cards = sum(len(sec["cards"]) - 1 for sec in cfg["views"][0]["sections"])
+        async with HAClient(session) as ha:
+            made = await create_sidebar_dashboard(ha, wish, {
+                "neues_dashboard": {"titel": title}, "config": cfg, "status": None,
+                "erklaerung": f"Neues Dashboard „{title}“ mit {cards} Karten, nach Räumen sortiert."})
+        ms = int((time.time() - t0) * 1000)
+        print(f"[Lokal] Dashboard „{title}“ ({cards} Karten) in {ms} ms | {wish!r}", flush=True)
+        return {"erklaerung": made["erklaerung"], "dashboard_url": made["dashboard_url"], "local": ms}
+    acts = res["actions"]
+    if check_actions(acts, by_id):
+        print(f"[Lokal] Aktion abgelehnt ({check_actions(acts, by_id)}) | {wish!r}", flush=True)
+        return None
+    if any(risky_action(a, by_id) for a in acts):
+        if res["kind"] == "timer":
+            return None         # Riskantes (Tore, Schlösser) nie zeitversetzt ohne Bestätigung im Moment
+        return {"confirm_actions": acts, "erklaerung": res["text"]}
+    if res["kind"] == "timer":
+        if res.get("now"):
+            if check_actions(res["now"], by_id) or any(risky_action(x, by_id) for x in res["now"]):
+                return None
+            await run_actions(session, res["now"])          # „für 10 Minuten an“: jetzt an, Timer schaltet zurück
+        tid = start_timer(app, acts, res["seconds"], "In " + res["text"].split(" In ", 1)[-1] if res.get("now") else res["text"])
+        ms = int((time.time() - t0) * 1000)
+        print(f"[Lokal] Timer {res['seconds']} s gestellt in {ms} ms | {wish!r}", flush=True)
+        add_history("control", wish, f"⏱ {res['text']}", local=ms, undo={"type": "timer", "id": tid})
+        return {"done": res["text"], "local": ms}
+    await run_actions(session, acts)
+    ms = int((time.time() - t0) * 1000)        # ehrliche Zeit: vom Befehl bis Home Assistant geschaltet hat
+    print(f"[Lokal] gesamt {ms} ms (erkannt in {res['ms']} ms) | {wish!r}", flush=True)
+    add_history("control", wish, res["text"], steps=await action_steps(session, acts, by_id, app.get("registry_cache")), local=ms)
+    return {"done": res["text"], "local": ms}
+
+
+@routes.get("/api/local")
+async def local_status(request):
+    return web.json_response({"ok": True, **request.app["local"].info()})
+
+
+@routes.post("/api/local")
+async def local_set(request):
+    try:
+        body = await request.json()
+    except Exception:
+        body = {}
+    loc = request.app["local"]
+    if body.get("enabled") is True and not FEATURES["model"]:
+        return web.json_response({"ok": False, "error": "Das Sprachmodell ist in dieser Ausgabe nicht enthalten."}, status=400)
+    if isinstance(body.get("enabled"), bool):
+        local_ai.save_state({**local_ai.load_state(), "enabled": body["enabled"]})
+        prefs = load_prefs()
+        if body["enabled"] or prefs.get("mode") == "lokal":
+            write_prefs({**prefs, "mode": "lokal" if body["enabled"] else "auto"})
+        if body["enabled"]:
+            await loc.start()
+        else:
+            await loc.stop()
+    return web.json_response({"ok": True, **loc.info()})
+
+
+# Mit Host-Netzwerk (nötig für Matter) wäre Port 8099 im ganzen Heimnetz offen. Die Oberfläche
+# darf aber nur über Home Assistant (Ingress, 172.30.32.2) erreichbar sein.
+INGRESS_IPS = {"172.30.32.2"}                # nur der Ingress-Proxy von Home Assistant
+
+
+@web.middleware
+async def only_ingress(request, handler):
+    if request.path == "/api/agent/conversation" and secrets.compare_digest(
+            request.headers.get("Authorization", ""), f"Bearer {agent_token()}"):
+        return await handler(request)            # Haglo-Integration in Home Assistant (Token, siehe install_agent)
+    if request.remote not in INGRESS_IPS:
+        return web.Response(status=403, text="Haglo Assist ist nur über Home Assistant erreichbar.")
+    return await handler(request)
+
+
+START_DELAY = 45          # Sekunden nach dem Start, bevor Modell und Matterbridge laden
+
+
 async def on_startup(app):
     app["session"] = aiohttp.ClientSession()
     app["bar_lock"] = asyncio.Lock()
@@ -3267,16 +3861,49 @@ async def on_startup(app):
     if app["bar_enabled"]:
         app["bar_task"] = asyncio.create_task(bar_listener(app))
     asyncio.create_task(selftest(app))
+    app["local"] = local_ai.LocalAI(app["session"])
+    resume_timers(app)
+    asyncio.create_task(install_agent(app))
+    asyncio.create_task(area_map(app))          # Raumliste vorab laden – der erste Befehl ist dann schon schnell
+    app["voice"] = voice.Voice(app["session"])
+    if FEATURES["voice"]:
+        try:
+            await app["voice"].start_proxy()
+        except Exception as e:
+            print(f"[Sprache] Weiterleitung fehlgeschlagen: {e}")
+
+    async def later():
+        # Modell und Matterbridge erst nach dem Start: beide belasten CPU und Home Assistant spürbar.
+        # In der Zeit soll Schalten (Schnellweg) sofort reagieren.
+        await asyncio.sleep(START_DELAY)
+        try:
+            want = local_wanted(load_prefs().get("mode"))
+            local_ai.save_state({**local_ai.load_state(), "enabled": want})
+            if want:
+                await app["local"].start()
+            if FEATURES["voice"] and voice.load_state().get("enabled"):
+                await app["voice"].start()
+        except Exception as e:
+            print(f"[Start] {e}")
+    app["later_task"] = asyncio.create_task(later())
 
 
 async def on_cleanup(app):
+    if app.get("later_task"):
+        app["later_task"].cancel()
+    if app.get("local"):
+        await app["local"].stop()
+    if app.get("voice"):
+        await app["voice"].stop()
+        if app["voice"].runner:
+            await app["voice"].runner.cleanup()
     if app.get("bar_task"):
         app["bar_task"].cancel()
     await app["session"].close()
 
 
 def make_app() -> web.Application:
-    app = web.Application()
+    app = web.Application(middlewares=[only_ingress])
     app.add_routes(routes)
     app.router.add_static("/static/", STATIC_DIR)
     app.on_startup.append(on_startup)

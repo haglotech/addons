@@ -1,0 +1,1 @@
+DOMAIN = "haglo_assist"

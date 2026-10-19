@@ -1,5 +1,48 @@
 # Änderungen
 
+## 0.28.0 (Beta, Branch feat/haglo-local)
+
+- Cloud-Limit erreicht? Schalten, Timer und alles Lokale geht trotzdem weiter – nur Cloud-Wünsche warten
+- Erstes Abo: 14 Tage kostenlos testen
+- Neue Version verfügbar? Die App zeigt die Neuerungen und führt mit einem Tipp zur Aktualisierung
+- Neue Nutzungsbedingungen oder Datenschutzerklärung: Die App fragt beim Öffnen nach der Zustimmung, vorher geht nichts
+- Oberfläche aufgeräumt: Sprachsteuerung, Haglo Local und Versionen im Menü „⋯“ oben rechts; Vorschlagsknöpfe entfernt
+- Haglo Local v1.0.2: neues Modell als eine Datei (4 Bit, 380 MB) – genauer und schneller
+- Mehr ohne Modell: Messwerte („Was zieht der Speicher?“), Status jedes Sensors, Wenn-dann mit jedem Ein/Aus-Sensor,
+  Rollläden im Raum, „X und Y aus“, Dashboards für Geräte nach Namen
+- Sicherheit: Umbenennen, Löschen, Einrichten und Fehlersuche schalten lokal nie etwas
+- „Schreibtisch nicht ausschalten“: Verneinte Befehle führt Haglo Local nie aus
+- „Um 8 Schreibtisch an“, „morgen früh um 7 …“, „übermorgen um 6 …“: einmal zu diesem Zeitpunkt (Timer); nur mit „jeden“,
+  „täglich“, „werktags“ usw. wird eine Automation daraus. Timer auch in Tagen und Wochen
+- „alle 10 Minuten“, „nach dem Essen“, „später“: nie sofort schalten
+- Viel mehr ohne Sprachmodell, sofort auch auf schwachen Hubs: Statusfragen, Watt-Fragen, heller/dunkler, wärmer/kälter,
+  Farben, Musik (lauter, leiser, Pause, weiter), Saugroboter, Heizung an/aus, mehrere Befehle in einem Satz und
+  Wenn-dann-Automationen mit Bewegung, Tür/Fenster und Temperatur/Luftfeuchtigkeit
+- Sicherheit: Klingt ein Wunsch nach später, Zeitplan oder Bedingung (auch mit Tippfehlern), wird nie sofort geschaltet
+- Nur noch drei Stufen: **Auto** (erst direkt auf dem Hub, sonst Cloud), **Lokal** (nie Cloud) und **Cloud**. Ob die Cloud-KI
+  schnell oder gründlich arbeitet, wählt Haglo Assist selbst; scheitert die schnelle Antwort, versucht es die gründliche
+- Haglo Local kann jetzt mehr direkt auf dem Hub, ohne Internet und Kontingent: Timer („in 10 Minuten Licht aus“), einfache
+  Automationen (Uhrzeit und Wochentage, Sonnenauf- und -untergang, Bewegung, Tür/Fenster, Temperatur und Luftfeuchtigkeit) und
+  neue Dashboards für Räume oder Gerätearten mit Eintrag in der Seitenleiste
+- Automationen legt Haglo Local erst nach „Ja“ an, wie bei die Cloud-KI; Timer und neue Dashboards lassen sich rückgängig machen
+- Timer überstehen einen Neustart; was länger als 10 Minuten verpasst wurde, verfällt
+- Neues Sprachmodell (Qwen3-0.6B + Haglo-Adapter); „wärmer/kühler“ und Farbtemperaturen rechnet der Code, nicht das Modell
+- Was lokal nicht sicher geht (Fehlersuche, Energie-Auswertungen, Umbauten), übernimmt wie bisher die Cloud-KI
+- „Schreibtisch für 10 Minuten an“, „Licht an und in 5 Minuten wieder aus“, „in 1 Minute …“ und Zeit-Automationen
+  („jeden Abend um halb 8 …“, „bei Sonnenuntergang …“) erkennt die App sofort, ohne Sprachmodell
+- Neu: Haglo Assist als Assistent in Home Assistant – unter Einstellungen → Sprachassistenten als Konversationsagent
+  wählbar (Sprache, Companion-App, Satelliten). Die App legt dafür die Integration „Haglo Assist“ an; nach einem
+  Neustart von Home Assistant richtet sie sich selbst ein. Bestätigungen und Rückfragen beantwortet man mit „Ja“ oder „Nein“
+
+## 0.27.0 (Beta, Branch feat/sprachsteuerung)
+
+- Neu: Sprachsteuerung (Beta) – Geräte per Alexa schalten, auch Google Home und Apple Home. Unter dem Eingabefeld „Sprache“
+  öffnen, einschalten, Geräte anhaken und mit dem angezeigten Code in der Alexa-App koppeln. Läuft lokal über Matter,
+  ohne Haglo-Server
+- Auch Skripte, Szenen und Schalter-Helfer lassen sich per Sprache starten („Alexa, schalte Radio ein“)
+- Freigegebene Geräte tragen in Home Assistant das Label „Sprachsteuerung“ und lassen sich auch dort pflegen
+- Die App nutzt jetzt das Host-Netzwerk (für Matter nötig); die Oberfläche bleibt nur über Home Assistant erreichbar
+
 ## 0.26.2
 
 - Voreinstellung ist jetzt „Schnell“; „Präzise“ denkt gründlicher nach, verbraucht etwas mehr und dauert etwas länger

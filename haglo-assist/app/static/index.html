@@ -53,6 +53,15 @@
   /* Zeile unter der Eingabe: links, woran gearbeitet wird – rechts, was man nachsehen kann */
   .crow { display: flex; align-items: center; justify-content: space-between; gap: 8px 12px; flex-wrap: wrap; padding: 10px 4px 0; }
   .tools { display: flex; gap: 6px; flex-wrap: wrap; margin-left: auto; }
+  /* „⋯“-Menü oben rechts: Sprachsteuerung, Haglo Local, Versionen */
+  .more { position: relative; }
+  .menu { position: absolute; right: 0; top: calc(100% + 6px); z-index: 60; min-width: 240px; display: flex; flex-direction: column; gap: 2px;
+          background: var(--surface); border: 1px solid var(--line); border-radius: 12px; padding: 6px; box-shadow: 0 8px 24px rgba(0,0,0,.12); }
+  .menu.hidden { display: none; }
+  .menu .tool.mi { font-size: 14px !important; gap: 10px !important; padding: 9px 10px !important; border: 0; border-radius: 8px;
+                   justify-content: flex-start; width: 100%; color: var(--text); white-space: nowrap; text-align: left; }
+  .menu .tool.mi.hidden { display: none; }
+  .menu .tool.mi svg { width: 16px !important; height: 16px !important; color: var(--brand); }
   .tool { display: inline-flex; align-items: center; gap: 6px; font: inherit; font-size: 13px; color: var(--muted); background: transparent;
           border: 1px solid var(--line); border-radius: 999px; padding: 6px 12px; cursor: pointer; transition: color .15s, border-color .15s, background .15s; }
   .tool:hover { color: var(--brand); border-color: var(--brand); background: var(--brand-soft); }
@@ -279,6 +288,19 @@
   .sheet .row { display: flex; gap: 10px; }
   .sheet .row > * { flex: 1; }
   .sheet .row .btn2 { justify-content: center; cursor: pointer; padding: 12px; }
+  .vtoggle, .vitem { display: flex; gap: 10px; align-items: flex-start; cursor: pointer; }
+  .vtoggle { margin: 0 0 14px; }
+  .vitem { border: 1px solid var(--line); border-radius: 12px; padding: 10px 14px; align-items: center; }
+  .vitem .info { flex: 1; min-width: 0; }
+  .vitem .n { font-weight: 600; color: var(--heading); font-size: 15px; }
+  .vitem .d { color: var(--muted); font-size: 13px; }
+  .vpair { border: 1px solid var(--line); border-radius: 12px; padding: 14px; margin: 0 0 14px; }
+  .vpair .code { font-size: 26px; font-weight: 600; letter-spacing: 2px; color: var(--heading); margin: 6px 0; user-select: all; }
+  .vpair ol { margin: 6px 0 0 18px; padding: 0; color: var(--muted); font-size: 14px; }
+  #vFilter { width: 100%; margin: 0 0 10px; box-sizing: border-box; }
+  .lok { margin-top: 8px; font-size: 12px; color: var(--brand); }
+  .lok.cloud { color: var(--muted); }
+  .lok a { color: var(--brand); cursor: pointer; text-decoration: underline; }
   .vlist { display: flex; flex-direction: column; gap: 8px; }
   .ver { border: 1px solid var(--line); border-radius: 12px; padding: 12px 14px; display: flex; align-items: center; gap: 12px; }
   .ver .info { flex: 1; min-width: 0; }
@@ -353,7 +375,7 @@
     .crow { flex-wrap: nowrap; }
     .talk .long { display: none; }
     .tool { font-size: 12px; padding: 4px 9px; gap: 4px; }
-    /* Handy: Verlauf, Automationen, Versionen nur als Symbol – sonst passt die Zeile mit Schnell/Präzise nicht */
+    /* Handy: Verlauf, Automationen, Versionen nur als Symbol – sonst passt die Zeile mit Auto/Lokal/Cloud nicht */
     .tool { font-size: 0; gap: 0; padding: 7px 9px; }
     .tool svg { width: 16px; height: 16px; }
     .mode button { padding: 4px 9px; font-size: 12px; }
@@ -386,7 +408,13 @@
       <option value="lite">Lite inklusive (Haglo-Gerät)</option><option value="pro">Pro</option><option value="max">Max</option>
     </select>
     <button id="devReset">Limits zurücksetzen</button></div></div><a id="pill" class="pill hidden" role="button" tabindex="0"></a>
-    <button class="btn2" id="feedback" type="button"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12a8 8 0 0 1-11.6 7.1L4 20l1-4.6A8 8 0 1 1 21 12z"/></svg><span>Feedback</span></button></div>
+    <button class="btn2" id="feedback" type="button"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12a8 8 0 0 1-11.6 7.1L4 20l1-4.6A8 8 0 1 1 21 12z"/></svg><span>Feedback</span></button>
+    <div class="more"><button class="btn2" id="moreBtn" type="button" aria-label="Mehr" aria-haspopup="true" aria-expanded="false" title="Mehr"><svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><circle cx="5" cy="12" r="1.8"/><circle cx="12" cy="12" r="1.8"/><circle cx="19" cy="12" r="1.8"/></svg></button>
+      <div class="menu hidden" id="moreMenu" role="menu">
+        <button type="button" class="tool mi" id="voiceLink" title="Sprachsteuerung (Alexa)" aria-label="Sprachsteuerung"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="2" width="6" height="12" rx="3"/><path d="M5 10a7 7 0 0 0 14 0"/><path d="M12 17v4"/></svg>Sprachsteuerung (Alexa)</button>
+        <button type="button" class="tool mi hidden" id="localLink" title="Haglo Local – KI direkt auf dem Hub" aria-label="Haglo Local"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="4" y="4" width="16" height="16" rx="2"/><rect x="9" y="9" width="6" height="6"/><path d="M9 1v3M15 1v3M9 20v3M15 20v3M20 9h3M20 14h3M1 9h3M1 14h3"/></svg>Lokal</button>
+        <button type="button" class="tool mi" id="versionsLink" title="Versionen" aria-label="Versionen"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3l9 5-9 5-9-5z"/><path d="M3 13l9 5 9-5"/></svg>Versionen</button>
+      </div></div></div>
 
   <main id="main">
     <div class="brand">
@@ -399,12 +427,6 @@
   </main>
 
   <div class="composer">
-    <div class="chips" id="chips">
-      <button class="chip" data-w="Erstelle eine übersichtliche Startseite mit allen Räumen. Pro Raum Licht, Heizung, Fenster und wichtige Sensoren."><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 11l9-7 9 7"/><path d="M5 10v10h14V10"/></svg>Alle Räume</button>
-      <button class="chip" data-w="Erstelle eine Energie-Seite: Stromverbrauch, PV-Erzeugung, Speicher und Verläufe der letzten 24 Stunden."><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M13 2L4 14h7l-1 8 9-12h-7z"/></svg>Energie &amp; PV</button>
-      <button class="chip" data-w="Erstelle eine Seite für Licht und Klima: alle Lichter zum Schalten, Thermostate und Temperaturen mit Verlauf."><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 18h6M10 21h4"/><path d="M12 3a6 6 0 0 0-4 10.5c.7.7 1 1.5 1 2.5h6c0-1 .3-1.800 1-2.500A6 6 0 0 0 12 3z"/></svg>Licht &amp; Klima</button>
-      <button class="chip" data-w="Erstelle eine Sicherheits-Seite: Türen, Fenster, Bewegungsmelder, Rauchmelder und Kameras."><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3l8 3v6c0 5-3.500 8-8 9-4.500-1-8-4-8-9V6z"/></svg>Sicherheit</button>
-    </div>
     <form class="search" id="form">
       <input id="wish" autocomplete="off" placeholder="Was soll ich bauen, ändern oder schalten?">
       <button class="send" id="send" aria-label="Los">
@@ -415,12 +437,12 @@
       <button type="button" class="talk hidden" id="talk" title="Neues Gespräch beginnen"><i></i><span id="talkText"></span></button>
       <div class="tools">
         <div class="mode" role="group" aria-label="Antwortart">
-          <button type="button" data-mode="schnell" title="Schnell: antwortet zügig, ideal zum Schalten und für kurze Fragen. Verbraucht wenig vom Kontingent.">Schnell</button>
-          <button type="button" data-mode="praezise" title="Präzise: denkt gründlicher nach – für große Dashboards, Reparaturen und Einstellungen. Dauert etwas länger und verbraucht mehr vom Kontingent.">Präzise</button>
+          <button type="button" data-mode="auto" title="Auto: erst direkt auf dem Hub (Schnellweg, Haglo Local), was dort nicht geht, über die Cloud. Empfohlen.">Auto</button>
+          <button type="button" data-mode="lokal" title="Lokal: nur direkt auf deinem Hub – ohne Internet, ohne Kontingent. Die Cloud wird nie gefragt.">⚡ Lokal</button>
+          <button type="button" data-mode="cloud" title="Cloud: alles über die Cloud-KI. Haglo Assist wählt selbst, ob schnell oder gründlich – große Aufgaben bekommen mehr Denkzeit.">☁ Cloud</button>
         </div>
         <button type="button" class="tool" id="histLink" title="Verlauf" aria-label="Verlauf"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 12a9 9 0 1 0 3-6.7"/><path d="M3 4v5h5"/><path d="M12 8v4l3 2"/></svg>Verlauf</button>
         <button type="button" class="tool hidden" id="autosLink" title="Automationen" aria-label="Automationen"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M13 2L4 14h7l-1 8 9-12h-7z"/></svg>Automationen</button>
-        <button type="button" class="tool" id="versionsLink" title="Versionen" aria-label="Versionen"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3l9 5-9 5-9-5z"/><path d="M3 13l9 5 9-5"/></svg>Versionen</button>
       </div>
     </div>
   </div>
@@ -431,6 +453,8 @@
     <div class="sheet">
       <h3 id="consentTitle">Kostenlos starten</h3>
       <ul>
+        <li id="consentNew" class="hidden"><b>Wir haben die Nutzungsbedingungen bzw. die Datenschutzerklärung aktualisiert.</b>
+          Bitte lies sie dir durch und stimme zu, um Haglo Assist weiter zu nutzen.</li>
         <li id="consentOffer">Free für alle – kein Abo, keine Zahlungsdaten</li>
         <li id="consentBought">Bei Haglo gekauft? Dann ist Lite bei deinem Gerät mindestens 12 Monate ohne Aufpreis inklusive</li>
         <li>Dein Dashboard bleibt erhalten, frühere Versionen liegen nur lokal auf deinem Gerät</li>
@@ -455,6 +479,48 @@
         <label><input type="checkbox" id="optForeign"><span><b>Auch meine eigenen Automationen ändern</b><br>Dafür werden deine bestehenden Automationen an den Haglo-Server und Anthropic übertragen. Vor jeder Änderung wird die bisherige Fassung gesichert.</span></label>
         <label><input type="checkbox" id="optStates"><span><b>Aktuelle Werte für Fragen immer übertragen</b><br>Für Fragen wie „Wie warm ist es im Bad?“ werden die Werte der betroffenen Geräte übertragen, ohne jedes Mal zu fragen.</span></label>
       </div>
+    </div>
+  </div>
+
+  <div class="sheet-bg hidden" id="voice">
+    <div class="sheet wide">
+      <button class="close" id="voiceClose" aria-label="Schließen">×</button>
+      <h3>Sprachsteuerung <span class="kind">Beta</span></h3>
+      <p class="now">Schalte ausgewählte Geräte per Sprache mit Alexa – auch Google Home und Apple Home funktionieren. Die Verbindung läuft direkt in deinem Heimnetz über Matter, ohne Haglo-Server und ohne Cloud-Konto bei uns.</p>
+      <label class="vtoggle"><input type="checkbox" id="vOn"><span><b>Sprachsteuerung einschalten</b><br>Nur die Geräte, die du unten anhakst, sind für Alexa sichtbar.</span></label>
+      <div id="vPair" class="vpair hidden"></div>
+      <div id="vBody" class="hidden">
+        <input id="vFilter" class="fld" placeholder="Gerät suchen …" autocomplete="off">
+        <div class="vlist" id="vItems"></div>
+        <div class="actions" style="justify-content:flex-start;margin-top:12px"><button class="primary" id="vSave" disabled>Auswahl übernehmen</button></div>
+      </div>
+      <p class="hint" id="vMsg"></p>
+      <p class="hint">Das Echo braucht Matter-Unterstützung (z. B. Echo 4. Gen., Echo Dot ab 4. Gen., Echo Show). In Home Assistant tragen freigegebene Geräte das Label „Sprachsteuerung“. <a role="button" tabindex="0" id="vReset">Kopplung zurücksetzen</a></p>
+    </div>
+  </div>
+
+  <div class="sheet-bg hidden" id="updateSheet">
+    <div class="sheet">
+      <button class="close" id="updateClose" aria-label="Später">×</button>
+      <h3 id="updateTitle">Neue Version verfügbar</h3>
+      <p class="hint" id="updateFrom"></p>
+      <ul id="updateNotes"></ul>
+      <div class="actions">
+        <a class="primary" id="updateGo" target="_top" rel="noopener" style="display:block;text-align:center">Jetzt aktualisieren</a>
+        <button class="btn2" id="updateLater" type="button">Später</button>
+      </div>
+      <p class="hint">Öffnet die App-Seite in Home Assistant – dort auf „Aktualisieren“ tippen. Deine Einstellungen bleiben erhalten.</p>
+    </div>
+  </div>
+
+  <div class="sheet-bg hidden" id="local">
+    <div class="sheet wide">
+      <button class="close" id="localClose" aria-label="Schließen">×</button>
+      <h3>Haglo Local <span class="kind">Beta</span></h3>
+      <p class="now">Das eigene Haglo-Sprachmodell läuft direkt auf deinem Hub. Einfache Befehle – schalten, dimmen, Rollläden, Heizung, Szenen, Fragen nach Werten – versteht es ohne Internet und ohne dein Kontingent. Für alles Größere (Dashboards, Automationen, Reparaturen) den Modus „Auto“ wählen – im Modus „Lokal“ geht nichts in die Cloud.</p>
+      <label class="vtoggle"><input type="checkbox" id="lOn"><span><b>Modus „⚡ Lokal“ verwenden</b><br>Gleich wie der Knopf unter dem Eingabefeld. Beim ersten Mal lädt der Hub das Modell (etwa 400 MB).</span></label>
+      <div class="vpair" id="lState">–</div>
+      <p class="hint">Probier es: „Schreibtisch aus“, „mach es im Büro wärmer“, „ist die Garage zu?“. Antworten von Haglo Local tragen das Zeichen ⚡.</p>
     </div>
   </div>
 
@@ -496,6 +562,7 @@
       </div>
       <p class="hint">Die Limits füllen sich laufend wieder auf. Große Dashboards und lange Wünsche verbrauchen mehr als kleine Änderungen.</p>
       <p class="hint" id="hubId"></p>
+      <p class="now">⚡ <b>Schnellweg und Haglo Local sind in jedem Plan unbegrenzt</b> – Schalten, Dimmen und einfache Fragen laufen direkt auf deinem Hub, ohne Internet. Dein Plan bestimmt, wie viel Cloud-KI du für große Aufgaben nutzen kannst: Dashboards, Automationen, Reparaturen.</p>
       <p class="hint" id="planHint">Bezahlung, Rechnungen und Kündigung laufen sicher über unseren Zahlungsdienst Stripe.</p>
       <details class="ask">
         <summary>Integration anfragen</summary>
@@ -526,6 +593,7 @@ let welcomed = false;   // Begrüßung für Käufer eines Haglo-Geräts
 // Was die App lokal über das Gerät weiß, ohne etwas zu senden: marker = Geräte-Zettel der Haglo-Einrichtung
 let local = { marker: false, maybe: false };
 let wasExpired = false, resetTimer = null;
+let features = {};
 let ownerHidden = true;  // Kauf-Hinweis: bleibt verborgen, bis der Status sagt, dass er nicht weggeklickt wurde
 let dialog = [], asking = null;  // Rückfragen der KI: bisherige Antworten und die offene Frage
 
@@ -533,19 +601,63 @@ async function api(path, body) {
   const r = await fetch(path, body ? { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) } : {});
   const data = await r.json().catch(() => ({ ok: false, error: "Ungültige Antwort" }));
   if (data.prefs) { ownerHidden = !!data.prefs.owner_hint_dismissed; showMode(data.prefs.mode); }
+  if (data.features) {                     // schlanke Ausgabe: ohne Sprachmodell bzw. ohne Alexa-Sprachsteuerung
+    features = data.features;
+    $("voiceLink").classList.toggle("hidden", data.features.voice === false);
+  }
   if (data.trial) setTrial(data.trial);
+  if ("terms_update" in data) showTermsUpdate(data.terms_update);
+  if ("update" in data) showUpdate(data.update);
   if (!data.ok) { const e = new Error(data.error || "Unbekannter Fehler"); e.code = data.error; throw e; }
   return data;
 }
 
-// Schnell / Präzise: Voreinstellung ist Schnell
+// Neue Nutzungsbedingungen/Datenschutzerklärung: zustimmen, bevor es weitergeht (auch lokal)
+let termsBlocked = false;
+function showTermsUpdate(on) {
+  termsBlocked = !!on;
+  $("consentNew").classList.toggle("hidden", !on);
+  for (const id of ["consentOffer", "consentBought"]) if (on) $(id).classList.add("hidden");
+  if (on) {
+    $("consentTitle").textContent = "Neue Bedingungen";
+    $("accept").textContent = "Zustimmen";
+    $("consent").classList.remove("hidden");
+    $("updateSheet").classList.add("hidden");
+    setInputs(false);
+  }
+}
+
+// Neue Version der App: Hinweis mit den Neuerungen; „Später“ blendet ihn für einen Tag aus
+function showUpdate(u) {
+  if (!u || termsBlocked) return;
+  let later = null;
+  try { later = JSON.parse(localStorage.getItem("haglo.updateLater") || "null"); } catch (e) {}
+  if (later && later.v === u.version && Date.now() - later.t < 86400000) return;
+  $("updateTitle").textContent = `Neue Version ${u.version} verfügbar`;
+  $("updateFrom").textContent = `Du nutzt Version ${u.current}. Neu:`;
+  $("updateNotes").innerHTML = (u.notes.length ? u.notes : ["Verbesserungen und Fehlerbehebungen"]).map((n) => `<li>${esc(n)}</li>`).join("");
+  $("updateGo").href = u.url;
+  $("updateSheet").dataset.v = u.version;
+  $("updateSheet").classList.remove("hidden");
+}
+function updateLater() {
+  try { localStorage.setItem("haglo.updateLater", JSON.stringify({ v: $("updateSheet").dataset.v, t: Date.now() })); } catch (e) {}
+  $("updateSheet").classList.add("hidden");
+}
+$("updateLater").addEventListener("click", updateLater);
+$("updateClose").addEventListener("click", updateLater);
+
+// Auto / Lokal / Cloud: Voreinstellung ist Auto
 function showMode(m) {
-  const mode = m === "praezise" ? "praezise" : "schnell";
+  const mode = ["schnell", "praezise"].includes(m) ? "cloud" : ["lokal", "cloud"].includes(m) ? m : "auto";
   document.querySelectorAll(".mode [data-mode]").forEach((b) => b.classList.toggle("on", b.dataset.mode === mode));
 }
 document.querySelectorAll(".mode [data-mode]").forEach((b) => b.addEventListener("click", async () => {
   showMode(b.dataset.mode);
   try { await api("api/prefs", { mode: b.dataset.mode }); } catch (e) {}
+  if (b.dataset.mode === "lokal") {      // Status zeigen, solange das Modell lädt
+    if (features.model !== false) try { const r = await api("api/local"); if (r.status !== "bereit") openLocal(); } catch (e) {}
+  }
 }));
 showMode();
 
@@ -576,7 +688,7 @@ function setTrial(t) {
   $("consentBought").classList.toggle("hidden", bought);
   $("accept").textContent = bought ? "Zustimmen & Lite aktivieren" : "Zustimmen & loslegen";
   if (!t.accepted) { p.textContent = bought ? "Lite inklusive · Loslegen" : "Kostenlos starten"; p.classList.add("cta"); }
-  else if (t.expired) { p.textContent = `${t.plan_name || ""} · Limit erreicht`; p.classList.add("end"); showExpired(); }
+  else if (t.expired) { p.textContent = `${t.plan_name || ""} · Cloud-Limit erreicht`; p.classList.add("end"); }
   else if (!t.plan) { p.textContent = "Haglo Assist"; }
   else if (t.plan === "trial") {
     p.innerHTML = `Testphase · noch ${days}<span class="long"> · ${used}</span>`;
@@ -778,6 +890,15 @@ const STEP_ICON = {
   action: STEP_SVG('<path d="M13 3L5 14h6l-1 7 8-11h-6l1-7z"/>'),
 };
 
+// Ehrlicher Hinweis auf einen größeren Plan: nur bei Cloud-Antworten, nur wenn das Kontingent spürbar
+// genutzt ist und es einen größeren Plan gibt – nie bei lokalen Antworten.
+function upsell(h) {
+  if (!trial || !trial.window || (trial.subscription && trial.subscription.active && trial.level === "max")) return "";
+  const pct = Math.max(trial.window.used_pct || 0, (trial.week && trial.week.used_pct) || 0);
+  if (pct < 50) return "";
+  return ` · <a role="button" tabindex="0" data-plans-open>${pct >= 80 ? "Kontingent fast aufgebraucht – mehr mit einem größeren Plan" : "Mehr Cloud-Antworten mit einem größeren Plan"}${trial && trial.trial_offer_days ? ` (${trial.trial_offer_days} Tage gratis testen)` : ""} ›</a>`;
+}
+
 function historyMsg(h) {
   const title = h.kind === "dashboard" && h.target ? (h.created ? `Neues Dashboard „${h.target}“ in der Seitenleiste` : h.target === "Startseite" ? "Startseite geändert" : `„${h.target}“ geändert`) : KIND[h.kind], undone = h.undone ? `<div class="gone">↩ Rückgängig gemacht</div>` : "";
   const body = h.kind === "answer" ? md(h.text)
@@ -789,8 +910,10 @@ function historyMsg(h) {
       <span class="tx"><b>${esc(s.title)}</b>${s.sub ? `<small>${esc(s.sub)}</small>` : ""}</span>
       ${s.url ? '<span class="go2" aria-hidden="true">›</span>' : ""}</a>`).join("")}</div>` : "";
   const undo = h.can_undo ? `<div class="links"><button class="undo" data-undo="${esc(h.id)}">Rückgängig</button></div>` : "";
+  const lok = h.local ? `<div class="lok" title="Direkt auf dem Hub, ohne Internet und Kontingent">⚡ Lokal</div>`
+    : h.route ? `<div class="lok cloud">☁ Cloud${upsell(h)}</div>` : "";
   return (h.wish ? `<div class="msg user"><div class="bub">${esc(h.wish)}</div></div>` : "")
-    + `<div class="msg bot${h.undone ? " was" : ""}"><div class="bub">${body}${steps}${open ? `<div class="actions">${open}</div>` : ""}${undo}${undone}</div>
+    + `<div class="msg bot${h.undone ? " was" : ""}"><div class="bub">${body}${steps}${open ? `<div class="actions">${open}</div>` : ""}${undo}${undone}${lok}</div>
        <span class="when2">${stamp(h.ts)}</span></div>`;
 }
 
@@ -849,7 +972,7 @@ async function waitForJob(job) {
     try { const s = await api("api/status"); if (!s.busy) break; } catch (e) {}
   }
   busy = false; dismiss();
-  if (!(trial && trial.expired)) setInputs(true);
+  setInputs(true);
   await loadHistory();
 }
 
@@ -881,11 +1004,15 @@ async function init() {
 
 $("wish").addEventListener("input", () => mem.set("draft", $("wish").value));
 $("form").addEventListener("submit", (e) => { e.preventDefault(); run($("wish").value.trim()); });
+// „⋯“-Menü: öffnen/schließen; ein Klick auf einen Eintrag schließt es wieder
+$("moreBtn").addEventListener("click", (e) => { e.stopPropagation(); const m = $("moreMenu"); m.classList.toggle("hidden");
+  $("moreBtn").setAttribute("aria-expanded", String(!m.classList.contains("hidden"))); });
+document.addEventListener("click", (e) => { if (!e.target.closest(".more")) $("moreMenu").classList.add("hidden"); });
+$("moreMenu").addEventListener("click", () => setTimeout(() => $("moreMenu").classList.add("hidden"), 0));
 document.querySelectorAll(".chip").forEach((c) => c.addEventListener("click", () => run(c.dataset.w, c.textContent)));
 
 function run(wish, label) {
   if (busy || !wish) { if (!wish) $("wish").focus(); return; }
-  if (trial && trial.expired) return showExpired();
   if (trial && !trial.accepted) { pending = [wish, label]; $("consent").classList.remove("hidden"); return; }
   generate(wish, label);
 }
@@ -896,6 +1023,7 @@ $("accept").addEventListener("click", async () => {
   try {
     await api("api/consent", { version: (trial && trial.terms_version) || "2026-10-14" });
     $("consent").classList.add("hidden");
+    if (termsBlocked) { termsBlocked = false; setInputs(true); }
     if (welcomed && !pending) dismiss();
     if (pending) generate(...pending);
     pending = null;
@@ -934,12 +1062,12 @@ async function generate(wish, label, keepDialog, allowStates) {
     dismiss(); await loadHistory();      // das Ergebnis steht jetzt als Eintrag im Verlauf, mit „Rückgängig“
   } catch (e) {
     if (e.code === "consent_required") { dismiss(); pending = [wish, label]; $("consent").classList.remove("hidden"); }
-    else if (e.code === "trial_expired") { /* die Limit-Karte steht schon da */ }
+    else if (e.code === "trial_expired") showExpired();      // nur Cloud-Wünsche; Lokales läuft weiter
     else showResult(`<p class="err">Das hat nicht geklappt: ${esc(e.message)}</p>`);
   } finally {
     clearInterval(t);
     if (cur && cur.querySelector(".typing")) dismiss();
-    busy = false; if (!(trial && trial.expired)) setInputs(true);
+    busy = false; setInputs(true);
   }
 }
 
@@ -1003,14 +1131,17 @@ $("result").addEventListener("click", (e) => {
 });
 
 function showExpired() {
-  setInputs(false);
   const order = ["free", "lite", "pro", "max"], top = (trial.level || trial.plan) === "max";
   const weekly = trial.week && trial.week.blocked;
   showResult(`
-    <h2>Limit erreicht</h2>
+    <h2>Cloud-Limit erreicht</h2>
     <p>Dein Dashboard bleibt erhalten. ${weekly ? "Dein Wochenlimit ist aufgebraucht" : `Dein ${trial.window_hours || 5}-Stunden-Limit ist aufgebraucht`} –
-      weiter geht es ${resetText(trial.reset_at)}.${top ? "" : " Mit einem größeren Plan kannst du sofort weitermachen."}</p>
-    <div class="actions">${top ? "" : '<button class="primary" data-plans>Pläne ansehen</button>'}</div>`);
+      weiter geht es ${resetText(trial.reset_at)}.${top ? "" : " Mit einem größeren Plan kannst du sofort weitermachen."}
+      Schalten, Timer und alles, was direkt auf dem Hub läuft, geht ganz normal weiter.</p>
+    <div class="actions">${top ? "" : trial.trial_offer_days
+      ? `<button class="primary" data-plans>Pro ${trial.trial_offer_days} Tage kostenlos testen</button>`
+      : '<button class="primary" data-plans>Pläne ansehen</button>'}</div>
+    ${!top && trial.trial_offer_days ? '<p class="hint">Danach normaler Preis, jederzeit kündbar – vorher erinnern wir dich per E-Mail.</p>' : ""}`);
 }
 
 // ---------------------------------------------------------------- Plan & Abo
@@ -1055,7 +1186,8 @@ function renderPlans() {
       if (included) action = `<span class="tag2 inc">Inklusive, weil du bei Haglo gekauft hast${trial.included_until ? ` – mindestens bis ${new Date(trial.included_until * 1000).toLocaleDateString("de-DE")}` : ""}</span>`;
       else if (sub.plan === key) action = `<span class="tag2">Dein Abo</span>`;
       else if (sub.active) action = `<button class="btn2" data-portal>Wechseln</button>`;
-      else if (bookable) action = `<button class="primary" data-plan="${esc(key)}">${esc(p.name)} wählen</button>`;
+      else if (bookable) action = `<button class="primary" data-plan="${esc(key)}">${trial && trial.trial_offer_days
+        ? `${trial.trial_offer_days} Tage gratis testen` : `${esc(p.name)} wählen`}</button>`;
       else action = `<span class="tag2">Bald verfügbar</span>`;
     }
     return `<div class="plan${cur ? " cur" : ""}"><b>${esc(p.name)}</b><div class="price">${included ? "inklusive" : price}</div>
@@ -1085,6 +1217,7 @@ async function devSet(body) {
 $("devPlan").addEventListener("change", () => devSet({ plan: $("devPlan").value || null }));
 $("devReset").addEventListener("click", () => devSet({ plan: $("devPlan").value || null, reset_limits: true }));
 
+$("result").addEventListener("click", (e) => { if (e.target.closest("[data-plans-open]")) openPlans(); });
 $("owner").addEventListener("click", async (e) => {
   if (e.target.closest("#ownerClose")) {       // dauerhaft ausblenden, gespeichert auf dem Gerät
     ownerHidden = true; $("owner").classList.add("hidden");
@@ -1195,7 +1328,7 @@ async function connectDevice(wish, d, mqtt) {
     if (r.need_mqtt) { showMqttForm(wish, d, r.need_mqtt); return; }
     dismiss(); await loadHistory();
   } catch (e) { showResult(`<p class="err">Das hat nicht geklappt: ${esc(e.message)}</p>`); }
-  finally { busy = false; if (!(trial && trial.expired)) setInputs(true); }
+  finally { busy = false; setInputs(true); }
 }
 
 // MQTT läuft, aber die App kennt die Zugangsdaten nicht: Der Nutzer trägt sie ein. Sie bleiben lokal.
@@ -1390,6 +1523,99 @@ $("autos").addEventListener("click", async (e) => {
   b.disabled = true;
   try { await api("api/automations/delete", { id: b.dataset.del }); openAutos(); loadHistory(); }
   catch (err) { $("aHint").textContent = err.message; $("aHint").classList.add("err"); b.disabled = false; }
+});
+
+// ---------------------------------------------------------------- Sprachsteuerung
+let vItems = [], vChosen = new Set(), vTimer = null;
+function vRender() {
+  const q = $("vFilter").value.trim().toLowerCase();
+  const list = vItems.filter((i) => !q || (i.name + " " + i.area + " " + i.art).toLowerCase().includes(q));
+  $("vItems").innerHTML = list.length ? list.map((i) => `<label class="vitem"><input type="checkbox" data-v="${esc(i.id)}"${vChosen.has(i.id) ? " checked" : ""}>
+      <div class="info"><div class="n">${esc(i.name)} <span class="kind">${esc(i.art)}</span></div>
+      <div class="d">${esc([i.area, i.alexa !== i.name ? `in Alexa: „${i.alexa}“` : ""].filter(Boolean).join(" · "))}</div></div></label>`).join("")
+    : `<p class="now">${vItems.length ? "Nichts gefunden." : "Keine schaltbaren Geräte gefunden."}</p>`;
+  const before = new Set(vItems.filter((i) => i.on).map((i) => i.id));
+  $("vSave").disabled = before.size === vChosen.size && [...vChosen].every((x) => before.has(x));
+}
+function vPair(r) {
+  const box = $("vPair");
+  if (!r.enabled) { box.classList.add("hidden"); return; }
+  box.classList.remove("hidden");
+  if (r.paired) box.innerHTML = `<b>✓ Gekoppelt.</b> Sag zum Beispiel: „Alexa, schalte ${esc((vItems.find((i) => i.on) || {}).alexa || "die Steckdose")} ein.“<br><span class="hint">Neu angehakte Geräte erscheinen nach etwa einer Minute in der Alexa-App.</span>`;
+  else if (r.manual) box.innerHTML = `<b>Jetzt in der Alexa-App koppeln</b><div class="code">${esc(r.manual)}</div>
+      <ol><li>Alexa-App → <b>Geräte</b> → <b>+</b> → <b>Gerät hinzufügen</b> → <b>Andere</b> → <b>Matter</b></li>
+      <li>Beim QR-Code die Option für den <b>Zahlencode</b> wählen (Alexa nennt es z. B. „Code eingeben“)</li>
+      <li>Diesen Code eingeben. Danach erscheinen die angehakten Geräte.</li></ol>`;
+  else box.innerHTML = r.error ? `<span class="err">${esc(r.error)}</span>` : `Sprach-Modul startet … das dauert beim ersten Mal bis zu zwei Minuten.`;
+}
+async function openVoice(keep) {
+  $("voice").classList.remove("hidden");
+  if (!keep) { $("vMsg").textContent = ""; $("vMsg").classList.remove("err"); }
+  try {
+    const r = await api("api/voice");
+    vItems = r.items; if (!keep) vChosen = new Set(r.items.filter((i) => i.on).map((i) => i.id));
+    $("vOn").checked = r.enabled; $("vBody").classList.toggle("hidden", !r.enabled);
+    vPair(r); vRender();
+    clearTimeout(vTimer);
+    if (r.enabled && !r.paired && !$("voice").classList.contains("hidden")) vTimer = setTimeout(() => openVoice(true), 4000);
+  } catch (e) { $("vMsg").textContent = e.message; $("vMsg").classList.add("err"); }
+}
+function closeVoice() { $("voice").classList.add("hidden"); clearTimeout(vTimer); }
+$("voiceLink").addEventListener("click", () => openVoice());
+$("voiceLink").addEventListener("keydown", (e) => { if (e.key === "Enter") openVoice(); });
+$("voiceClose").addEventListener("click", closeVoice);
+$("voice").addEventListener("click", (e) => { if (e.target === $("voice")) closeVoice(); });
+$("vFilter").addEventListener("input", vRender);
+$("vItems").addEventListener("change", (e) => {
+  const id = e.target.dataset.v; if (!id) return;
+  e.target.checked ? vChosen.add(id) : vChosen.delete(id); vRender();
+});
+$("vOn").addEventListener("change", async (e) => {
+  e.target.disabled = true;
+  try { await api("api/voice", { enabled: e.target.checked }); await openVoice(true); }
+  catch (err) { $("vMsg").textContent = err.message; $("vMsg").classList.add("err"); e.target.checked = !e.target.checked; }
+  e.target.disabled = false;
+});
+$("vSave").addEventListener("click", async () => {
+  $("vSave").disabled = true; $("vSave").textContent = "Wird übernommen …";
+  try {
+    const r = await api("api/voice", { entities: [...vChosen] });
+    $("vMsg").classList.remove("err");
+    $("vMsg").textContent = r.changed ? "Übernommen. In etwa einer Minute sieht Alexa die Änderung." : "Keine Änderung.";
+    await openVoice(true);
+  } catch (err) { $("vMsg").textContent = err.message; $("vMsg").classList.add("err"); }
+  $("vSave").textContent = "Auswahl übernehmen";
+});
+$("vReset").addEventListener("click", async () => {
+  const b = $("vReset");
+  if (!b.dataset.sure) { b.dataset.sure = "1"; b.textContent = "Wirklich zurücksetzen? Alexa verliert die Geräte."; setTimeout(() => { delete b.dataset.sure; b.textContent = "Kopplung zurücksetzen"; }, 6000); return; }
+  delete b.dataset.sure; b.textContent = "Kopplung zurücksetzen";
+  $("vMsg").classList.remove("err"); $("vMsg").textContent = "Kopplung wird zurückgesetzt …";
+  try { await api("api/voice/reset", {}); $("vMsg").textContent = "Zurückgesetzt. In der Alexa-App die alten Geräte entfernen und neu koppeln."; openVoice(true); }
+  catch (err) { $("vMsg").textContent = err.message; $("vMsg").classList.add("err"); }
+});
+
+// ---------------------------------------------------------------- Haglo Local
+let lTimer = null;
+async function openLocal() {
+  $("local").classList.remove("hidden");
+  try {
+    const r = await api("api/local");
+    $("lOn").checked = r.enabled;
+    const st = r.status === "bereit" ? `<b>✓ Bereit.</b>${r.last_ms ? ` Letzte Antwort in ${(r.last_ms / 1000).toFixed(1).replace(".", ",")} s.` : ""}`
+      : r.status === "lädt Modell" ? `Lädt das Modell … ${r.progress || 0} %` : r.status === "startet" ? "Startet …" : r.status === "aus" ? "Aus." : esc(r.status);
+    $("lState").innerHTML = st;
+    clearTimeout(lTimer);
+    if (r.enabled && r.status !== "bereit" && !$("local").classList.contains("hidden")) lTimer = setTimeout(openLocal, 3000);
+  } catch (e) { $("lState").textContent = e.message; }
+}
+$("localLink").addEventListener("click", openLocal);
+$("localClose").addEventListener("click", () => { $("local").classList.add("hidden"); clearTimeout(lTimer); });
+$("local").addEventListener("click", (e) => { if (e.target === $("local")) { $("local").classList.add("hidden"); clearTimeout(lTimer); } });
+$("lOn").addEventListener("change", async (e) => {
+  e.target.disabled = true;
+  try { await api("api/local", { enabled: e.target.checked }); showMode(e.target.checked ? "lokal" : "auto"); await openLocal(); } catch (err) { $("lState").textContent = err.message; }
+  e.target.disabled = false;
 });
 
 // ---------------------------------------------------------------- Versionen
