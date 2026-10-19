@@ -2687,7 +2687,7 @@ async def generate(request):
         # Lokal heißt lokal: nie still an Claude weitergeben. Ehrlich sagen, was lokal nicht geht.
         text = ("Das geht lokal nicht – dafür „Auto“ oder „Cloud“ wählen.") if complex_wish else \
                ("Das habe ich lokal nicht sicher verstanden. Gerät oder Raum genauer nennen – oder „Auto“ wählen.")
-        print(f"[Lokal] nicht lokal lösbar, Claude NICHT gefragt (Modus Lokal) | {wish!r}", flush=True)
+        print(f"[Lokal] nicht lokal lösbar, Cloud NICHT gefragt (Modus Lokal) | {wish!r}", flush=True)
         add_history("answer", wish, text, local=1)
         return web.json_response({"ok": True, "answer": text, "local": 1})
     # Welche Claude-Stufe? Die App wählt selbst: große Aufgaben, Rückfragen und Verfeinern gründlich, sonst schnell.
@@ -3707,7 +3707,7 @@ async def local_answer(app, wish: str, use_model: bool = True, code_only: bool =
     if res["kind"] == "dashboard":
         title, cfg = local_ai.dashboard_config(res["plan"], states, areas, app.get("registry_cache"))
         if not cfg.get("views"):
-            print(f"[Lokal] Dashboard-Plan ohne passende Geräte → Claude | {wish!r}", flush=True)
+            print(f"[Lokal] Dashboard-Plan ohne passende Geräte → Cloud | {wish!r}", flush=True)
             return None
         cards = sum(len(sec["cards"]) - 1 for sec in cfg["views"][0]["sections"])
         async with HAClient(session) as ha:

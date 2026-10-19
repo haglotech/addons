@@ -19,10 +19,10 @@
 - Haglo Local kann jetzt mehr direkt auf dem Hub, ohne Internet und Kontingent: Timer („in 10 Minuten Licht aus“), einfache
   Automationen (Uhrzeit und Wochentage, Sonnenauf- und -untergang, Bewegung, Tür/Fenster, Temperatur und Luftfeuchtigkeit) und
   neue Dashboards für Räume oder Gerätearten mit Eintrag in der Seitenleiste
-- Automationen legt Haglo Local erst nach „Ja“ an, wie bei Claude; Timer und neue Dashboards lassen sich rückgängig machen
+- Automationen legt Haglo Local erst nach „Ja“ an, wie bei die Cloud-KI; Timer und neue Dashboards lassen sich rückgängig machen
 - Timer überstehen einen Neustart; was länger als 10 Minuten verpasst wurde, verfällt
 - Neues Sprachmodell (Qwen3-0.6B + Haglo-Adapter); „wärmer/kühler“ und Farbtemperaturen rechnet der Code, nicht das Modell
-- Was lokal nicht sicher geht (Fehlersuche, Energie-Auswertungen, Umbauten), übernimmt wie bisher Claude
+- Was lokal nicht sicher geht (Fehlersuche, Energie-Auswertungen, Umbauten), übernimmt wie bisher die Cloud-KI
 - „Schreibtisch für 10 Minuten an“, „Licht an und in 5 Minuten wieder aus“, „in 1 Minute …“ und Zeit-Automationen
   („jeden Abend um halb 8 …“, „bei Sonnenuntergang …“) erkennt die App sofort, ohne Sprachmodell
 - Neu: Haglo Assist als Assistent in Home Assistant – unter Einstellungen → Sprachassistenten als Konversationsagent

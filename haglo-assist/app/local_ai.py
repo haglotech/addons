@@ -5,7 +5,7 @@ Ablauf je Befehl:
    Raum und Gerätart. Das hält den Text für das Modell kurz und damit schnell.
 2. Das Modell (Qwen3-0.6B + Haglo-Adapter, läuft mit llama.cpp lokal) antwortet mit kompaktem JSON:
    Aktionen, eine Antwort, eine Rückfrage, einen Timer ("in"), eine Automation ("au"), einen
-   Dashboard-Plan ("db") – oder {"c":1}: „zu komplex, bitte an Claude“.
+   Dashboard-Plan ("db") – oder {"c":1}: „zu komplex, bitte an Cloud“.
    Rechnen (wärmer/kühler), Farbwerte und das Zusammenbauen von Automation und Dashboard macht der Code.
 3. Aktionen laufen durch dieselben Prüfungen wie bei der Cloud (erlaubte Bereiche, Schlösser/Tore nur
    nach Bestätigung). Nichts verlässt das Heimnetz.
@@ -322,7 +322,7 @@ RE_CLOSE = re.compile(r"\b(zu|schliess\w*|runter)\b")
 
 def model_guard(wish: str, acts: list[dict], states: list[dict], areas: dict[str, str]) -> dict | None:
     """Prüft die Aktionen des kleinen Modells gegen den Wortlaut, bevor etwas schaltet.
-    → None: in Ordnung. → {"kind": "question", ...}: lieber nachfragen. → {"kind": "claude"}: Claude übernimmt."""
+    → None: in Ordnung. → {"kind": "question", ...}: lieber nachfragen. → {"kind": "claude"}: Cloud übernimmt."""
     w = norm(wish)
     toks = set(w.split())
     by_id = {s["entity_id"]: s for s in states}
@@ -536,7 +536,7 @@ def fix_values(wish: str, out: dict, idx: dict[int, str], by_id: dict[str, dict]
 
 
 def plan_ok(wish: str, out: dict, idx: dict[int, str], by_id: dict[str, dict]) -> bool:
-    """Feste Prüfung von Timer/Automation/Dashboard – lieber Claude fragen als etwas Falsches anlegen."""
+    """Feste Prüfung von Timer/Automation/Dashboard – lieber Cloud fragen als etwas Falsches anlegen."""
     if "au" in out:
         au = out["au"] if isinstance(out["au"], dict) else {}
         w = au.get("w") if isinstance(au.get("w"), dict) else {}
@@ -568,7 +568,7 @@ def plan_ok(wish: str, out: dict, idx: dict[int, str], by_id: dict[str, dict]) -
 
 
 def automation_object(au: dict, idx: dict[int, str], by_id: dict[str, dict], text: str, areas: dict[str, str] | None = None) -> dict:
-    """Plan → Automation im Format von /api/automations/apply (gleiche Bestätigung wie bei Claude)."""
+    """Plan → Automation im Format von /api/automations/apply (gleiche Bestätigung wie bei Cloud)."""
     areas_of = lambda e: (areas or {}).get(e, "")
     w, b = au["w"], au.get("b") if isinstance(au.get("b"), dict) else {}
     trig, cond, wann, short = [], [], "", ""
@@ -847,7 +847,7 @@ RE_MULTI_DASH = re.compile(r"\b(und dann|danach|außerdem|ausserdem)\b|\b(schalt
 
 
 def code_rules(wish: str, out: dict, idx: dict[int, str], by_id: dict[str, dict], areas: dict[str, str]) -> dict | None:
-    """Was das kleine Modell schlecht kann, macht der Code; was nicht zum Wunsch passt, geht an Claude (None)."""
+    """Was das kleine Modell schlecht kann, macht der Code; was nicht zum Wunsch passt, geht an Cloud (None)."""
     low = norm(wish)
     named = rooms_named(wish, areas)
     room_words = {x for r in set(areas.values()) for x in words(r)}
@@ -1699,7 +1699,7 @@ class LocalAI:
     # ------------------------------------------------------------ Befehl verstehen
     async def understand(self, wish: str, states: list[dict], areas: dict[str, str], use_model: bool = True) -> dict | None:
         """Gibt {"kind": "actions"|"answer"|"question"|"timer"|"automation"|"dashboard", ...} zurück –
-        oder None (→ Claude übernimmt)."""
+        oder None (→ Cloud übernimmt)."""
         t_start = time.time()
         talk = small_talk(wish, states)
         if talk:
@@ -1766,7 +1766,7 @@ class LocalAI:
                     return None
                 data = await r.json()
         except asyncio.TimeoutError:
-            print(f"[Lokal] über {limit} s – Claude übernimmt: {wish!r}", flush=True)
+            print(f"[Lokal] über {limit} s – Cloud übernimmt: {wish!r}", flush=True)
             return None
         except Exception:
             return None
@@ -1777,14 +1777,14 @@ class LocalAI:
         if not isinstance(out, dict) or out.get("c"):
             return None
         if not plan_ok(wish, out, idx, by_id):
-            print(f"[Lokal] Prüfung: Plan passt nicht zum Wunsch → Claude | {wish!r}", flush=True)
+            print(f"[Lokal] Prüfung: Plan passt nicht zum Wunsch → Cloud | {wish!r}", flush=True)
             return None
         if planned and out.get("a") and "in" not in out and not out.get("au"):
-            print(f"[Lokal] Prüfung: Wunsch klingt nach später/Bedingung, Modell will sofort schalten → Claude | {wish!r}", flush=True)
+            print(f"[Lokal] Prüfung: Wunsch klingt nach später/Bedingung, Modell will sofort schalten → Cloud | {wish!r}", flush=True)
             return None
         out = code_rules(wish, fix_values(wish, out, idx, by_id), idx, by_id, areas)
         if out is None:
-            print(f"[Lokal] Prüfung: Gerät/Raum passt nicht zum Wunsch → Claude | {wish!r}", flush=True)
+            print(f"[Lokal] Prüfung: Gerät/Raum passt nicht zum Wunsch → Cloud | {wish!r}", flush=True)
             return None
         names = {e: (st.get("attributes") or {}).get("friendly_name") or e for e, st in by_id.items()}
         if "au" in out:

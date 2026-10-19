@@ -495,7 +495,7 @@
     <div class="sheet wide">
       <button class="close" id="localClose" aria-label="Schließen">×</button>
       <h3>Haglo Local <span class="kind">Beta</span></h3>
-      <p class="now">Das eigene Haglo-Sprachmodell läuft direkt auf deinem Hub. Einfache Befehle – schalten, dimmen, Rollläden, Heizung, Szenen, Fragen nach Werten – versteht es ohne Internet und ohne dein Kontingent. Für alles Größere (Dashboards, Automationen, Reparaturen) den Modus „Auto“ wählen – im Modus „Lokal“ wird Claude nie gefragt.</p>
+      <p class="now">Das eigene Haglo-Sprachmodell läuft direkt auf deinem Hub. Einfache Befehle – schalten, dimmen, Rollläden, Heizung, Szenen, Fragen nach Werten – versteht es ohne Internet und ohne dein Kontingent. Für alles Größere (Dashboards, Automationen, Reparaturen) den Modus „Auto“ wählen – im Modus „Lokal“ geht nichts in die Cloud.</p>
       <label class="vtoggle"><input type="checkbox" id="lOn"><span><b>Modus „⚡ Lokal“ verwenden</b><br>Gleich wie der Knopf unter dem Eingabefeld. Beim ersten Mal lädt der Hub das Modell (etwa 400 MB).</span></label>
       <div class="vpair" id="lState">–</div>
       <p class="hint">Probier es: „Schreibtisch aus“, „mach es im Büro wärmer“, „ist die Garage zu?“. Antworten von Haglo Local tragen das Zeichen ⚡.</p>
@@ -540,7 +540,7 @@
       </div>
       <p class="hint">Die Limits füllen sich laufend wieder auf. Große Dashboards und lange Wünsche verbrauchen mehr als kleine Änderungen.</p>
       <p class="hint" id="hubId"></p>
-      <p class="now">⚡ <b>Schnellweg und Haglo Local sind in jedem Plan unbegrenzt</b> – Schalten, Dimmen und einfache Fragen laufen direkt auf deinem Hub, ohne Internet. Dein Plan bestimmt, wie viel Claude du für große Aufgaben nutzen kannst: Dashboards, Automationen, Reparaturen.</p>
+      <p class="now">⚡ <b>Schnellweg und Haglo Local sind in jedem Plan unbegrenzt</b> – Schalten, Dimmen und einfache Fragen laufen direkt auf deinem Hub, ohne Internet. Dein Plan bestimmt, wie viel Cloud-KI du für große Aufgaben nutzen kannst: Dashboards, Automationen, Reparaturen.</p>
       <p class="hint" id="planHint">Bezahlung, Rechnungen und Kündigung laufen sicher über unseren Zahlungsdienst Stripe.</p>
       <details class="ask">
         <summary>Integration anfragen</summary>
@@ -826,7 +826,7 @@ const STEP_ICON = {
   action: STEP_SVG('<path d="M13 3L5 14h6l-1 7 8-11h-6l1-7z"/>'),
 };
 
-// Ehrlicher Hinweis auf einen größeren Plan: nur bei Claude-Antworten, nur wenn das Kontingent spürbar
+// Ehrlicher Hinweis auf einen größeren Plan: nur bei Cloud-Antworten, nur wenn das Kontingent spürbar
 // genutzt ist und es einen größeren Plan gibt – nie bei lokalen Antworten.
 function upsell(h) {
   if (!trial || !trial.window || (trial.subscription && trial.subscription.active && trial.level === "max")) return "";
