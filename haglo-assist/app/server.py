@@ -2676,7 +2676,8 @@ async def generate(request):
         try:
             # Cloud: nur der Schnellweg (eindeutige Schaltbefehle ohne KI, kostet nichts) – alles andere Claude
             done = await local_answer(request.app, wish, use_model=mode == "lokal" or (
-                mode == "auto" and (not complex_wish or bool(local_ai.PLAN.search(wish)))), code_only=mode == "cloud")
+                mode == "auto" and (not complex_wish or bool(local_ai.PLAN.search(wish)) or bool(local_ai.DASH_CUE.search(wish)))),
+                code_only=mode == "cloud")
         except Exception as e:
             print(f"[Lokal] übersprungen: {e}", flush=True)
             done = None
@@ -3673,7 +3674,7 @@ async def local_answer(app, wish: str, use_model: bool = True, code_only: bool =
     # Sicherheit: Wenn-dann-Wünsche, Zeitpläne, Automationen und Dashboards schaltet der Schnellweg nie sofort.
     # Das Modell darf sie planen (Timer, Automation mit Bestätigung, neues Dashboard mit Rückgängig);
     # Fehlersuche und alles andere Komplexe geht an Claude.
-    if is_complex(wish) and not local_ai.PLAN.search(wish):
+    if is_complex(wish) and not (local_ai.PLAN.search(wish) or local_ai.DASH_CUE.search(wish) or local_ai.time_cue(wish)):
         print(f"[Lokal] komplex → nicht lokal | {wish!r}", flush=True)
         return None
     if code_only and local_ai.DASH_CUE.search(wish):

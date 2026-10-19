@@ -834,7 +834,7 @@ def dash_plan_from_wish(wish: str, areas: dict[str, str]) -> dict | None:
                   "brauch", "brauche", "haette", "gern", "gerne", "will", "moechte", "ganzes", "haus", "zuhause", "schoenes", "einer"}
     taken = {norm(r).strip() for r in rooms} | {x for x in ww for k in kinds for v in DASH_WORDS[k] if x == norm(v).strip()}
     q = [x for x in ww if x not in dash_words and x not in taken and not any(similar(x, w) for r in rooms for w in words(r))
-         and len(x) >= 4]
+         and len(x) >= 4 and not DASH_CUE.search(x)] if not rooms and not kinds else []
     name = " & ".join(rooms) if rooms else " & ".join(k.capitalize() for k in kinds) if kinds else "Mein Zuhause"
     if q and not rooms and not kinds:
         name = " ".join(x.capitalize() for x in q)
@@ -1094,7 +1094,8 @@ RE_HELLO = re.compile(r"^\W*(hi|hallo|hey|moin|servus|guten (morgen|tag|abend)|g
 RE_THANKS = re.compile(r"^\W*(danke|danke schoen|dankeschoen|vielen dank|merci|thx|thanks|super|top|passt|perfekt|cool|klasse|"
                        r"geil|nice|ok|okay|alles klar)\W*(danke)?\W*$", re.I)
 RE_HELP = re.compile(r"^\W*(was kannst du( alles)?|was kann ich (dich )?fragen|hilfe|help|wie funktionierst du|"
-                     r"was geht( lokal)?|wer bist du|was bist du)\W*$", re.I)
+                     r"was geht( lokal)?)\W*$", re.I)
+RE_NAME = re.compile(r"^\W*(wie hei(ss|s)t du|wer bist du|was bist du|wie ist dein name|dein name)\W*$", re.I)
 
 
 def small_talk(wish: str, states: list[dict]) -> str | None:
@@ -1103,6 +1104,8 @@ def small_talk(wish: str, states: list[dict]) -> str | None:
         return "Hallo! Sag einfach, was ich schalten soll – zum Beispiel „Licht im Wohnzimmer an“."
     if RE_THANKS.match(low):
         return "Gern!"
+    if RE_NAME.match(low):
+        return "Ich bin Haglo Local – der Assistent, der direkt auf deinem Hub läuft, ohne Internet."
     if RE_HELP.match(low):
         ex = [(st.get("attributes") or {}).get("friendly_name") for st in states
               if st["entity_id"].split(".")[0] in ("light", "switch") and not (st.get("attributes") or {}).get("hidden")
@@ -1519,6 +1522,15 @@ def rule_engine(wish: str, states: list[dict], areas: dict[str, str]) -> dict | 
     if time_cue(wish):
         return rule_automation(wish, states, areas)       # Zeitpläne macht code_plan; hier nur Sensor-Bedingungen
     names = {s["entity_id"]: (s.get("attributes") or {}).get("friendly_name") or s["entity_id"] for s in states}
+    low = norm(wish)
+    if RE_TEMP_REL.search(low) and not re.search(r"weiss|licht|lampe", low):
+        rooms = rooms_named(wish, areas)
+        heat = [s for s in states if s["entity_id"].split(".")[0] in ("climate", "water_heater")
+                and (not rooms or areas.get(s["entity_id"]) in rooms)]
+        if not heat:
+            where = f" im {sorted(rooms)[0]}" if rooms else ""
+            return {"kind": "answer", "text": f"Ich finde keine Heizung und kein Thermostat{where}. Sobald eins in Home Assistant "
+                                              "eingerichtet ist, stelle ich es wärmer oder kühler."}
     acts = rule_actions(wish, states, areas)
     if not acts:
         return None
