@@ -21,7 +21,11 @@ from pathlib import Path
 from urllib.parse import quote
 
 import aiohttp
+import warnings
 from aiohttp import web
+
+# aiohttp warnt bei jedem Zwischenspeichern im laufenden Server – harmlos, füllt aber das Protokoll
+warnings.filterwarnings("ignore", message="Changing state of started or joined application is deprecated")
 
 import local_ai
 import voice
@@ -262,9 +266,10 @@ async def first_start_setup(session) -> str:
                 return f"HTTP {r.status}"
         if "preinstalled" not in prefs:
             async with session.get(f"{CORE_API}/onboarding", headers=head, timeout=aiohttp.ClientTimeout(total=15)) as r:
-                if r.status != 200:
+                # 404: Home Assistant ist längst eingerichtet – die Einrichtungs-Seite gibt es dann nicht mehr
+                if r.status not in (200, 404):
                     return f"Home Assistant noch nicht bereit ({r.status})"
-                steps = await r.json()
+                steps = await r.json() if r.status == 200 else []
             fresh = any(x.get("step") == "user" and not x.get("done") for x in steps if isinstance(x, dict))
             prefs["preinstalled"] = bool(load_marker()) or fresh
             write_prefs(prefs)
