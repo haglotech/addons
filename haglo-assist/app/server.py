@@ -749,6 +749,7 @@ def trial_info(status: dict | None) -> dict:
         "limit": status["limit"],
         "subscription": status["subscription"],
         "terms_version": status.get("terms_version"),
+        "trial_offer_days": status.get("trial_offer_days", 0),
         "terms_url": status["terms_url"],
         "privacy_url": status["privacy_url"],
         "booking_url": status["booking_url"],

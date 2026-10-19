@@ -2,6 +2,8 @@
 
 ## 0.28.0 (Beta, Branch feat/haglo-local)
 
+- Cloud-Limit erreicht? Schalten, Timer und alles Lokale geht trotzdem weiter – nur Cloud-Wünsche warten
+- Erstes Abo: 14 Tage kostenlos testen
 - Neue Version verfügbar? Die App zeigt die Neuerungen und führt mit einem Tipp zur Aktualisierung
 - Neue Nutzungsbedingungen oder Datenschutzerklärung: Die App fragt beim Öffnen nach der Zustimmung, vorher geht nichts
 - Oberfläche aufgeräumt: Sprachsteuerung, Haglo Local und Versionen im Menü „⋯“ oben rechts; Vorschlagsknöpfe entfernt

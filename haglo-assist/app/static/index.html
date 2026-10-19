@@ -683,7 +683,7 @@ function setTrial(t) {
   $("consentBought").classList.toggle("hidden", bought);
   $("accept").textContent = bought ? "Zustimmen & Lite aktivieren" : "Zustimmen & loslegen";
   if (!t.accepted) { p.textContent = bought ? "Lite inklusive · Loslegen" : "Kostenlos starten"; p.classList.add("cta"); }
-  else if (t.expired) { p.textContent = `${t.plan_name || ""} · Limit erreicht`; p.classList.add("end"); showExpired(); }
+  else if (t.expired) { p.textContent = `${t.plan_name || ""} · Cloud-Limit erreicht`; p.classList.add("end"); }
   else if (!t.plan) { p.textContent = "Haglo Assist"; }
   else if (t.plan === "trial") {
     p.innerHTML = `Testphase · noch ${days}<span class="long"> · ${used}</span>`;
@@ -891,7 +891,7 @@ function upsell(h) {
   if (!trial || !trial.window || (trial.subscription && trial.subscription.active && trial.level === "max")) return "";
   const pct = Math.max(trial.window.used_pct || 0, (trial.week && trial.week.used_pct) || 0);
   if (pct < 50) return "";
-  return ` · <a role="button" tabindex="0" data-plans-open>${pct >= 80 ? "Kontingent fast aufgebraucht – mehr mit einem größeren Plan" : "Mehr Cloud-Antworten mit einem größeren Plan"} ›</a>`;
+  return ` · <a role="button" tabindex="0" data-plans-open>${pct >= 80 ? "Kontingent fast aufgebraucht – mehr mit einem größeren Plan" : "Mehr Cloud-Antworten mit einem größeren Plan"}${trial && trial.trial_offer_days ? ` (${trial.trial_offer_days} Tage gratis testen)` : ""} ›</a>`;
 }
 
 function historyMsg(h) {
@@ -967,7 +967,7 @@ async function waitForJob(job) {
     try { const s = await api("api/status"); if (!s.busy) break; } catch (e) {}
   }
   busy = false; dismiss();
-  if (!(trial && trial.expired)) setInputs(true);
+  setInputs(true);
   await loadHistory();
 }
 
@@ -1008,7 +1008,6 @@ document.querySelectorAll(".chip").forEach((c) => c.addEventListener("click", ()
 
 function run(wish, label) {
   if (busy || !wish) { if (!wish) $("wish").focus(); return; }
-  if (trial && trial.expired) return showExpired();
   if (trial && !trial.accepted) { pending = [wish, label]; $("consent").classList.remove("hidden"); return; }
   generate(wish, label);
 }
@@ -1058,12 +1057,12 @@ async function generate(wish, label, keepDialog, allowStates) {
     dismiss(); await loadHistory();      // das Ergebnis steht jetzt als Eintrag im Verlauf, mit „Rückgängig“
   } catch (e) {
     if (e.code === "consent_required") { dismiss(); pending = [wish, label]; $("consent").classList.remove("hidden"); }
-    else if (e.code === "trial_expired") { /* die Limit-Karte steht schon da */ }
+    else if (e.code === "trial_expired") showExpired();      // nur Cloud-Wünsche; Lokales läuft weiter
     else showResult(`<p class="err">Das hat nicht geklappt: ${esc(e.message)}</p>`);
   } finally {
     clearInterval(t);
     if (cur && cur.querySelector(".typing")) dismiss();
-    busy = false; if (!(trial && trial.expired)) setInputs(true);
+    busy = false; setInputs(true);
   }
 }
 
@@ -1127,14 +1126,17 @@ $("result").addEventListener("click", (e) => {
 });
 
 function showExpired() {
-  setInputs(false);
   const order = ["free", "lite", "pro", "max"], top = (trial.level || trial.plan) === "max";
   const weekly = trial.week && trial.week.blocked;
   showResult(`
-    <h2>Limit erreicht</h2>
+    <h2>Cloud-Limit erreicht</h2>
     <p>Dein Dashboard bleibt erhalten. ${weekly ? "Dein Wochenlimit ist aufgebraucht" : `Dein ${trial.window_hours || 5}-Stunden-Limit ist aufgebraucht`} –
-      weiter geht es ${resetText(trial.reset_at)}.${top ? "" : " Mit einem größeren Plan kannst du sofort weitermachen."}</p>
-    <div class="actions">${top ? "" : '<button class="primary" data-plans>Pläne ansehen</button>'}</div>`);
+      weiter geht es ${resetText(trial.reset_at)}.${top ? "" : " Mit einem größeren Plan kannst du sofort weitermachen."}
+      Schalten, Timer und alles, was direkt auf dem Hub läuft, geht ganz normal weiter.</p>
+    <div class="actions">${top ? "" : trial.trial_offer_days
+      ? `<button class="primary" data-plans>Pro ${trial.trial_offer_days} Tage kostenlos testen</button>`
+      : '<button class="primary" data-plans>Pläne ansehen</button>'}</div>
+    ${!top && trial.trial_offer_days ? '<p class="hint">Danach normaler Preis, jederzeit kündbar – vorher erinnern wir dich per E-Mail.</p>' : ""}`);
 }
 
 // ---------------------------------------------------------------- Plan & Abo
@@ -1179,7 +1181,8 @@ function renderPlans() {
       if (included) action = `<span class="tag2 inc">Inklusive, weil du bei Haglo gekauft hast${trial.included_until ? ` – mindestens bis ${new Date(trial.included_until * 1000).toLocaleDateString("de-DE")}` : ""}</span>`;
       else if (sub.plan === key) action = `<span class="tag2">Dein Abo</span>`;
       else if (sub.active) action = `<button class="btn2" data-portal>Wechseln</button>`;
-      else if (bookable) action = `<button class="primary" data-plan="${esc(key)}">${esc(p.name)} wählen</button>`;
+      else if (bookable) action = `<button class="primary" data-plan="${esc(key)}">${trial && trial.trial_offer_days
+        ? `${trial.trial_offer_days} Tage gratis testen` : `${esc(p.name)} wählen`}</button>`;
       else action = `<span class="tag2">Bald verfügbar</span>`;
     }
     return `<div class="plan${cur ? " cur" : ""}"><b>${esc(p.name)}</b><div class="price">${included ? "inklusive" : price}</div>
@@ -1320,7 +1323,7 @@ async function connectDevice(wish, d, mqtt) {
     if (r.need_mqtt) { showMqttForm(wish, d, r.need_mqtt); return; }
     dismiss(); await loadHistory();
   } catch (e) { showResult(`<p class="err">Das hat nicht geklappt: ${esc(e.message)}</p>`); }
-  finally { busy = false; if (!(trial && trial.expired)) setInputs(true); }
+  finally { busy = false; setInputs(true); }
 }
 
 // MQTT läuft, aber die App kennt die Zugangsdaten nicht: Der Nutzer trägt sie ein. Sie bleiben lokal.
