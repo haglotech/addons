@@ -2,7 +2,10 @@
 
 ## 0.28.0 (Beta, Branch feat/haglo-local)
 
-- Haglo Local v1.0.2: neues Modell als eine Datei (Qwen3-0.6B + Haglo, GGUF Q8_0) – genauer, kürzere Eingabe, schneller
+- Neue Version verfügbar? Die App zeigt die Neuerungen und führt mit einem Tipp zur Aktualisierung
+- Neue Nutzungsbedingungen oder Datenschutzerklärung: Die App fragt beim Öffnen nach der Zustimmung, vorher geht nichts
+- Oberfläche aufgeräumt: Sprachsteuerung, Haglo Local und Versionen im Menü „⋯“ oben rechts; Vorschlagsknöpfe entfernt
+- Haglo Local v1.0.2: neues Modell als eine Datei (4 Bit, 380 MB) – genauer und schneller
 - Mehr ohne Modell: Messwerte („Was zieht der Speicher?“), Status jedes Sensors, Wenn-dann mit jedem Ein/Aus-Sensor,
   Rollläden im Raum, „X und Y aus“, Dashboards für Geräte nach Namen
 - Sicherheit: Umbenennen, Löschen, Einrichten und Fehlersuche schalten lokal nie etwas

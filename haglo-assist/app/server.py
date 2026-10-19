@@ -154,6 +154,50 @@ async def supervisor_get(session, path: str) -> dict:
         return (await r.json()).get("data") or {}
 
 
+async def update_info(session) -> dict | None:
+    """Neue Version der App verfügbar? → {version, current, notes, url}. Neuerungen aus dem Changelog dieser Version."""
+    try:
+        info = await supervisor_get(session, "/addons/self/info")
+    except Exception:
+        return None
+    latest, current = info.get("version_latest"), info.get("version")
+    if not info.get("update_available") or not latest or latest == current:
+        return None
+    notes = []
+    try:
+        async with session.get("http://supervisor/addons/self/changelog", headers={"Authorization": f"Bearer {TOKEN}"},
+                               timeout=aiohttp.ClientTimeout(total=10)) as r:
+            text = await r.text() if r.status == 200 else ""
+        # Abschnitt der neuen Version: von „## <version>“ bis zur nächsten Überschrift
+        m = re.search(rf"^##\s*{re.escape(latest)}\b.*?$(.*?)(?=^##\s|\Z)", text, re.M | re.S)
+        for line in (m.group(1) if m else "").splitlines():
+            line = line.strip()
+            if line.startswith("- "):
+                notes.append(line[2:])
+            elif line and notes and not line.startswith("#"):
+                notes[-1] += " " + line            # umbrochene Zeile gehört zum vorigen Punkt
+    except Exception:
+        pass
+    return {"version": latest, "current": current, "notes": [n.replace("**", "") for n in notes][:6],
+            "url": f"/hassio/addon/{info.get('slug') or 'self'}/info"}
+
+
+def note_terms(status: dict | None) -> None:
+    """Merkt sich, welcher Bedingungsversion zugestimmt wurde. Wer früher schon zugestimmt hat und der Haglo-Server
+    nennt eine neuere Version, muss neu zustimmen (terms_update) – vorher geht nichts, auch nicht lokal."""
+    if not status or not status.get("terms_version"):
+        return
+    prefs = load_prefs()
+    before = dict(prefs)
+    if status.get("accepted"):
+        prefs["accepted_terms"] = status["terms_version"]
+        prefs["terms_update"] = False
+    elif prefs.get("accepted_terms"):
+        prefs["terms_update"] = prefs["accepted_terms"] != status["terms_version"]
+    if prefs != before:
+        write_prefs(prefs)
+
+
 PREFS_FILE = Path("/data/prefs.json")
 
 
@@ -2616,11 +2660,14 @@ async def status(request):
         await welcome_done(session)
     try:
         st = (await backend(session, "GET", "/v1/status"))["status"]
+        note_terms(st)
         trial = trial_info(await identify(request.app, st))
     except BackendError:
         trial = trial_info(None)
     return web.json_response({
         "ok": True,
+        "terms_update": bool(load_prefs().get("terms_update")),
+        "update": await update_info(session),
         "entities": len(entities),
         "areas": sorted({e["area"] for e in entities if e["area"]}),
         "has_dashboard": cfg is not None,
@@ -2652,6 +2699,7 @@ async def consent(request):
         data = await backend(request.app["session"], "POST", "/v1/consent",
                              {"version": body.get("version") or TERMS_VERSION})
         st = await identify(request.app, data["status"])
+        note_terms(data["status"])
     except BackendError as e:
         return backend_failure(e)
     await welcome_done(request.app["session"])
@@ -2668,6 +2716,9 @@ async def generate(request):
     if not wish:
         return web.json_response({"ok": False, "error": "Bitte einen Wunsch eingeben."}, status=400)
     talk_touch()        # eine Nachricht ist auch eine Regung; nach langer Pause beginnt hier das neue Gespräch
+    if load_prefs().get("terms_update"):
+        # neue Nutzungsbedingungen/Datenschutzerklärung: erst zustimmen – auch für lokale Antworten
+        return web.json_response({"ok": False, "error": "consent_required", "terms_update": True}, status=403)
     mode = user_mode()
     complex_wish = is_complex(wish)
     if not dialog and not refine:
@@ -3470,6 +3521,8 @@ async def agent_reply(app, text: str, cid: str) -> dict:
     if not data.get("ok", True) or data.get("error"):
         err = data.get("error")
         if err == "consent_required":
+            if data.get("terms_update"):
+                return {"speech": "Es gibt neue Nutzungsbedingungen. Bitte öffne einmal die App Haglo Assist und stimm zu."}
             return {"speech": "Bitte öffne einmal die App Haglo Assist und stimm den Bedingungen zu."}
         if err == "trial_expired":
             return {"speech": "Dein Kontingent ist gerade aufgebraucht. Details stehen in der App Haglo Assist."}

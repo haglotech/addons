@@ -453,6 +453,8 @@
     <div class="sheet">
       <h3 id="consentTitle">Kostenlos starten</h3>
       <ul>
+        <li id="consentNew" class="hidden"><b>Wir haben die Nutzungsbedingungen bzw. die Datenschutzerklärung aktualisiert.</b>
+          Bitte lies sie dir durch und stimme zu, um Haglo Assist weiter zu nutzen.</li>
         <li id="consentOffer">Free für alle – kein Abo, keine Zahlungsdaten</li>
         <li id="consentBought">Bei Haglo gekauft? Dann ist Lite bei deinem Gerät mindestens 12 Monate ohne Aufpreis inklusive</li>
         <li>Dein Dashboard bleibt erhalten, frühere Versionen liegen nur lokal auf deinem Gerät</li>
@@ -494,6 +496,20 @@
       </div>
       <p class="hint" id="vMsg"></p>
       <p class="hint">Das Echo braucht Matter-Unterstützung (z. B. Echo 4. Gen., Echo Dot ab 4. Gen., Echo Show). In Home Assistant tragen freigegebene Geräte das Label „Sprachsteuerung“. <a role="button" tabindex="0" id="vReset">Kopplung zurücksetzen</a></p>
+    </div>
+  </div>
+
+  <div class="sheet-bg hidden" id="updateSheet">
+    <div class="sheet">
+      <button class="close" id="updateClose" aria-label="Später">×</button>
+      <h3 id="updateTitle">Neue Version verfügbar</h3>
+      <p class="hint" id="updateFrom"></p>
+      <ul id="updateNotes"></ul>
+      <div class="actions">
+        <a class="primary" id="updateGo" target="_top" rel="noopener" style="display:block;text-align:center">Jetzt aktualisieren</a>
+        <button class="btn2" id="updateLater" type="button">Später</button>
+      </div>
+      <p class="hint">Öffnet die App-Seite in Home Assistant – dort auf „Aktualisieren“ tippen. Deine Einstellungen bleiben erhalten.</p>
     </div>
   </div>
 
@@ -585,9 +601,46 @@ async function api(path, body) {
   const data = await r.json().catch(() => ({ ok: false, error: "Ungültige Antwort" }));
   if (data.prefs) { ownerHidden = !!data.prefs.owner_hint_dismissed; showMode(data.prefs.mode); }
   if (data.trial) setTrial(data.trial);
+  if ("terms_update" in data) showTermsUpdate(data.terms_update);
+  if ("update" in data) showUpdate(data.update);
   if (!data.ok) { const e = new Error(data.error || "Unbekannter Fehler"); e.code = data.error; throw e; }
   return data;
 }
+
+// Neue Nutzungsbedingungen/Datenschutzerklärung: zustimmen, bevor es weitergeht (auch lokal)
+let termsBlocked = false;
+function showTermsUpdate(on) {
+  termsBlocked = !!on;
+  $("consentNew").classList.toggle("hidden", !on);
+  for (const id of ["consentOffer", "consentBought"]) if (on) $(id).classList.add("hidden");
+  if (on) {
+    $("consentTitle").textContent = "Neue Bedingungen";
+    $("accept").textContent = "Zustimmen";
+    $("consent").classList.remove("hidden");
+    $("updateSheet").classList.add("hidden");
+    setInputs(false);
+  }
+}
+
+// Neue Version der App: Hinweis mit den Neuerungen; „Später“ blendet ihn für einen Tag aus
+function showUpdate(u) {
+  if (!u || termsBlocked) return;
+  let later = null;
+  try { later = JSON.parse(localStorage.getItem("haglo.updateLater") || "null"); } catch (e) {}
+  if (later && later.v === u.version && Date.now() - later.t < 86400000) return;
+  $("updateTitle").textContent = `Neue Version ${u.version} verfügbar`;
+  $("updateFrom").textContent = `Du nutzt Version ${u.current}. Neu:`;
+  $("updateNotes").innerHTML = (u.notes.length ? u.notes : ["Verbesserungen und Fehlerbehebungen"]).map((n) => `<li>${esc(n)}</li>`).join("");
+  $("updateGo").href = u.url;
+  $("updateSheet").dataset.v = u.version;
+  $("updateSheet").classList.remove("hidden");
+}
+function updateLater() {
+  try { localStorage.setItem("haglo.updateLater", JSON.stringify({ v: $("updateSheet").dataset.v, t: Date.now() })); } catch (e) {}
+  $("updateSheet").classList.add("hidden");
+}
+$("updateLater").addEventListener("click", updateLater);
+$("updateClose").addEventListener("click", updateLater);
 
 // Auto / Lokal / Cloud: Voreinstellung ist Auto
 function showMode(m) {
@@ -966,6 +1019,7 @@ $("accept").addEventListener("click", async () => {
   try {
     await api("api/consent", { version: (trial && trial.terms_version) || "2026-10-14" });
     $("consent").classList.add("hidden");
+    if (termsBlocked) { termsBlocked = false; setInputs(true); }
     if (welcomed && !pending) dismiss();
     if (pending) generate(...pending);
     pending = null;
