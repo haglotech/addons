@@ -1089,6 +1089,31 @@ def any_status(wish: str, states: list[dict], areas: dict[str, str]) -> str | No
         (f"{a.get('friendly_name')}: {line.replace('.', ',')}." if line else None)
 
 
+# ---------------------------------------------------------------- Small Talk (ohne Modell)
+RE_HELLO = re.compile(r"^\W*(hi|hallo|hey|moin|servus|guten (morgen|tag|abend)|gruess? (dich|gott)|na|huhu|hello|tach)\W*$", re.I)
+RE_THANKS = re.compile(r"^\W*(danke|danke schoen|dankeschoen|vielen dank|merci|thx|thanks|super|top|passt|perfekt|cool|klasse|"
+                       r"geil|nice|ok|okay|alles klar)\W*(danke)?\W*$", re.I)
+RE_HELP = re.compile(r"^\W*(was kannst du( alles)?|was kann ich (dich )?fragen|hilfe|help|wie funktionierst du|"
+                     r"was geht( lokal)?|wer bist du|was bist du)\W*$", re.I)
+
+
+def small_talk(wish: str, states: list[dict]) -> str | None:
+    low = norm(wish).strip()
+    if RE_HELLO.match(low):
+        return "Hallo! Sag einfach, was ich schalten soll – zum Beispiel „Licht im Wohnzimmer an“."
+    if RE_THANKS.match(low):
+        return "Gern!"
+    if RE_HELP.match(low):
+        ex = [(st.get("attributes") or {}).get("friendly_name") for st in states
+              if st["entity_id"].split(".")[0] in ("light", "switch") and not (st.get("attributes") or {}).get("hidden")
+              and (st.get("attributes") or {}).get("friendly_name")][:2]
+        a, b = (ex + ["Licht Flur", "Steckdose"])[:2]
+        return (f"Ich schalte deine Geräte („{a} an“), stelle Timer („{b} in 10 Minuten aus“), lege Automationen an "
+                f"(„jeden Abend um 22 Uhr {a} aus“, „wenn Bewegung im Flur ist, Licht an“), baue Dashboards "
+                f"(„Dashboard für die Küche“) und sage dir Messwerte („Wie viel Watt zieht …?“). Lokal, ohne Internet.")
+    return None
+
+
 def power_answer(wish: str, states: list[dict], areas: dict[str, str]) -> str | None:
     """„Wie viel Watt zieht die Garage?“ → Messwert direkt aus dem Leistungssensor (ohne Modell)."""
     low = norm(wish)
@@ -1664,6 +1689,10 @@ class LocalAI:
         """Gibt {"kind": "actions"|"answer"|"question"|"timer"|"automation"|"dashboard", ...} zurück –
         oder None (→ Claude übernimmt)."""
         t_start = time.time()
+        talk = small_talk(wish, states)
+        if talk:
+            self.last_ms = max(1, int((time.time() - t_start) * 1000))
+            return {"kind": "answer", "text": talk, "ms": self.last_ms}
         if RE_ADMIN.search(wish):
             # Umbenennen, Löschen, Einrichten, Fehlersuche: nie lokal schalten – das macht Claude (oder gar nicht)
             print(f"[Lokal] Verwaltung/Fehlersuche → nicht lokal | {wish!r}", flush=True)
