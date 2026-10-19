@@ -15,6 +15,7 @@ import json
 import os
 import re
 import secrets
+import shutil
 import time
 from pathlib import Path
 from urllib.parse import quote
@@ -2677,7 +2678,7 @@ async def status(request):
         "api_key": True,  # Der Schlüssel liegt im Backend; Feld bleibt für die Oberfläche.
         "backups": len(version_files()),
         "prefs": load_prefs(),
-        "features": {"automations": True, "control": True},
+        "features": {"automations": True, "control": True, **FEATURES},
         # Rein lokal: "sicher" = Geräte-Zettel der Haglo-Einrichtung, "vermutlich" = nur das Modell passt
         "preinstalled": looks_like_haglo(),
         "haglo_marker": bool(load_marker()),
@@ -3615,8 +3616,15 @@ def ram_gb() -> float:
         return 0
 
 
+# Was das Image mitbringt: Die schlanke Ausgabe (main) hat weder llama.cpp noch Matterbridge – dann gibt es kein
+# Sprachmodell (die Regeln laufen trotzdem) und keine Alexa-Sprachsteuerung; die Oberfläche blendet beides aus.
+FEATURES = {"model": shutil.which("llama-server") is not None, "voice": shutil.which("matterbridge") is not None}
+
+
 def local_wanted(mode: str | None) -> bool:
     """Modell laden? Bei „Lokal“ immer, bei „Auto“ ab 3 GB Arbeitsspeicher (Wyse 5070 / T630 mit 8 GB)."""
+    if not FEATURES["model"]:
+        return False
     return mode == "lokal" or ((mode or "auto") == "auto" and ram_gb() >= 3)
 
 
@@ -3808,6 +3816,8 @@ async def local_set(request):
     except Exception:
         body = {}
     loc = request.app["local"]
+    if body.get("enabled") is True and not FEATURES["model"]:
+        return web.json_response({"ok": False, "error": "Das Sprachmodell ist in dieser Ausgabe nicht enthalten."}, status=400)
     if isinstance(body.get("enabled"), bool):
         local_ai.save_state({**local_ai.load_state(), "enabled": body["enabled"]})
         prefs = load_prefs()
@@ -3856,10 +3866,11 @@ async def on_startup(app):
     asyncio.create_task(install_agent(app))
     asyncio.create_task(area_map(app))          # Raumliste vorab laden – der erste Befehl ist dann schon schnell
     app["voice"] = voice.Voice(app["session"])
-    try:
-        await app["voice"].start_proxy()
-    except Exception as e:
-        print(f"[Sprache] Weiterleitung fehlgeschlagen: {e}")
+    if FEATURES["voice"]:
+        try:
+            await app["voice"].start_proxy()
+        except Exception as e:
+            print(f"[Sprache] Weiterleitung fehlgeschlagen: {e}")
 
     async def later():
         # Modell und Matterbridge erst nach dem Start: beide belasten CPU und Home Assistant spürbar.
@@ -3870,7 +3881,7 @@ async def on_startup(app):
             local_ai.save_state({**local_ai.load_state(), "enabled": want})
             if want:
                 await app["local"].start()
-            if voice.load_state().get("enabled"):
+            if FEATURES["voice"] and voice.load_state().get("enabled"):
                 await app["voice"].start()
         except Exception as e:
             print(f"[Start] {e}")

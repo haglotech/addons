@@ -593,6 +593,7 @@ let welcomed = false;   // Begrüßung für Käufer eines Haglo-Geräts
 // Was die App lokal über das Gerät weiß, ohne etwas zu senden: marker = Geräte-Zettel der Haglo-Einrichtung
 let local = { marker: false, maybe: false };
 let wasExpired = false, resetTimer = null;
+let features = {};
 let ownerHidden = true;  // Kauf-Hinweis: bleibt verborgen, bis der Status sagt, dass er nicht weggeklickt wurde
 let dialog = [], asking = null;  // Rückfragen der KI: bisherige Antworten und die offene Frage
 
@@ -600,6 +601,10 @@ async function api(path, body) {
   const r = await fetch(path, body ? { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) } : {});
   const data = await r.json().catch(() => ({ ok: false, error: "Ungültige Antwort" }));
   if (data.prefs) { ownerHidden = !!data.prefs.owner_hint_dismissed; showMode(data.prefs.mode); }
+  if (data.features) {                     // schlanke Ausgabe: ohne Sprachmodell bzw. ohne Alexa-Sprachsteuerung
+    features = data.features;
+    $("voiceLink").classList.toggle("hidden", data.features.voice === false);
+  }
   if (data.trial) setTrial(data.trial);
   if ("terms_update" in data) showTermsUpdate(data.terms_update);
   if ("update" in data) showUpdate(data.update);
@@ -651,7 +656,7 @@ document.querySelectorAll(".mode [data-mode]").forEach((b) => b.addEventListener
   showMode(b.dataset.mode);
   try { await api("api/prefs", { mode: b.dataset.mode }); } catch (e) {}
   if (b.dataset.mode === "lokal") {      // Status zeigen, solange das Modell lädt
-    try { const r = await api("api/local"); if (r.status !== "bereit") openLocal(); } catch (e) {}
+    if (features.model !== false) try { const r = await api("api/local"); if (r.status !== "bereit") openLocal(); } catch (e) {}
   }
 }));
 showMode();
