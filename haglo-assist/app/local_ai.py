@@ -393,7 +393,8 @@ def fast_path(wish: str, states: list[dict], areas: dict[str, str]) -> dict | No
 
     def score_of(p):
         nw = name_words(p)
-        return sum(1 for x in dev_words if any(similar(x, n) for n in nw))
+        # wörtlicher Treffer 1, nur ähnlich 0,9 – „Deckenleuchte“ schlägt „Deckenlicht“, wenn „Deckenleuchte“ gesagt wurde
+        return sum(1 if x in nw else 0.9 if any(similar(x, n) for n in nw) else 0 for x in dev_words)
 
     def in_room(p):
         return room is not None and (p["room"] == room or norm(room).strip() in norm(p["st"].get("attributes", {}).get("friendly_name") or ""))
@@ -401,7 +402,7 @@ def fast_path(wish: str, states: list[dict], areas: dict[str, str]) -> dict | No
     light_word = any(similar(x, y) for x in low.split() for y in ("licht", "lichter", "lampen")) or \
         re.search(r"\b(licht|lichter|lampen)\b", low)
     all_lights = light_word and re.search(r"\balle\b|\balles\b|\büberall\b|\bueberall\b|\bsämtliche\b", low)
-    generic_light = light_word and not any(score_of(p) >= 2 for p in picks)
+    generic_light = light_word and not any(score_of(p) >= 1.8 for p in picks)
     if all_lights or (generic_light and room):
         lights = [{"st": s_, "room": areas.get(s_["entity_id"], "")} for s_ in states if s_["entity_id"].startswith("light.")
                   and not s_.get("attributes", {}).get("hidden")]
@@ -419,12 +420,12 @@ def fast_path(wish: str, states: list[dict], areas: dict[str, str]) -> dict | No
         act = [p for p in picks if p["st"]["entity_id"].split(".")[0] in ACTIONABLE]
         if room:
             act = [p for p in act if in_room(p)]
-        if room and not any(score_of(p) >= 1 for p in act):
+        if room and not any(score_of(p) >= 0.9 for p in act):
             # Nur der Raum genannt („Schalte Garage ein“): eindeutig, wenn dort genau ein Schaltbares ist
             only = [p for p in act if p["st"]["entity_id"].split(".")[0] in SWITCHY]
             act = only if len(only) == 1 else []
         else:
-            act = [p for p in act if score_of(p) >= 1]
+            act = [p for p in act if score_of(p) >= 0.9]
         if not act:
             return None
         best = max(score_of(p) for p in act)
@@ -475,8 +476,9 @@ def fast_path(wish: str, states: list[dict], areas: dict[str, str]) -> dict | No
 # Wünsche, die geplant statt sofort geschaltet werden – an denen darf der Schnellweg nie sofort schalten
 PLAN = re.compile(r"\b(in|nach|f(ü|ue)r) (\d+|einer|ner|eine|zwei|drei|vier|fünf|fuenf|zehn|zwanzig|dreißig|anderthalb|halbe)\b.*(sek|min|stund)|"
                   r"\bwieder (aus|an|ein|zu|auf)\b|aber erst|timer|"
-                  r"wenn |sobald|jeden |jede |täglich|taeglich|werktags|wochenende|immer |automati|bei (sonnen|bewegung)|"
-                  r"sonnen(auf|unter)gang|dashboard|übersicht|uebersicht|seitenleiste|um \d|um halb|um viertel|seite f", re.I)
+                  r"\bwenn\b|\bsobald\b|\bjeden\b|\bjede\b|\btäglich\b|\btaeglich\b|\bwerktags\b|\bwochenende\b|\bimmer\b|\bautomati|"
+                  r"\bbei (sonnen|bewegung)|"
+                  r"sonnen(auf|unter)gang|dashboard|übersicht|uebersicht|seitenleiste|\bum \d|\bum halb|\bum viertel|seite f", re.I)
 AUTO_CUE = re.compile(r"wenn |sobald|jeden |jede |täglich|taeglich|werktags|woche|immer |automati|bei |um \d|um halb|"
                       r"um viertel|sonnen|bewegung|nachts|morgens|abends", re.I)
 DASH_CUE = re.compile(r"d\w{0,2}s\w{0,2}h?\w{0,2}b\w{0,2}r?d|oard|aord|dash|dahs|dsah|[üu]e?b\w{0,2}s\w{0,2}cht|seite|setie|steie|"
@@ -929,7 +931,8 @@ def code_rules(wish: str, out: dict, idx: dict[int, str], by_id: dict[str, dict]
             else:
                 w.pop("min", None)
         if "zu" in w:
-            want = MOTION_CLASSES if re.search(r"beweg|präsenz|praesenz|keiner|niemand", low) else DOOR_CLASSES
+            door_words = re.search(r"\b(tuer|fenster|tor|klappe|haustuer)\w*|\b(auf|zu|offen|geoeffnet|geschlossen|aufgeht|zugeht)\b", low)
+            want = DOOR_CLASSES if door_words and not re.search(r"beweg|praesenz|keiner|niemand", low) else MOTION_CLASSES
             try:
                 cur = by_id[idx[int(w["e"])]]
             except (KeyError, TypeError, ValueError):
@@ -1189,7 +1192,8 @@ def nice_wait(sec: int) -> str:
 # Was keine Regel sicher versteht, bekommt das Modell (oder Claude).
 COLORS = {"rot": "red", "gruen": "green", "blau": "blue", "gelb": "yellow", "orange": "orange", "lila": "purple",
           "violett": "violet", "pink": "pink", "rosa": "pink", "tuerkis": "turquoise"}
-RE_BRIGHT = re.compile(r"\b(heller|dunkler|dimm\w*|aufhellen)\b|weniger hell|zu hell|zu dunkel|mehr licht|weniger licht", re.I)
+RE_BRIGHT = re.compile(r"\b(heller|dunkler|dimm|dimme|dimmen|runterdimmen|hochdimmen|aufhellen)\b|weniger hell|zu hell|zu dunkel|"
+                       r"mehr licht|weniger licht", re.I)          # nicht „Shelly Dimmer“ (Gerätename)
 RE_TEMP_REL = re.compile(r"\b(waermer|kuehler|kalt|kaelter|warm|heiss|friere|friert|frier)\b", re.I)
 RE_SEP = re.compile(r"\s*(?:,|;|\bund dann\b|\bund danach\b|\bund\b|\bdann\b|\bdanach\b|\baußerdem\b|\bausserdem\b|\bsowie\b)\s*", re.I)
 FILL = {"bitte", "danke", "pls", "mal", "doch", "kannst", "du", "mach", "mache", "machen", "schalte", "schalt", "stell", "stelle",
@@ -1199,6 +1203,11 @@ FILL = {"bitte", "danke", "pls", "mal", "doch", "kannst", "du", "mach", "mache",
 CUE_WORDS = ("minuten", "minute", "sekunden", "sekunde", "stunden", "stunde", "taeglich", "wochenende", "werktags", "werktagen",
              "automatisch", "automation", "morgens", "abends", "nachts", "sonnenuntergang", "sonnenaufgang", "bewegung",
              "bewegungsmelder", "dashboard", "uebersicht", "seitenleiste", "timer", "spaeter", "jeden", "immer")
+
+
+RE_ADMIN = re.compile(r"benenn|umbenenn|\bnenn\w* .*\bum\b|\bheißen|\bheissen|kennung|entity|\bid\b|lösch|loesch|entfern|"
+                      r"install|einricht|konfigur|\bupdate|aktualisier|hinzufüg|hinzufueg|verbind|koppel|anlern|reparier|"
+                      r"\bwarum\b|\bwieso\b|\bweshalb\b|erklär|erklaer", re.I)
 
 
 def time_cue(wish: str) -> bool:
@@ -1241,6 +1250,25 @@ def _one_rule(wish: str, states: list[dict], areas: dict[str, str]) -> list[dict
     q = fast_path(wish, states, areas)
     if q:
         return q["actions"]
+    # Rollläden im Raum (egal wie sie heißen: „Living Room Window“, „Shelly 2.5“ …)
+    if re.search(r"\b(roll+(ae|a)den|rolll?(ae|a)den|rollos?|jalousien?|raffstores?|markisen?|beschattung|velux)\b", low) and \
+            (UP.search(wish) or DOWN.search(wish) or RE_PCT.search(wish) or STOPW.search(wish)):
+        rooms = rooms_named(wish, areas)
+        covers = [s["entity_id"] for s in states if s["entity_id"].startswith("cover.") and not (s.get("attributes") or {}).get("hidden")]
+        here = [e for e in covers if areas.get(e) in rooms] if rooms else (covers if re.search(r"\balle\b|\bueberall\b", low) else [])
+        named = [e for e in covers if name_hit(wish, by_id[e])]
+        ids = named if len(named) == 1 else here
+        if not ids:
+            return None
+        pct = RE_PCT.search(wish)
+        if pct:
+            return [{"action": "cover.set_cover_position", "target": {"entity_id": ids}, "data": {"position": max(0, min(100, int(pct.group(1))))}}]
+        if STOPW.search(wish):
+            return [{"action": "cover.stop_cover", "target": {"entity_id": ids}}]
+        up, down = bool(UP.search(wish)), bool(DOWN.search(wish))
+        if up == down:
+            return None
+        return [{"action": f"cover.{'open' if up else 'close'}_cover", "target": {"entity_id": ids}}]
     # Helligkeit relativ
     if RE_BRIGHT.search(low):
         ids = _pick(_clean(wish, {"heller", "dunkler", "hell", "dunkel", "dimmen", "dimm", "weniger", "mehr", "licht"} - {"licht"}),
@@ -1355,8 +1383,8 @@ def _trigger(trig: str, act_ids: list[str], states: list[dict], areas: dict[str,
         neg = bool(re.search(r"\b(nicht|kein|keine|leer|weg|nichts)\b", low))
         return ({"e": named_bin[0]["entity_id"], "zu": "off" if neg else "on", **({"für": dur} if dur else {})}, "binary")
     m = re.search(r"(ueber|mehr als|groesser als|hoeher als|unter|weniger als|kleiner als|niedriger als)\s+(-?\d+(?:[.,]\d+)?)", low)
-    if m and re.search(r"temperatur|grad|warm|kalt|feucht", low):
-        hum = "feucht" in low
+    if m and (re.search(r"temperatur|grad|warm|kalt|feucht", low) or "%" in trig):
+        hum = "feucht" in low or ("%" in trig and not re.search(r"temperatur|grad|warm|kalt", low))
         e = sensor(lambda s: s["entity_id"].startswith("sensor.") and dc(s) == ("humidity" if hum else "temperature"))
         if not e:
             return None
@@ -1504,6 +1532,9 @@ class LocalAI:
                              if f.stat().st_size > 100_000_000), key=lambda f: f.name)
         if not spec and local_full:
             self.short = True
+            for old in DIR.glob("*.gguf"):
+                if old != local_full[-1]:
+                    old.unlink(missing_ok=True)         # altes Basismodell/Adapter im App-Speicher nicht mehr nötig
             return local_full[-1], None
         # Der Haglo-Server sagt, welches Basismodell zum Adapter gehört (Wechsel ohne App-Update möglich)
         bspec = (spec or {}).get("base") or BASE
@@ -1606,6 +1637,10 @@ class LocalAI:
         """Gibt {"kind": "actions"|"answer"|"question"|"timer"|"automation"|"dashboard", ...} zurück –
         oder None (→ Claude übernimmt)."""
         t_start = time.time()
+        if RE_ADMIN.search(wish):
+            # Umbenennen, Löschen, Einrichten, Fehlersuche: nie lokal schalten – das macht Claude (oder gar nicht)
+            print(f"[Lokal] Verwaltung/Fehlersuche → nicht lokal | {wish!r}", flush=True)
+            return None
         planned = time_cue(wish)
         quick = None if planned else fast_path(wish, states, areas)
         if quick:

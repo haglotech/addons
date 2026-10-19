@@ -1171,7 +1171,7 @@ COMPLEX = re.compile(
     r"dashboard|übersicht|seite|reiter|karte|kachel|layout|automati|(wenn|falls) .+ (dann|soll|sollen)|immer wenn|sobald|"
     r"jeden (tag|morgen|abend)|am meisten|welche geräte|"
     r"zeitplan|um \d{1,2}(:\d\d)? ?uhr|warum|wieso|weshalb|erklär|fehler|repar|kaputt|geht nicht|funktioniert nicht|"
-    r"einricht|integration|hinzufüg|verbind|update|aktualisier|umbenenn|aufräum|optimier|vorschl|plan|analys|"
+    r"einricht|integration|hinzufüg|verbind|update|aktualisier|umbenenn|benenn|lösch|loesch|entfern|kennung|aufräum|optimier|vorschl|plan|analys|"
     r"verbrauch der letzten|verlauf|statistik|vergleich|yaml|konfigur|skript (bau|erstell|schreib)|bau|erstell", re.I)
 
 

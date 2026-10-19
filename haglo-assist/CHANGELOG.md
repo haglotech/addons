@@ -2,6 +2,10 @@
 
 ## 0.28.0 (Beta, Branch feat/haglo-local)
 
+- Haglo Local v1.0.2: neues Modell als eine Datei (Qwen3-0.6B + Haglo, GGUF Q8_0) – genauer, kürzere Eingabe, schneller
+- Mehr ohne Modell: Messwerte („Was zieht der Speicher?“), Status jedes Sensors, Wenn-dann mit jedem Ein/Aus-Sensor,
+  Rollläden im Raum, „X und Y aus“, Dashboards für Geräte nach Namen
+- Sicherheit: Umbenennen, Löschen, Einrichten und Fehlersuche schalten lokal nie etwas
 - Viel mehr ohne Sprachmodell, sofort auch auf schwachen Hubs: Statusfragen, Watt-Fragen, heller/dunkler, wärmer/kälter,
   Farben, Musik (lauter, leiser, Pause, weiter), Saugroboter, Heizung an/aus, mehrere Befehle in einem Satz und
   Wenn-dann-Automationen mit Bewegung, Tür/Fenster und Temperatur/Luftfeuchtigkeit
