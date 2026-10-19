@@ -6,6 +6,10 @@
 - Mehr ohne Modell: Messwerte („Was zieht der Speicher?“), Status jedes Sensors, Wenn-dann mit jedem Ein/Aus-Sensor,
   Rollläden im Raum, „X und Y aus“, Dashboards für Geräte nach Namen
 - Sicherheit: Umbenennen, Löschen, Einrichten und Fehlersuche schalten lokal nie etwas
+- „Schreibtisch nicht ausschalten“: Verneinte Befehle führt Haglo Local nie aus
+- „Um 8 Schreibtisch an“, „morgen früh um 7 …“, „übermorgen um 6 …“: einmal zu diesem Zeitpunkt (Timer); nur mit „jeden“,
+  „täglich“, „werktags“ usw. wird eine Automation daraus. Timer auch in Tagen und Wochen
+- „alle 10 Minuten“, „nach dem Essen“, „später“: nie sofort schalten
 - Viel mehr ohne Sprachmodell, sofort auch auf schwachen Hubs: Statusfragen, Watt-Fragen, heller/dunkler, wärmer/kälter,
   Farben, Musik (lauter, leiser, Pause, weiter), Saugroboter, Heizung an/aus, mehrere Befehle in einem Satz und
   Wenn-dann-Automationen mit Bewegung, Tür/Fenster und Temperatur/Luftfeuchtigkeit

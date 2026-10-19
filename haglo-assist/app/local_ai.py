@@ -474,7 +474,7 @@ def fast_path(wish: str, states: list[dict], areas: dict[str, str]) -> dict | No
 
 # ---------------------------------------------------------------- Timer, Automation, Dashboard (Plan vom Modell, Bau im Code)
 # Wünsche, die geplant statt sofort geschaltet werden – an denen darf der Schnellweg nie sofort schalten
-PLAN = re.compile(r"\b(in|nach|f(ü|ue)r) (\d+|einer|ner|eine|zwei|drei|vier|fünf|fuenf|zehn|zwanzig|dreißig|anderthalb|halbe)\b.*(sek|min|stund)|"
+PLAN = re.compile(r"\b(in|nach|f(ü|ue)r) (\d+|einer|ner|eine|zwei|drei|vier|fünf|fuenf|zehn|zwanzig|dreißig|anderthalb|halbe)\b.*(sek|min|stund|tag|woche)|"
                   r"\bwieder (aus|an|ein|zu|auf)\b|aber erst|timer|"
                   r"\bwenn\b|\bsobald\b|\bjeden\b|\bjede\b|\btäglich\b|\btaeglich\b|\bwerktags\b|\bwochenende\b|\bimmer\b|\bautomati|"
                   r"\bbei (sonnen|bewegung)|"
@@ -702,7 +702,7 @@ def kw_is(t: str, kw: str) -> bool:
 
 
 UNIT_FIX = {"sekunden": "sekunden", "sekunde": "sekunde", "minuten": "minuten", "minute": "minute", "stunden": "stunden",
-            "stunde": "stunde"}
+            "stunde": "stunde", "wochen": "wochen", "woche": "woche"}
 
 
 def wish_duration(wish: str) -> int | None:
@@ -718,11 +718,12 @@ def wish_duration(wish: str) -> int | None:
              (r"(?<!anderthalb )\bhalben? stunde", 1800), (r"\banderthalb (stunden|std)", 5400),
              (r"\banderthalb minuten", 90), (r"\b(einer|ner|eine) stunde", 3600), (r"\b(einer|ner|eine) minute", 60)]
     hits = [sec for pat, sec in fixed if re.search(pat, w)]
-    for num, unit in re.findall(r"\b(\d{1,3}|" + "|".join(NUMS) + r")\s*(sek\w*|s\b|min\w*|stund\w*|std)", w):
+    for num, unit in re.findall(r"\b(\d{1,3}|" + "|".join(NUMS) + r")\s*(sek\w*|s\b|min\w*|stund\w*|std|tage?n?\b|wochen?\b)", w):
         if num in ("einer", "ner", "eine", "einen") and re.search(r"\bhalben?\b|viertel", w):
             continue
         n = int(num) if num.isdigit() else NUMS[num]
-        hits.append(n * (1 if unit.startswith("s") and not unit.startswith("st") else 3600 if unit.startswith("st") else 60))
+        hits.append(n * (86400 if unit.startswith("tag") else 604800 if unit.startswith("woche") else
+                         1 if unit.startswith("s") and not unit.startswith("st") else 3600 if unit.startswith("st") else 60))
     return hits[0] if len(set(hits)) == 1 else None
 
 
@@ -964,7 +965,9 @@ DUR_NUM = set(NUMS) | {"halbe", "halben", "viertel", "anderthalb"}
 FILLER = {"in", "nach", "fuer", "erst", "aber", "zwar", "dann", "danach", "spaeter", "bitte", "danke", "pls", "bitteschoen",
           "automatisch", "immer", "jeden", "jede", "taeglich", "werktags", "werktagen", "wochenende", "woche", "unter",
           "montags", "freitags", "bis", "samstags", "sonntags", "morgen", "morgens", "abend", "abends", "tag", "uhr", "um", "halb",
-          "bei", "sonnenuntergang", "sonnenaufgang", "erstell", "erstelle", "automation", "timer", "stell", "stelle", "einen", "am"}
+          "bei", "sonnenuntergang", "sonnenaufgang", "erstell", "erstelle", "automation", "timer", "stell", "stelle", "einen", "am",
+          "heute", "uebermorgen", "frueh", "nachher", "spaeter", "gleich", "abends", "nachts", "mittags", "mittag", "tage", "tagen",
+          "woche", "wochen"}
 REVERSE = {"turn_on": "turn_off", "turn_off": "turn_on", "open_cover": "close_cover", "close_cover": "open_cover"}
 
 
@@ -1118,6 +1121,12 @@ def code_plan(wish: str, states: list[dict], areas: dict[str, str]) -> dict | No
     side, off = wish_sun(wish) if re.search(r"sonnen(auf|unter)gang", low) else (None, 0)
     if not (sec or clock or side) or RE_QUESTION.search(wish) or re.search(r"\b(wenn|falls|sobald|warum|wieso)\b|beweg|keiner|niemand", low):
         return None
+    if re.search(r"\balle \d|\balle (zwei|drei|fuenf|zehn|paar)\b|\bstuendlich|\bjede (minute|stunde)", low):
+        return None                              # „alle 10 Minuten“: Wiederholung – macht Claude
+    repeat = bool(re.search(r"\b(jeden|jede|taeglich|immer|werktags|werktagen|wochenende|montags|dienstags|mittwochs|"
+                            r"donnerstags|freitags|samstags|sonntags|morgens|abends|nachts|mittags|automati\w*|woche)\b", low)) \
+        or any(len(t) >= 6 and (similar(t, "wochenende") or similar(t, "werktags") or similar(t, "taeglich")) for t in low.split()) \
+        or any(kw_is(t, w) for t in low.split() for w in ("jeden", "woche", "immer"))
     back = False
     keep, skip_next = [], False
     for i, t in enumerate(toks):
@@ -1151,6 +1160,19 @@ def code_plan(wish: str, states: list[dict], areas: dict[str, str]) -> dict | No
     if not acts:
         return None
     names = {e: (st.get("attributes") or {}).get("friendly_name") or e for st in states for e in [st["entity_id"]]}
+    if clock and not repeat:
+        # „um 8“, „morgen um 7“, „übermorgen um halb 6“: einmal – Timer bis zu diesem Zeitpunkt
+        h, m = (int(x) for x in clock.split(":"))
+        now = time.time()
+        lt = time.localtime(now)
+        add = 2 if re.search(r"\buebermorgen\b", low) else 1 if re.search(r"\bmorgen\b", low) else 0
+        target = time.mktime((lt.tm_year, lt.tm_mon, lt.tm_mday + add, h, m, 0, 0, 0, -1))
+        if target <= now + 30:
+            target, add = time.mktime((lt.tm_year, lt.tm_mon, lt.tm_mday + add + 1, h, m, 0, 0, 0, -1)), add + 1
+        day = {0: "heute", 1: "morgen", 2: "übermorgen"}.get(add, time.strftime("%d.%m.", time.localtime(target)))
+        names = {st["entity_id"]: (st.get("attributes") or {}).get("friendly_name") or st["entity_id"] for st in states}
+        return {"kind": "timer", "actions": acts, "seconds": int(target - now),
+                "text": f"{day[:1].upper()}{day[1:]} um {clock} Uhr: {confirm_text(acts, names)}"}
     if clock or side:
         trig = {"zeit": clock} if clock else {"sonne": side, **({"min": off} if off else {})}
         if clock:
@@ -1183,6 +1205,9 @@ def code_plan(wish: str, states: list[dict], areas: dict[str, str]) -> dict | No
 
 
 def nice_wait(sec: int) -> str:
+    if sec >= 86400 and sec % 86400 == 0:
+        d = sec // 86400
+        return "einer Woche" if d == 7 else f"{d // 7} Wochen" if d % 7 == 0 else "einem Tag" if d == 1 else f"{d} Tagen"
     return f"{sec} Sekunden" if sec < 60 else f"{sec // 60} Minute{'n' if sec >= 120 else ''}" if sec < 3600 \
         else f"{sec / 3600:g} Stunde{'n' if sec != 3600 else ''}".replace(".", ",")
 
@@ -1212,7 +1237,9 @@ RE_ADMIN = re.compile(r"benenn|umbenenn|\bnenn\w* .*\bum\b|\bheißen|\bheissen|k
 
 def time_cue(wish: str) -> bool:
     """Klingt der Wunsch nach später, Zeitplan, Bedingung oder Dashboard – auch mit Tippfehlern? Dann nie sofort schalten."""
-    if PLAN.search(wish) or re.search(r"\b(um|ab|bis) \d|\d[:.]\d\d|\buhr\b|\b(wenn|sobald|falls|erst)\b|ohne bewegung|\bbei (bewegung|ueber|mehr|unter|weniger|sonnen)|"
+    if PLAN.search(wish) or re.search(r"\b(morgen|uebermorgen|heute|spaeter|nachher|gleich|bald|naechste\w*|kommende\w*|"
+                                      r"nach (dem|der|den)|alle \d|alle (zwei|drei|fuenf|zehn|paar))\b|"
+                                      r"\b(um|ab|bis) \d|\d[:.]\d\d|\buhr\b|\b(wenn|sobald|falls|erst)\b|ohne bewegung|\bbei (bewegung|ueber|mehr|unter|weniger|sonnen)|"
                                       r"\bnach (\d|ein|ner|zwei|drei|vier|fuenf|zehn|zwanzig|dreissig|halb|anderthalb)|\b\d+ ?(s|sek|min|h|std)\b",
                                       norm(wish)):
         return True
@@ -1640,6 +1667,11 @@ class LocalAI:
         if RE_ADMIN.search(wish):
             # Umbenennen, Löschen, Einrichten, Fehlersuche: nie lokal schalten – das macht Claude (oder gar nicht)
             print(f"[Lokal] Verwaltung/Fehlersuche → nicht lokal | {wish!r}", flush=True)
+            return None
+        if re.search(r"\b(nicht|niemals|nie)\b", norm(wish)) and not RE_QUESTION.search(wish) and \
+                not re.search(r"\b(wenn|sobald|falls)\b", norm(wish)):
+            # „Schreibtisch nicht ausschalten“ – lokal nie etwas schalten, wenn verneint wird
+            print(f"[Lokal] Verneinung → nicht lokal | {wish!r}", flush=True)
             return None
         planned = time_cue(wish)
         quick = None if planned else fast_path(wish, states, areas)
