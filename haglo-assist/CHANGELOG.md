@@ -1,5 +1,9 @@
 # Änderungen
 
+## 0.27.2
+
+- Behoben: Seit 0.27.0 reagierte die App nicht mehr auf Eingaben (Fehler in der Oberfläche)
+
 ## 0.27.1
 
 - Behoben: Bei bereits eingerichtetem Home Assistant wurde die Ersteinrichtung der App bei jedem Start wiederholt
