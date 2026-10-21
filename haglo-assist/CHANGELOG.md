@@ -2,6 +2,7 @@
 
 ## 0.28.0 (Beta, Branch feat/haglo-local)
 
+- Geräte ohne eigene Integration einbinden (z. B. EcoTracker): Abfrage mit Zustimmung, eigene Datei packages/haglo_….yaml, Prüfung, Rückgängig – und nie doppelt
 - Cloud-Limit erreicht? Schalten, Timer und alles Lokale geht trotzdem weiter – nur Cloud-Wünsche warten
 - Erstes Abo: 14 Tage kostenlos testen
 - Neue Version verfügbar? Die App zeigt die Neuerungen und führt mit einem Tipp zur Aktualisierung
