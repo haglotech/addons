@@ -1,5 +1,9 @@
 # Änderungen
 
+## 0.27.3
+
+- Neu: Geräte ohne eigene Integration einbinden, z. B. Stromzähler-Leseköpfe wie den everHome EcoTracker. Haglo Assist fragt das Gerät nach deiner Zustimmung einmal im Heimnetz ab, legt eine eigene Datei an (packages/haglo_….yaml), prüft die Konfiguration und startet Home Assistant neu. Bei Fehlern wird alles zurückgenommen, und über „Rückgängig“ verschwindet die Datei wieder.
+
 ## 0.27.2
 
 - Behoben: Seit 0.27.0 reagierte die App nicht mehr auf Eingaben (Fehler in der Oberfläche)

@@ -110,6 +110,10 @@
   .stp.on .ic { background: var(--brand); color: var(--brand-ink); }
   .stp.off .ic { background: var(--surface); color: var(--muted); border: 1px solid var(--line); }
   .stp .tx { flex: 1; min-width: 0; display: flex; flex-direction: column; line-height: 1.3; }
+  .stp details.code { margin-top: 6px; }
+  .stp details.code summary { cursor: pointer; color: var(--brand); font-size: 13px; }
+  .stp details.code pre { margin: 6px 0 0; padding: 8px; max-height: 260px; overflow: auto; background: var(--surface); border: 1px solid var(--line);
+    border-radius: 8px; font-size: 12px; line-height: 1.4; white-space: pre; max-width: 100%; }
   .stp .tx b { font-weight: 600; font-size: 14.5px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .stp .tx small { color: var(--muted); font-size: 12.5px; }
   .stp .go2 { color: var(--muted); font-size: 20px; line-height: 1; }
@@ -1043,7 +1047,7 @@ async function generate(wish, label, keepDialog, allowStates) {
   let i = 0; typing(steps[0]);
   const t = setInterval(() => { i = Math.min(i + 1, steps.length - 1); if ($("loadText")) $("loadText").textContent = steps[i]; }, 7000);
   try {
-    const r = await api("api/generate", { wish, dialog, allow_states: !!granted.states, allow_diagnose: !!granted.diagnose, allow_history: !!granted.history, allow_integrations: !!granted.integrations, allow_logs: !!granted.logs, allow_yaml: !!granted.yaml });
+    const r = await api("api/generate", { wish, dialog, allow_states: !!granted.states, allow_diagnose: !!granted.diagnose, allow_history: !!granted.history, allow_integrations: !!granted.integrations, allow_logs: !!granted.logs, allow_yaml: !!granted.yaml, allow_probe: !!granted.probe });
     if (r.question) { showQuestion(wish, label, r.question); return; }
     dialog = []; mem.set("draft", null);
     if (r.objects) { showAutomations(wish, r.erklaerung, r.objects); return; }
@@ -1051,6 +1055,7 @@ async function generate(wish, label, keepDialog, allowStates) {
     if (r.need_diagnose_consent) { showDiagnoseConsent(wish, label); return; }
     if (r.need_logs_consent) { showLogsConsent(wish, label); return; }
     if (r.need_yaml_consent) { showYamlConsent(wish, label, r.need_yaml_consent.files || []); return; }
+    if (r.need_probe_consent) { showProbeConsent(wish, label, r.need_probe_consent); return; }
     if (r.confirm_repair) { showConfirmRepair(wish, r.erklaerung, r.confirm_repair); return; }
     if (r.need_integrations_consent) { showIntegrationsConsent(wish, label, r.need_integrations_consent.query); return; }
     if (r.confirm_integration) { showConfirmIntegration(wish, r.erklaerung, r.confirm_integration); return; }
@@ -1372,13 +1377,25 @@ function showYamlConsent(wish, label, files) {
   $("ymOnce").onclick = () => generate(wish, label, false, { yaml: true });
   $("ymAlways").onclick = async () => { try { await api("api/prefs", { yaml_allowed: true }); } catch (e) {} generate(wish, label, false, { yaml: true }); };
 }
+// Ein Gerät ohne Integration: Seine Antwort im Heimnetz geht nur nach Zustimmung an die Cloud – jedes Mal neu.
+function showProbeConsent(wish, label, req) {
+  showResult(`<div class="ask-q"><p class="step">Deine Zustimmung ist nötig</p><h2>Gerät abfragen?</h2>
+    <p style="color:var(--text)">Um das Gerät einzubinden, ruft Haglo Assist einmal <b>${esc(req.adresse)}/${esc(req.pfad || "")}</b> in deinem Heimnetz ab
+      und schickt die Antwort an den Haglo-Server und unseren KI-Dienstleister Anthropic (USA), damit die richtigen Werte ausgewählt werden.
+      Am Gerät wird nichts verändert. Angelegt wird erst, wenn du den Vorschlag danach bestätigst.</p>
+    <div class="actions" style="justify-content:flex-start"><button class="primary" id="pbOnce">Erlauben</button>
+      <button class="btn2" id="pbNo">Abbrechen</button></div></div>`);
+  $("pbNo").onclick = () => dismiss();
+  $("pbOnce").onclick = () => generate(wish, label, false, { probe: true });
+}
 // Reparaturschritte anzeigen – ausgeführt wird erst nach „Ja, reparieren“
 function showConfirmRepair(wish, erklaerung, plan) {
-  showResult(`<div class="ask-q"><p class="step">Bitte bestätigen</p><h2>So reparieren?</h2>
+  const setup = plan.steps.some((x) => x.art === "yaml_datei");
+  showResult(`<div class="ask-q"><p class="step">Bitte bestätigen</p><h2>${setup ? "So einrichten?" : "So reparieren?"}</h2>
     ${erklaerung ? md(erklaerung) : ""}
     <div class="steps">${plan.show.map((c) => `<div class="stp action"><span class="ic">${STEP_ICON.action}</span>
-      <span class="tx"><b>${esc(c.title)}</b><small>${esc(c.sub || "")}</small></span></div>`).join("")}</div>
-    <div class="actions" style="justify-content:flex-start"><button class="primary" id="rpYes">Ja, reparieren</button>
+      <span class="tx"><b>${esc(c.title)}</b><small>${esc(c.sub || "")}</small>${c.code ? `<details class="code"><summary>Inhalt ansehen</summary><pre>${esc(c.code)}</pre></details>` : ""}</span></div>`).join("")}</div>
+    <div class="actions" style="justify-content:flex-start"><button class="primary" id="rpYes">${setup ? "Ja, einrichten" : "Ja, reparieren"}</button>
       <button class="btn2" id="rpNo">Abbrechen</button></div></div>`);
   $("rpNo").onclick = () => dismiss();
   $("rpYes").onclick = () => runRepair(plan.steps, wish, erklaerung, $("rpYes"), $("rpNo"));
