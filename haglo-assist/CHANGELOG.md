@@ -1,5 +1,9 @@
 # Änderungen
 
+## 0.27.4
+
+- Geräte werden nie doppelt eingebunden: Steht ein Gerät schon in der Konfiguration oder ist es über eine Integration eingerichtet, legt Haglo Assist nichts an und sagt dir, wo es bereits steht.
+
 ## 0.27.3
 
 - Neu: Geräte ohne eigene Integration einbinden, z. B. Stromzähler-Leseköpfe wie den everHome EcoTracker. Haglo Assist fragt das Gerät nach deiner Zustimmung einmal im Heimnetz ab, legt eine eigene Datei an (packages/haglo_….yaml), prüft die Konfiguration und startet Home Assistant neu. Bei Fehlern wird alles zurückgenommen, und über „Rückgängig“ verschwindet die Datei wieder.

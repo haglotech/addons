@@ -1813,6 +1813,46 @@ def package_check(step: dict) -> tuple[Path, str]:
     return HA_CONFIG / name, body.rstrip() + "\n"
 
 
+YAML_SKIP_DIRS = {".storage", "custom_components", "www", "blueprints", "deps", "tts", "backups", "haglo-local", "node_modules"}
+
+
+def host_in_yaml(host: str, skip: set[str] = frozenset()) -> list[str]:
+    """Wo eine Adresse schon in den YAML-Dateien steht (Datei und Zeile). secrets.yaml wird nie gelesen."""
+    hits, pat = [], re.compile(rf"(?<![\d.]){re.escape(host)}(?![\d])")
+    root = HA_CONFIG.resolve()
+    for p in sorted(root.rglob("*.y*ml")):
+        rel = p.relative_to(root).as_posix()
+        if rel in skip or p.name == "secrets.yaml" or len(p.parts) - len(root.parts) > 3 \
+                or any(part.startswith(".") or part in YAML_SKIP_DIRS for part in p.relative_to(root).parts[:-1]):
+            continue
+        try:
+            for no, line in enumerate(p.read_text(errors="replace").splitlines(), 1):
+                if pat.search(line) and not line.lstrip().startswith("#"):
+                    hits.append(f"{rel} (Zeile {no})")
+                    break
+        except OSError:
+            continue
+    return hits
+
+
+async def host_in_devices(session, host: str) -> str:
+    """Name des Geräts, das in Home Assistant schon unter dieser Adresse eingerichtet ist (über eine Integration)."""
+    try:
+        async with HAClient(session) as ha:
+            devices = await ha.call("config/device_registry/list") or []
+    except Exception:
+        return ""
+    dev = next((d for d in devices if re.search(rf"//{re.escape(host)}(?:[:/]|$)", str(d.get("configuration_url") or ""))), None)
+    return (dev.get("name_by_user") or dev.get("name") or "ohne Namen") if dev else ""
+
+
+async def already_there(session, host: str, skip: set[str] = frozenset()) -> str:
+    """Leer, wenn das Gerät noch nirgends eingebunden ist – sonst ein Satz, wo es schon steht."""
+    files, dev = host_in_yaml(host, skip), await host_in_devices(session, host)
+    parts = ([f"in {', '.join(files[:3])}"] if files else []) + ([f"als Gerät „{dev}“ über eine Integration"] if dev else [])
+    return f"Das Gerät {host} ist schon eingebunden: {' und '.join(parts)}." if parts else ""
+
+
 async def template_errors(session, body: str) -> str:
     """Die Konfigurationsprüfung von Home Assistant prüft Vorlagen ({{ … }}) nicht. Darum hier: jede Vorlage
     einmal von Home Assistant übersetzen lassen und nur echte Schreibfehler melden."""
@@ -1839,9 +1879,13 @@ async def probe_lines(session, req: dict) -> list[str]:
         async with session.get(f"http://{host}/{path}", timeout=aiohttp.ClientTimeout(total=8), allow_redirects=False) as r:
             text = (await r.content.read(8000)).decode("utf-8", "replace")
             kind = r.headers.get("Content-Type", "")[:60]
-            return [f"Abruf von {host}/{path}: HTTP {r.status} ({kind})\n{redact(text)}"]
+            out = [f"Abruf von {host}/{path}: HTTP {r.status} ({kind})\n{redact(text)}"]
     except Exception as e:
         return [f"Abruf von {host}/{path}: keine Antwort ({type(e).__name__}). Ist das Gerät eingeschaltet und im selben Netz?"]
+    there = await already_there(session, host)
+    if there:
+        out.append("Hinweis der App: " + there + " Nichts doppelt anlegen.")
+    return out
 
 
 async def entry_by_id(session, entry_id: str) -> dict | None:
@@ -1900,6 +1944,17 @@ async def repair_plan(session, steps: list[dict]) -> list[dict]:
             continue
         if art == "yaml_datei":
             p, body = package_check(st)
+            # Doppelt angelegt wird nie: Steht eine Adresse aus der neuen Datei schon woanders, lehnt die App ab –
+            # außer ein Schritt davor entfernt sie dort (yaml_aendern), oder es ist genau diese Datei (ersetzen).
+            removed = {h for x in steps if x.get("art") == "yaml_aendern"
+                       for h in re.findall(r"(?:\d{1,3}\.){3}\d{1,3}", str(x.get("alt") or "")) if h not in str(x.get("neu") or "")}
+            for host in dict.fromkeys(re.findall(r"(?<![\d.])(?:\d{1,3}\.){3}\d{1,3}(?![\d])", body)):
+                if host in removed:
+                    continue
+                there = await already_there(session, host, {st["datei"]})
+                if there:
+                    raise RuntimeError(there + " Ein zweiter Eintrag würde das Gerät doppelt abfragen und Sensoren doppelt anlegen – "
+                                       "deshalb lege ich nichts an. Sag „ersetze den alten Eintrag“, wenn ich ihn durch den neuen ersetzen soll.")
             lines = body.count("\n")
             out.append({"art": art, "datei": st["datei"], "inhalt": body, "code": body,
                         "title": f"{st['datei']} {'ersetzen' if p.exists() else 'anlegen'}",
