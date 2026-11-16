@@ -1,5 +1,12 @@
 # Änderungen
 
+## 0.27.5
+
+- Neu: Zusatzkarten aus HACS im Dashboard. Ist eine Karte auf deinem Home Assistant installiert, baut Haglo Assist sie ein – zum Beispiel ein Energiefluss-Diagramm mit der Power Flow Card Plus (PV, Netz, Batterie, Haus und einzelne Verbraucher wie die Wärmepumpe), dazu mini-graph-card und apexcharts-card
+- Fehlt die gewünschte Karte noch, erklärt Haglo Assist die Installation Schritt für Schritt und baut sie danach ein
+- Ohne Zusatzkarte: Ist das Energie-Dashboard eingerichtet, gibt es die eingebaute Energiefluss-Karte von Home Assistant als Alternative
+- „Lösche alle Benachrichtigungen“ räumt die Benachrichtigungen in Home Assistant auf
+
 ## 0.27.4
 
 - Geräte werden nie doppelt eingebunden: Steht ein Gerät schon in der Konfiguration oder ist es über eine Integration eingerichtet, legt Haglo Assist nichts an und sagt dir, wo es bereits steht.
