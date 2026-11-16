@@ -855,19 +855,164 @@ async def collect_entities(ha: HAClient) -> list[dict]:
     return out[:MAX_ENTITIES]
 
 
-# ---------------------------------------------------------------- Prüfung
-def clean_config(node, valid: set[str], removed: list[str]):
-    """Entfernt erfundene entity_ids und dadurch leere Karten."""
+# ---------------------------------------------------------------- Zusatzkarten (HACS)
+# Karten, die nicht zu Home Assistant gehören ("custom:…"), funktionieren nur, wenn der Kunde sie installiert hat
+# (meist über HACS). Die App sieht nach, welche da sind, sagt es der KI und lässt nur diese durch.
+ENTITY_ID_RE = re.compile(r"[a-z_]+\.[a-z0-9_]+")
+NOT_INSTALLED = "Zusatzkarte „{}“ (nicht installiert)"
+
+
+def card_names(resources) -> list[str]:
+    """Namen der installierten Zusatzkarten aus den Dashboard-Ressourcen:
+    /hacsfiles/power-flow-card-plus/power-flow-card-plus.js?hacstag=1 → power-flow-card-plus."""
+    names = []
+    for r in resources if isinstance(resources, list) else []:
+        url = str((r or {}).get("url") or "") if isinstance(r, dict) else ""
+        stem = url.split("?", 1)[0].split("#", 1)[0].rstrip("/").rsplit("/", 1)[-1].lower()
+        stem = re.sub(r"\.(js|mjs)$", "", stem)
+        stem = re.sub(r"([.-](min|bundle|umd|es|module))+$", "", stem)
+        if re.fullmatch(r"[a-z0-9][a-z0-9._-]{1,60}", stem) and stem not in names:
+            names.append(stem)
+    return names
+
+
+def card_installed(card_type: str, installed) -> bool:
+    """custom:mushroom-entity-card passt zu „mushroom“, custom:power-flow-card-plus zu „power-flow-card-plus“."""
+    name = card_type.split(":", 1)[1].strip().lower() if ":" in card_type else card_type
+    return any(name == i or name.startswith(i + "-") or (i.startswith("lovelace-") and name == i[9:]) for i in installed)
+
+
+def custom_cards_in(node, found: set | None = None) -> set:
+    """Alle Zusatzkarten eines Dashboards (als Text), damit vorhandene Karten des Kunden unangetastet bleiben."""
+    found = set() if found is None else found
+    if isinstance(node, list):
+        for n in node:
+            custom_cards_in(n, found)
+    elif isinstance(node, dict):
+        if str(node.get("type") or "").startswith("custom:"):
+            found.add(json.dumps(node, sort_keys=True, ensure_ascii=False))
+        for v in node.values():
+            if isinstance(v, (dict, list)):
+                custom_cards_in(v, found)
+    return found
+
+
+def prune_entities(node, valid: set[str], removed: list[str]):
+    """Zusatzkarten verschachteln ihre Geräte beliebig (z. B. entities.battery.state_of_charge). Entfernt überall
+    erfundene entity_ids; ein Eintrag, dessen "entity" es nicht gibt, fällt ganz weg (→ None)."""
+    unknown = lambda v: isinstance(v, str) and ENTITY_ID_RE.fullmatch(v) and v not in valid
     if isinstance(node, list):
         out = []
         for item in node:
-            cleaned = clean_config(item, valid, removed)
+            if unknown(item):
+                removed.append(item)
+                continue
+            item = prune_entities(item, valid, removed)
+            if item is not None:
+                out.append(item)
+        return out
+    if not isinstance(node, dict):
+        return node
+    out = {}
+    for key, value in node.items():
+        if unknown(value):
+            removed.append(value)
+            if key == "entity":
+                return None
+            continue
+        if isinstance(value, (dict, list)):
+            pruned = prune_entities(value, valid, removed)
+            if pruned is None or (value and not pruned):
+                continue            # leer geworden: Schlüssel weglassen
+            value = pruned
+        out[key] = value
+    return out
+
+
+def clean_custom_card(node: dict, valid: set[str], removed: list[str], cards: dict):
+    """Eine neue Zusatzkarte: nur wenn sie installiert ist, und nur mit Geräten, die es gibt."""
+    name = node["type"].split(":", 1)[1]
+    # installiert – oder der Kunde nutzt diese Kartenart schon (dann ist sie da, egal wie die Datei heißt)
+    if node["type"] not in cards.get("types", ()) and not card_installed(node["type"], cards.get("installed") or ()):
+        removed.append(NOT_INSTALLED.format(name))
+        return None
+    pruned = prune_entities(node, valid, removed)
+    if pruned is None:
+        return None
+    for key in ("entities", "series", "entity"):       # ohne ihre Geräte zeigt die Karte nur einen Fehler
+        if node.get(key) and not pruned.get(key):
+            return None
+    if name == "power-flow-card-plus":
+        ents = pruned.get("entities") if isinstance(pruned.get("entities"), dict) else {}
+        if not any(ents.get(k) for k in ("grid", "solar", "battery")):
+            return None
+    return pruned
+
+
+async def dashboard_cards(ha: "HAClient", before: dict | None = None) -> dict:
+    """Was die App für Zusatzkarten wissen muss: was installiert ist, ob es HACS gibt, ob das Energie-Dashboard
+    eingerichtet ist – und welche Zusatzkarten der Kunde schon selbst im Dashboard hat."""
+    keep = custom_cards_in(before or {})
+    out = {"installed": [], "hacs": False, "energy": False, "keep": keep,
+           "types": {json.loads(k).get("type") for k in keep}}
+    try:
+        out["installed"] = card_names(await ha.call("lovelace/resources"))
+    except Exception as e:
+        print(f"Zusatzkarten nicht lesbar: {e}", flush=True)
+    try:
+        out["hacs"] = "hacs" in ((await ha.call("get_config")).get("components") or [])
+    except Exception:
+        pass
+    try:
+        prefs = await ha.call("energy/get_prefs")
+        out["energy"] = bool(prefs.get("energy_sources"))
+    except Exception:
+        pass
+    return out
+
+
+def cards_hint(cards: dict) -> str:
+    """Eine Zeile für die KI (das Backend kürzt Hinweise auf 400 Zeichen)."""
+    known = ("power-flow-card-plus", "mini-graph-card", "apexcharts-card")
+    names = sorted(cards.get("installed") or [], key=lambda n: (n not in known, n))
+    listed, used = [], 0
+    for n in names:
+        if used + len(n) + 2 > 200:
+            break
+        listed.append(n)
+        used += len(n) + 2
+    return (f"Zusatzkarten: installiert sind {', '.join(listed) if listed else 'keine'}. "
+            f"HACS: {'ja' if cards.get('hacs') else 'nein'}. "
+            f"Energie-Dashboard eingerichtet: {'ja' if cards.get('energy') else 'nein'}.")
+
+
+def missing_cards_text(removed: list[str]) -> str:
+    """Satz für den Kunden, wenn eine Zusatzkarte fehlte – sonst leer."""
+    prefix = NOT_INSTALLED.split("„")[0]
+    names = sorted({r.split("„", 1)[1].split("“", 1)[0] for r in removed if r.startswith(prefix)})
+    if not names:
+        return ""
+    return (f" Die Zusatzkarte {' und '.join('„' + n + '“' for n in names)} ist auf deinem Home Assistant noch nicht "
+            "installiert. Installiere sie über HACS und versuch es dann noch einmal.")
+
+
+# ---------------------------------------------------------------- Prüfung
+def clean_config(node, valid: set[str], removed: list[str], cards: dict | None = None):
+    """Entfernt erfundene entity_ids und dadurch leere Karten. Mit cards (siehe dashboard_cards) außerdem
+    Zusatzkarten, die nicht installiert sind – außer denen, die der Kunde schon selbst im Dashboard hatte."""
+    if isinstance(node, list):
+        out = []
+        for item in node:
+            cleaned = clean_config(item, valid, removed, cards)
             if cleaned is not None:
                 out.append(cleaned)
         return out
     if not isinstance(node, dict):
         return node
 
+    if cards is not None and str(node.get("type") or "").startswith("custom:") \
+            and json.dumps(node, sort_keys=True, ensure_ascii=False) not in cards.get("keep", ()):
+        return clean_custom_card(node, valid, removed, cards)
     node = dict(node)
     if "entity" in node and isinstance(node["entity"], str):
         if node["entity"] not in valid:
@@ -886,7 +1031,7 @@ def clean_config(node, valid: set[str], removed: list[str]):
         node["entities"] = kept
     for key in ("cards", "sections", "views"):
         if key in node and isinstance(node[key], list):
-            node[key] = clean_config(node[key], valid, removed)
+            node[key] = clean_config(node[key], valid, removed, cards)
             if key == "cards" and not [c for c in node[key] if c.get("type") != "heading"]:
                 if node.get("type") in ("grid", "vertical-stack", "horizontal-stack"):
                     return None
@@ -919,9 +1064,11 @@ async def create_sidebar_dashboard(ha: "HAClient", wish: str, result: dict) -> d
     while url_path in taken:
         url_path, n = f"{base[:36]}-{n}", n + 1
     removed: list[str] = []
-    config = clean_config(result["config"], {s["entity_id"] for s in await ha.call("get_states")}, removed)
+    config = clean_config(result["config"], {s["entity_id"] for s in await ha.call("get_states")}, removed,
+                          await dashboard_cards(ha))
     if not config.get("views"):
-        raise RuntimeError("Das Ergebnis war leer. Es wurde nichts angelegt.")
+        raise RuntimeError("Das Ergebnis war leer. Es wurde nichts angelegt." + missing_cards_text(removed))
+    result["erklaerung"] = (str(result.get("erklaerung") or "") + missing_cards_text(removed)).strip()
     config.setdefault("title", title)
     item = await ha.call("lovelace/dashboards/create", url_path=url_path, title=title, icon=new.get("icon") or "mdi:view-dashboard",
                          mode="storage", require_admin=False, show_in_sidebar=True)
@@ -1363,11 +1510,15 @@ CONTROL_DOMAINS = {
     "valve", "lawn_mower", "remote",
 }
 RISKY_COVERS = {"garage", "door", "gate"}
+# Dienste ohne Gerät: „Benachrichtigungen löschen“ räumt die Glocke in Home Assistant auf
+TARGETLESS_ACTIONS = {"persistent_notification.dismiss_all": "Alle Benachrichtigungen gelöscht"}
 
 
 def risky_action(action: dict, states: dict) -> bool:
     """Schlösser, Alarmanlagen sowie Tore und Türen: nur nach ausdrücklicher Bestätigung."""
     domain, service = action["action"].split(".", 1)
+    if action["action"] in TARGETLESS_ACTIONS:
+        return False
     if domain in ("lock", "alarm_control_panel"):
         return True
     if domain == "cover" and "close" not in service and "stop" not in service:
@@ -1381,6 +1532,8 @@ def check_actions(actions: list, states: dict) -> str | None:
     for a in actions:
         if not isinstance(a, dict) or not isinstance(a.get("action"), str) or a["action"].count(".") != 1:
             return "Ungültige Aktion."
+        if a["action"] in TARGETLESS_ACTIONS:
+            continue
         domain = a["action"].split(".", 1)[0]
         if domain not in CONTROL_DOMAINS:
             return f"„{a['action']}“ darf Haglo Assist nicht ausführen."
@@ -1396,7 +1549,8 @@ def check_actions(actions: list, states: dict) -> str | None:
 async def run_actions(session, actions: list) -> None:
     for a in actions:
         domain, service = a["action"].split(".", 1)
-        body = {**(a.get("data") if isinstance(a.get("data"), dict) else {}), "entity_id": a["target"]["entity_id"]}
+        body = {} if a["action"] in TARGETLESS_ACTIONS else \
+            {**(a.get("data") if isinstance(a.get("data"), dict) else {}), "entity_id": a["target"]["entity_id"]}
         status, data = await core(session, "POST", f"/services/{domain}/{service}", body)
         if status != 200:
             msg = (data.get("message") if isinstance(data, dict) else "") or f"Fehler {status}"
@@ -2476,6 +2630,9 @@ async def action_steps(session, actions: list, by_id: dict, registry: dict | Non
              "open_cover": ("on", "geöffnet"), "close_cover": ("off", "geschlossen"), "lock": ("off", "verriegelt"), "unlock": ("on", "entriegelt")}
     steps = []
     for a in actions:
+        if a["action"] in TARGETLESS_ACTIONS:
+            steps.append({"icon": "action", "title": TARGETLESS_ACTIONS[a["action"]], "sub": "", "url": None})
+            continue
         service = a["action"].split(".", 1)[1]
         icon, word = words.get(service, ("action", service.replace("_", " ")))
         data = a.get("data") if isinstance(a.get("data"), dict) else {}
@@ -2617,17 +2774,18 @@ async def build_dashboard(app, wish: str, refine: bool, dialog: list, can_ask: b
         if locked and not can_automate:
             return {"need_dashboard_consent": {"id": dashboard, "label": label}}
         built_by_haglo = own or dashboard in load_prefs().get("built", [])
+        cards = await dashboard_cards(ha, before)
         extra = {}
         if can_automate:
             raw = await all_states(session)
             by_id = {x["entity_id"]: x for x in raw}
             extra = {"kinds": KINDS, "can_control": True, "can_add_device": True, "can_rename": True, "can_diagnose": True, "can_history": True, "can_integrations": True, "can_logs": True, "can_yaml": HA_CONFIG.exists(),
                      "can_probe": True, "can_yaml_file": HA_CONFIG.exists(),
-                     "context": recent_context(), "hints": (await address_hints(session, wish))[:2] + ([] if HA_CONFIG.exists() else [
+                     "context": recent_context(), "hints": ([cards_hint(cards)] + (await address_hints(session, wish))[:2] + ([] if HA_CONFIG.exists() else [
                          "Die App hat noch keinen Zugriff auf die Konfigurationsdateien (configuration.yaml) – sie wurde vor dem Update "
                          "installiert, das diesen Zugriff mitbringt. Muss eine YAML-Datei geändert werden, schreib nicht, du dürftest sie "
                          "nicht lesen, sondern: Einmal Haglo Assist aktualisieren (Einstellungen → Apps → Haglo Assist → Aktualisieren), "
-                         "danach erledige ich das selbst."]),
+                         "danach erledige ich das selbst."]))[:3],
                      "automations": await own_objects(session, raw)}
         payload = {
             "wish": wish, "entities": entities, "mode": app.get("effective_mode") or ("praezise" if is_complex(wish) else "schnell"),
@@ -2763,7 +2921,7 @@ async def build_dashboard(app, wish: str, refine: bool, dialog: list, can_ask: b
         else:
             # Im Dashboard des Kunden dürfen auch versteckte oder Diagnose-Geräte stehen bleiben.
             valid = {s["entity_id"] for s in await ha.call("get_states")}
-        config = clean_config(result["config"], valid, removed)
+        config = clean_config(result["config"], valid, removed, cards)
         if own:
             config.setdefault("title", DASHBOARD_TITLE)
             if app.get("bar_enabled"):
@@ -2777,7 +2935,8 @@ async def build_dashboard(app, wish: str, refine: bool, dialog: list, can_ask: b
                                    "gespeichert. Bitte beschreibe genauer, was sich ändern soll.")
 
         if not config.get("views"):
-            raise RuntimeError("Das Ergebnis war leer. Es wurde nichts gespeichert.")
+            raise RuntimeError("Das Ergebnis war leer. Es wurde nichts gespeichert." + missing_cards_text(removed))
+        result["erklaerung"] = (str(result.get("erklaerung") or "") + missing_cards_text(removed)).strip()
         # Auf Haglo-Geräten: Hinweis-Karte, sobald Haglo Assist die Seite baut – einmal. War sie schon da, bleibt sie.
         st, prefs = result.get("status") or {}, load_prefs()
         if st.get("haglo_device") and st.get("included_plan") and (

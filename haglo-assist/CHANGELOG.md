@@ -2,6 +2,8 @@
 
 ## 0.28.0 (Beta, Branch feat/haglo-local)
 
+- Zusatzkarten aus HACS im Dashboard, z. B. Energiefluss-Diagramm mit der Power Flow Card Plus; fehlt die Karte, erklärt Haglo Assist die Installation (aus 0.27.5)
+- „Lösche alle Benachrichtigungen“ räumt die Benachrichtigungen in Home Assistant auf (aus 0.27.5)
 - Geräte ohne eigene Integration einbinden (z. B. EcoTracker): Abfrage mit Zustimmung, eigene Datei packages/haglo_….yaml, Prüfung, Rückgängig – und nie doppelt
 - Cloud-Limit erreicht? Schalten, Timer und alles Lokale geht trotzdem weiter – nur Cloud-Wünsche warten
 - Erstes Abo: 14 Tage kostenlos testen
