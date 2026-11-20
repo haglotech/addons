@@ -33,6 +33,9 @@ async function render({ grid, solar, battery, soc, home, units = {}, ...cfg }) {
   if (battery !== undefined) { states["sensor.batt"] = sensor(battery, units.battery); conf.battery = "sensor.batt"; }
   if (soc !== undefined) { states["sensor.soc"] = sensor(soc, "%"); conf.battery_soc = "sensor.soc"; }
   if (home !== undefined) { states["sensor.home"] = sensor(home); conf.home = "sensor.home"; }
+  for (const k of ["grid_import", "grid_export", "battery_charge", "battery_discharge"])
+    if (cfg[k] !== undefined) { states["sensor." + k] = sensor(cfg[k]); conf[k] = "sensor." + k; }
+  for (const [id, st] of Object.entries(states)) st.entity_id = id;                     // wie in Home Assistant
   const out = await page.evaluate(({ conf, states }) => {
     document.body.innerHTML = "";
     const el = document.createElement("mangfall-energy-card");
@@ -144,6 +147,15 @@ test("Umgedrehte Vorzeichen (invert_grid, invert_battery) ergeben dieselbe Anzei
   assert.deepEqual(b.labels, a.labels);
 });
 
+test("Getrennte Sensoren für Bezug/Einspeisung und Laden/Entladen ergeben dieselbe Anzeige", async () => {
+  const a = await render({ grid: -1000, solar: 5000, battery: -1500 });
+  const b = await render({ solar: 5000, grid_import: 0, grid_export: 1000, battery_charge: 1500, battery_discharge: 0 });
+  assert.deepEqual(b.flows, a.flows);
+  assert.equal(b.say, a.say);
+  const c = await render({ solar: 0, grid_import: 0, grid_export: 2000, battery_charge: 0, battery_discharge: 3000 });
+  assert.deepEqual(c.flows, ["batt>grid", "batt>home"]);
+});
+
 test("Sensoren in kW werden richtig umgerechnet", async () => {
   const r = await render({ grid: 1.2, solar: 0.8, units: { grid: "kW", solar: "kW" } });
   assert.deepEqual(r.flows, ["grid>home", "solar>home"]);
@@ -165,7 +177,7 @@ test("Kleine Werte (unter 15 W) und negativer PV-Wert nachts laufen nicht", asyn
 
 test("Netzsensor nicht verfügbar: klare Meldung", async () => {
   const r = await render({ grid: "unavailable", solar: 100 });
-  assert.match(r.text, /Netzsensor „sensor.grid“ nicht verfügbar/);
+  assert.match(r.text, /sensor.grid meldet sich gerade nicht/);
 });
 
 test("Knapp unter 1 kW wird als 1,0 kW angezeigt, nicht als 1.000 W", async () => {
@@ -221,8 +233,8 @@ test("Tageswerte: Solar, Autarkie, Netzbezug, gespart aus dem Verlauf seit Mitte
     const el = document.createElement("mangfall-energy-card");
     document.body.appendChild(el);
     el.setConfig({ grid: "sensor.grid", solar: "sensor.pv", show_today: true });
-    const st = (s) => ({ state: s, attributes: { unit_of_measurement: "W" }, last_updated: "x" });
-    el.hass = { states: { "sensor.grid": st("-500"), "sensor.pv": st("2000") }, callWS: async () => hist };
+    const st = (id, s) => ({ entity_id: id, state: s, attributes: { unit_of_measurement: "W" }, last_updated: "x" });
+    el.hass = { states: { "sensor.grid": st("sensor.grid", "-500"), "sensor.pv": st("sensor.pv", "2000") }, callWS: async () => hist };
     await new Promise((r) => setTimeout(r, 50));
     return el.shadowRoot.querySelector(".today").textContent.replace(/\s+/g, " ");
   }, { hist });
@@ -243,10 +255,11 @@ test("300 Zufallslagen: Bilanz stimmt, nie gleichzeitig Bezug und Einspeisung, F
       const s = Math.round(rnd() * 8000), h = Math.round(rnd() * 5000);
       const b = Math.round((rnd() - 0.5) * 6000), g = h - s - b;          // Netz gleicht aus
       const st = (v) => ({ state: String(v), attributes: { unit_of_measurement: "W" }, last_updated: String(i) });
+      const states = { g: st(g), s: st(s), b: st(b) }; for (const k in states) states[k].entity_id = k;
       document.body.innerHTML = "";
       const el = document.createElement("mangfall-energy-card"); document.body.appendChild(el);
       el.setConfig({ grid: "g", solar: "s", battery: "b", show_today: false });
-      el.hass = { states: { g: st(g), s: st(s), b: st(b) } };
+      el.hass = { states };
       const flows = [...el.shadowRoot.querySelectorAll("path.run")].map((p) => {
         const n = p.getAttribute("d").match(/-?[\d.]+/g).map(Number);
         return { from: node[`${n[0]},${n[1]}`], to: node[`${n.at(-2)},${n.at(-1)}`], color: col[p.style.stroke] };
