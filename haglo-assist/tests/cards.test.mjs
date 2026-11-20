@@ -334,6 +334,7 @@ const sc = mk(K.MangfallSystemCard, {}, real);
 console.log("  Haus-Check:", txt(sc).slice(0, 260));
 sc._toggleSheet("l:upd"); ok(txt(sc).includes("2026.10.4 → 2026.11.2"), "Update-Liste");
 ok(K.cleanName("Garage-Steckdose ENERGY Power") === "Garage-Steckdose", "Name ohne ENERGY Power");
+ok(K.cleanName("Wallbox Ladeleistung") === "Wallbox Ladeleistung" && K.cleanName("Fernseher Leistung") === "Fernseher" && K.cleanName("Heizleistung") === "Heizleistung", "Namen: nur ganze Wörter kürzen");
 
 /* ---------- FLAT und „Jetzt messen“ ---------- */
 console.log("\n== FLAT / Jetzt messen ==");

@@ -43,7 +43,7 @@ const fmtNum = (v, unit = "") => {
   return `${fmt(v, Math.abs(v) < 10 && v % 1 !== 0 ? 1 : 0)}${u ? (u === "%" || u.startsWith("°") ? (u === "%" ? " %" : u) : " " + u) : ""}`;
 };
 /* Gerätenamen ohne technische Anhängsel */
-const CLEAN_RE = /[\s_-]*(battery\s*level|battery|batterie(stand)?|akku(stand)?|ladestand|temperature|temperatur|humidity|luftfeuchtigkeit|luftfeuchte|power|leistung|energy|contact|kontakt|opening|sensor)\s*$/i;
+const CLEAN_RE = /(?:^|[\s_-]+)(battery\s*level|battery|batterie(stand)?|akku(stand)?|ladestand|temperature|temperatur|humidity|luftfeuchtigkeit|luftfeuchte|power|leistung|energy|contact|kontakt|opening|sensor)\s*$/i;
 const cleanName = (s) => String(s || "").replace(CLEAN_RE, "").replace(CLEAN_RE, "").trim() || String(s || "");
 const STATE_DE = { on: "an", off: "aus", home: "zu Hause", not_home: "unterwegs", open: "offen", closed: "zu", unavailable: "offline", unknown: "unbekannt",
   cleaning: "saugt", docked: "in der Station", mowing: "mäht", paused: "pausiert", returning: "fährt zurück", idle: "bereit", error: "Fehler",
@@ -1192,7 +1192,7 @@ class MangfallBatteryCard extends MangfallBase {
   _list() {
     return Object.values(this._hass.states).filter((e) => e.attributes.device_class === "battery" && e.entity_id.startsWith("sensor.")
       && !this._config.exclude.includes(e.entity_id) && !isNaN(parseFloat(e.state)))
-      .map((e) => ({ id: e.entity_id, name: (e.attributes.friendly_name || e.entity_id).replace(/\s*(battery\s*level|battery|batterie(stand)?|akku(stand)?|ladestand)\s*$/i, "") || e.attributes.friendly_name || e.entity_id, v: parseFloat(e.state) }))
+      .map((e) => ({ id: e.entity_id, name: cleanName(e.attributes.friendly_name || e.entity_id), v: parseFloat(e.state) }))
       .sort((a, b) => a.v - b.v);
   }
   _watch() { return this._hass ? this._list().map((b) => b.id) : []; }
