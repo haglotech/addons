@@ -1,5 +1,11 @@
 # Änderungen
 
+## Nächste Version
+
+- Energiefluss-Karte: Lädt der Speicher, während Strom aus dem Netz kommt, zeigt sie jetzt richtig, dass die Sonne den Speicher lädt und das Netz das Haus versorgt (vorher: „Sonne deckt das Haus, Speicher lädt aus dem Netz“)
+- Verlauf in der Energiefluss-Karte mit Skala und Werten: Antippen zeigt Uhrzeit und Wert, der Speicher zeigt seinen Ladestand, Netz und Speicher nennen Bezug/Einspeisung bzw. Laden/Entladen. Linie und Tageswerte reichen immer bis jetzt, auch wenn der gespeicherte Verlauf hinterherhinkt
+- Energiefluss-Karte genauer: Speist der Speicher ins Netz ein, ist das jetzt zu sehen. Liefern Sonne und Speicher gemeinsam, nennt der Satz beide. Ein nachlaufender Haus-Sensor zeigt keinen Netzbezug mehr, während eingespeist wird. Die Flussanimation springt bei neuen Messwerten nicht mehr
+
 ## 1.0.0
 
 - Haglo Assist ist fertig: Version 1.0 – keine Beta mehr
