@@ -1015,7 +1015,9 @@ MANGFALL_LIB = "mangfall-cards"
 MANGFALL: dict = {"ready": None, "own": False}    # ready: Home Assistant liefert die Datei aus · own: unsere Ressource
 # Die Karten suchen fehlende Sensoren selbst (ab mangfall-cards 1.3.0) – geprüft wird nur, was angegeben ist.
 MANGFALL_CARDS = {"mangfall-energy-card", "mangfall-level-card", "mangfall-climate-card",
-                  "mangfall-battery-card", "mangfall-openings-card", "mangfall-mower-card"}
+                  "mangfall-battery-card", "mangfall-openings-card", "mangfall-mower-card",
+                  "mangfall-energy-history-card", "mangfall-waste-card", "mangfall-weather-card", "mangfall-presence-card",
+                  "mangfall-lights-card", "mangfall-vacuum-card", "mangfall-price-card", "mangfall-ev-card", "mangfall-heating-card"}
 
 
 def mangfall_version() -> str:
