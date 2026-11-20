@@ -46,7 +46,7 @@ SKIP_DOMAINS = {
     "zone", "persistent_notification", "assist_satellite", "ai_task",
 }
 
-ADDON_VERSION = "0.28.0"
+ADDON_VERSION = "1.0.0"
 MAX_VERSIONS = 30                      # so viele Dashboard-Versionen bleiben lokal gespeichert
 BAR_ENTITY = "input_text.haglo_assist"           # Eingabeleiste im Dashboard
 BAR_STATUS = "input_text.haglo_assist_status"    # Rückmeldung darunter
@@ -937,14 +937,18 @@ def clean_custom_card(node: dict, valid: set[str], removed: list[str], cards: di
     if node["type"] not in cards.get("types", ()) and not card_installed(node["type"], cards.get("installed") or ()):
         removed.append(NOT_INSTALLED.format(name))
         return None
+    if name.startswith("mangfall-"):
+        # MANGFALL-Karten suchen fehlende Geräte selbst: erfundene entity_ids fallen weg, die Karte bleibt
+        node = {k: v for k, v in node.items() if not (k == "entity" and isinstance(v, str) and ENTITY_ID_RE.fullmatch(v) and v not in valid
+                                                         and not removed.append(v))}
+        pruned = prune_entities(node, valid, removed)
+        return check_mangfall(name, pruned) if pruned is not None else None
     pruned = prune_entities(node, valid, removed)
     if pruned is None:
         return None
     for key in ("entities", "series", "entity"):       # ohne ihre Geräte zeigt die Karte nur einen Fehler
         if node.get(key) and not pruned.get(key):
             return None
-    if name.startswith("mangfall-"):
-        return check_mangfall(name, pruned)
     if name == "power-flow-card-plus":
         ents = pruned.get("entities") if isinstance(pruned.get("entities"), dict) else {}
         if not any(ents.get(k) for k in ("grid", "solar", "battery")):

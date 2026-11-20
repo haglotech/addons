@@ -1,7 +1,8 @@
 # Änderungen
 
-## 0.28.0
+## 1.0.0
 
+- Haglo Assist ist fertig: Version 1.0 – keine Beta mehr
 - Neu: MANGFALL-Karten sind mit dabei – sechsundzwanzig Dashboard-Karten in einem Design: Energiefluss (PV, Speicher, Netz), Energieverlauf (Tag, Woche, Monat, Jahr), Zisterne und Tank in sechs Formen, Raumklima, Batterien, Türen und Fenster, Mähroboter, Saugroboter, Müllabfuhr, Wetter, Anwesenheit, Lichter, dynamischer Strompreis, E-Auto, Heizung, Wasserwaage für FLAT, Haus auf einen Blick mit Begrüßung und Hinweisen, Rollläden, Sicherheit mit Alarmanlage, Schlössern und Meldern, Kameras, Musik, Schnellaktionen, Verbraucher mit „Waschmaschine fertig“, Luftqualität, Termine und Haus-Check. Jede Zahl lässt sich antippen und zeigt ihren Verlauf direkt in der Karte. Haglo Assist richtet sie selbst ein, ohne HACS, hell und dunkel
 - Haglo Assist nimmt diese Karten bevorzugt, wenn sie zu deinem Wunsch und deinen Geräten passen – sonst wie bisher die Karten von Home Assistant
 - Hast du die MANGFALL-Karten schon selbst installiert, bleibt deine Installation unverändert
