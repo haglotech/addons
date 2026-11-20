@@ -12,6 +12,8 @@ deine Geräte. Auf Deutsch, ohne YAML.
 
 - **Dashboards:** baut ein eigenes „Haglo Dashboard“ und ändert auf Wunsch auch deine bestehenden.
   Vor jeder Änderung wird eine Version gesichert, die du wiederherstellen kannst.
+  Mit dabei: die MANGFALL-Karten (Energiefluss, Zisterne, Raumklima, Batterien, Türen und Fenster, Mähroboter)
+  in einem Design – Haglo Assist richtet sie selbst ein, ohne HACS.
 - **Automationen, Skripte, Szenen:** „Wenn sich im Flur etwas bewegt, mach das Licht an.“ Du siehst
   erst einen Vorschlag und bestätigst ihn.
 - **Schalten und fragen:** „Mach im Wohnzimmer das Licht aus“ oder „Wie warm ist es im Bad?“

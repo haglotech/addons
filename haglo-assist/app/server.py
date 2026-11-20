@@ -46,7 +46,7 @@ SKIP_DOMAINS = {
     "zone", "persistent_notification", "assist_satellite", "ai_task",
 }
 
-ADDON_VERSION = "0.27.5"
+ADDON_VERSION = "0.28.0"
 MAX_VERSIONS = 30                      # so viele Dashboard-Versionen bleiben lokal gespeichert
 BAR_ENTITY = "input_text.haglo_assist"           # Eingabeleiste im Dashboard
 BAR_STATUS = "input_text.haglo_assist_status"    # Rückmeldung darunter
@@ -879,7 +879,8 @@ def card_names(resources) -> list[str]:
 def card_installed(card_type: str, installed) -> bool:
     """custom:mushroom-entity-card passt zu „mushroom“, custom:power-flow-card-plus zu „power-flow-card-plus“."""
     name = card_type.split(":", 1)[1].strip().lower() if ":" in card_type else card_type
-    return any(name == i or name.startswith(i + "-") or (i.startswith("lovelace-") and name == i[9:]) for i in installed)
+    return any(name == i or name.startswith(i + "-") or (i.startswith("lovelace-") and name == i[9:])
+               or (i.endswith("-cards") and name.startswith(i[:-5])) for i in installed)    # mangfall-cards → mangfall-…
 
 
 def custom_cards_in(node, found: set | None = None) -> set:
@@ -942,6 +943,8 @@ def clean_custom_card(node: dict, valid: set[str], removed: list[str], cards: di
     for key in ("entities", "series", "entity"):       # ohne ihre Geräte zeigt die Karte nur einen Fehler
         if node.get(key) and not pruned.get(key):
             return None
+    if name.startswith("mangfall-"):
+        return check_mangfall(name, pruned)
     if name == "power-flow-card-plus":
         ents = pruned.get("entities") if isinstance(pruned.get("entities"), dict) else {}
         if not any(ents.get(k) for k in ("grid", "solar", "battery")):
@@ -957,6 +960,8 @@ async def dashboard_cards(ha: "HAClient", before: dict | None = None) -> dict:
            "types": {json.loads(k).get("type") for k in keep}}
     try:
         out["installed"] = card_names(await ha.call("lovelace/resources"))
+        if MANGFALL["ready"] is False and MANGFALL["own"]:
+            out["installed"] = [n for n in out["installed"] if n != MANGFALL_LIB]   # erst nach Neustart sichtbar
     except Exception as e:
         print(f"Zusatzkarten nicht lesbar: {e}", flush=True)
     try:
@@ -973,7 +978,7 @@ async def dashboard_cards(ha: "HAClient", before: dict | None = None) -> dict:
 
 def cards_hint(cards: dict) -> str:
     """Eine Zeile für die KI (das Backend kürzt Hinweise auf 400 Zeichen)."""
-    known = ("power-flow-card-plus", "mini-graph-card", "apexcharts-card")
+    known = (MANGFALL_LIB, "power-flow-card-plus", "mini-graph-card", "apexcharts-card")
     names = sorted(cards.get("installed") or [], key=lambda n: (n not in known, n))
     listed, used = [], 0
     for n in names:
@@ -990,10 +995,101 @@ def missing_cards_text(removed: list[str]) -> str:
     """Satz für den Kunden, wenn eine Zusatzkarte fehlte – sonst leer."""
     prefix = NOT_INSTALLED.split("„")[0]
     names = sorted({r.split("„", 1)[1].split("“", 1)[0] for r in removed if r.startswith(prefix)})
+    own = [n for n in names if n.startswith("mangfall-")]
+    names = [n for n in names if n not in own]
+    text = (" Die MANGFALL-Karten bringt Haglo Assist mit. Damit sie erscheinen, starte Home Assistant einmal neu "
+            "(Einstellungen → System → Neu starten) und versuch es dann noch einmal.") if own else ""
     if not names:
-        return ""
+        return text
     return (f" Die Zusatzkarte {' und '.join('„' + n + '“' for n in names)} ist auf deinem Home Assistant noch nicht "
-            "installiert. Installiere sie über HACS und versuch es dann noch einmal.")
+            "installiert. Installiere sie über HACS und versuch es dann noch einmal." + text)
+
+
+# ---------------------------------------------------------------- MANGFALL-Karten (bringt die App selbst mit)
+# Sechs Karten in einem Design (Energiefluss, Zisterne/Tank, Raumklima, Batterien, Türen und Fenster, Mähroboter).
+# Die App legt die Datei unter /config/www/haglo/ ab und trägt sie als Dashboard-Ressource ein – ohne HACS.
+MANGFALL_SRC = Path(__file__).parent / "cards" / "mangfall-cards.js"
+MANGFALL_DST = Path("/homeassistant/www/haglo/mangfall-cards.js")
+MANGFALL_URL = "/local/haglo/mangfall-cards.js"
+MANGFALL_LIB = "mangfall-cards"
+MANGFALL: dict = {"ready": None, "own": False}    # ready: Home Assistant liefert die Datei aus · own: unsere Ressource
+# Karte → Pflichtfeld (ohne zeigt die Karte nur einen Fehler)
+MANGFALL_CARDS = {"mangfall-energy-card": "grid", "mangfall-level-card": "entity", "mangfall-climate-card": "rooms",
+                  "mangfall-battery-card": None, "mangfall-openings-card": None, "mangfall-mower-card": "entity"}
+
+
+def mangfall_version() -> str:
+    try:
+        m = re.search(r'MC_VERSION\s*=\s*"([^"]+)"', MANGFALL_SRC.read_text(encoding="utf-8"))
+        return m.group(1) if m else "1"
+    except OSError:
+        return "1"
+
+
+def check_mangfall(name: str, card: dict):
+    """Eine MANGFALL-Karte nur mit dem, was sie zum Anzeigen braucht – erfundene Kartennamen fallen weg."""
+    if name not in MANGFALL_CARDS:
+        return None
+    need = MANGFALL_CARDS[name]
+    if need == "rooms":
+        rooms = [r for r in card.get("rooms") or [] if isinstance(r, dict) and r.get("temperature")]
+        if not rooms:
+            return None
+        card = {**card, "rooms": rooms}
+    elif need and not card.get(need):
+        return None
+    if name == "mangfall-mower-card" and not str(card.get("entity")).startswith("lawn_mower."):
+        return None
+    return card
+
+
+async def mangfall_served(session, url: str) -> bool | None:
+    """Liefert Home Assistant /local/… aus? /local gibt es nur, wenn der Ordner www beim Start schon da war."""
+    for base in ("http://homeassistant:8123", "https://homeassistant:8123"):
+        try:
+            async with session.get(base + url, ssl=False, timeout=aiohttp.ClientTimeout(total=8)) as r:
+                return r.status == 200
+        except Exception:
+            continue
+    return None                     # nicht prüfbar
+
+
+async def install_mangfall(app):
+    """Datei ablegen bzw. aktualisieren und als Dashboard-Ressource eintragen. Hat der Kunde die Karten schon selbst
+    (HACS oder eigene Datei), bleibt alles, wie es ist."""
+    if not Path("/homeassistant").is_dir() or not MANGFALL_SRC.is_file():
+        return
+    try:
+        url = f"{MANGFALL_URL}?v={mangfall_version()}"
+        async with HAClient(app["session"]) as ha:
+            resources = await ha.call("lovelace/resources")
+            mine = [r for r in resources if str(r.get("url") or "").split("?", 1)[0] == MANGFALL_URL]
+            if not mine and MANGFALL_LIB in card_names(resources):
+                print("[MANGFALL] Karten sind schon installiert (eigene Datei oder HACS)", flush=True)
+                MANGFALL.update(ready=True, own=False)
+                return
+            had_www = MANGFALL_DST.parent.parent.is_dir()
+            data = MANGFALL_SRC.read_bytes()
+            MANGFALL_DST.parent.mkdir(parents=True, exist_ok=True)
+            if not MANGFALL_DST.exists() or MANGFALL_DST.read_bytes() != data:
+                MANGFALL_DST.write_bytes(data)
+            if not mine:
+                await ha.call("lovelace/resources/create", res_type="module", url=url)
+            elif mine[0].get("url") != url or mine[0].get("type") != "module":
+                await ha.call("lovelace/resources/update", resource_id=mine[0]["id"], res_type="module", url=url)
+            for extra in mine[1:]:
+                await ha.call("lovelace/resources/delete", resource_id=extra["id"])
+        served = await mangfall_served(app["session"], url)
+        MANGFALL.update(ready=had_www if served is None else served, own=True)
+        if MANGFALL["ready"]:
+            print(f"[MANGFALL] Karten bereit ({url})", flush=True)
+        else:
+            print("[MANGFALL] Karten abgelegt – sichtbar nach einem Neustart von Home Assistant", flush=True)
+    except HAError as e:
+        # z. B. Dashboards im YAML-Modus: dort trägt der Kunde Ressourcen selbst ein
+        print(f"[MANGFALL] Ressource nicht eintragbar: {e}", flush=True)
+    except Exception as e:
+        print(f"[MANGFALL] Einrichtung übersprungen: {e}", flush=True)
 
 
 # ---------------------------------------------------------------- Prüfung
@@ -1364,7 +1460,7 @@ def save_history(items: list) -> None:
 
 ROUTE: dict | None = None      # Weg der gerade laufenden Anfrage (für die Anzeige im Verlauf)
 
-# Woran Auto erkennt, dass ein Wunsch Claude Präzise braucht
+# Woran Auto erkennt, dass ein Wunsch Cloud Präzise braucht
 COMPLEX = re.compile(
     r"dashboard|übersicht|seite|reiter|karte|kachel|layout|automati|(wenn|falls) .+ (dann|soll|sollen)|immer wenn|sobald|"
     r"jeden (tag|morgen|abend)|am meisten|welche geräte|"
@@ -1384,7 +1480,7 @@ def add_history(kind: str, wish: str, text: str, **extra) -> str:
     items = load_history()
     hid = f"{int(time.time() * 1000)}"
     if ROUTE and "local" not in extra:
-        extra = {**extra, "route": ROUTE}      # über welchen Weg (Claude Schnell/Präzise, Auto) beantwortet
+        extra = {**extra, "route": ROUTE}      # über welchen Weg (Cloud Schnell/Präzise, Auto) beantwortet
     items.append({"id": hid, "ts": int(time.time()), "kind": kind, "wish": wish[:300], "text": text[:6000],
                   **{k: v for k, v in extra.items() if v is not None}})
     save_history(items)
@@ -3064,7 +3160,7 @@ async def generate(request):
         # Schnellweg (Auto, Lokal, Schnell) und Haglo Local (Auto bei einfachen Wünschen, Lokal immer):
         # direkt auf dem Hub, ohne Internet und Kontingent
         try:
-            # Cloud: nur der Schnellweg (eindeutige Schaltbefehle ohne KI, kostet nichts) – alles andere Claude
+            # Cloud: nur der Schnellweg (eindeutige Schaltbefehle ohne KI, kostet nichts) – alles andere die Cloud
             done = await local_answer(request.app, wish, use_model=mode == "lokal" or (
                 mode == "auto" and (not complex_wish or bool(local_ai.PLAN.search(wish)) or bool(local_ai.DASH_CUE.search(wish)))),
                 code_only=mode == "cloud")
@@ -3074,13 +3170,13 @@ async def generate(request):
         if done:
             return web.json_response({"ok": True, **done})
     if mode == "lokal":
-        # Lokal heißt lokal: nie still an Claude weitergeben. Ehrlich sagen, was lokal nicht geht.
+        # Lokal heißt lokal: nie still an die Cloud weitergeben. Ehrlich sagen, was lokal nicht geht.
         text = ("Das geht lokal nicht – dafür „Auto“ oder „Cloud“ wählen.") if complex_wish else \
                ("Das habe ich lokal nicht sicher verstanden. Gerät oder Raum genauer nennen – oder „Auto“ wählen.")
         print(f"[Lokal] nicht lokal lösbar, Cloud NICHT gefragt (Modus Lokal) | {wish!r}", flush=True)
         add_history("answer", wish, text, local=1)
         return web.json_response({"ok": True, "answer": text, "local": 1})
-    # Welche Claude-Stufe? Die App wählt selbst: große Aufgaben, Rückfragen und Verfeinern gründlich, sonst schnell.
+    # Welche Cloud-Stufe? Die App wählt selbst: große Aufgaben, Rückfragen und Verfeinern gründlich, sonst schnell.
     cloud_mode = "praezise" if (complex_wish or refine or dialog) else "schnell"
     request.app["effective_mode"] = cloud_mode
     global ROUTE
@@ -4089,12 +4185,12 @@ async def local_answer(app, wish: str, use_model: bool = True, code_only: bool =
     t0 = time.time()
     # Sicherheit: Wenn-dann-Wünsche, Zeitpläne, Automationen und Dashboards schaltet der Schnellweg nie sofort.
     # Das Modell darf sie planen (Timer, Automation mit Bestätigung, neues Dashboard mit Rückgängig);
-    # Fehlersuche und alles andere Komplexe geht an Claude.
+    # Fehlersuche und alles andere Komplexe geht an die Cloud.
     if is_complex(wish) and not (local_ai.PLAN.search(wish) or local_ai.DASH_CUE.search(wish) or local_ai.time_cue(wish)):
         print(f"[Lokal] komplex → nicht lokal | {wish!r}", flush=True)
         return None
     if code_only and local_ai.DASH_CUE.search(wish):
-        return None             # Cloud: Dashboards baut Claude (schöner als der Baukasten)
+        return None             # Cloud: Dashboards baut die Cloud (schöner als der Baukasten)
     session = app["session"]
     if app.get("areas_cache") or local_ai.PLAN.search(wish):
         # Planwünsche (Timer, Automation, Dashboard) brauchen die Räume – darauf lohnt sich das Warten
@@ -4118,7 +4214,7 @@ async def local_answer(app, wish: str, use_model: bool = True, code_only: bool =
         if check_actions(obj["actions"], by_id):
             print(f"[Lokal] Automation abgelehnt ({check_actions(obj['actions'], by_id)}) | {wish!r}", flush=True)
             return None
-        # gleiche Bestätigungskarte wie bei Claude – angelegt wird erst nach „Ja“
+        # gleiche Bestätigungskarte wie bei der Cloud – angelegt wird erst nach „Ja“
         return {"objects": [obj], "erklaerung": res["text"], "local": int((time.time() - t0) * 1000)}
     if res["kind"] == "dashboard":
         title, cfg = local_ai.dashboard_config(res["plan"], states, areas, app.get("registry_cache"))
@@ -4218,6 +4314,7 @@ async def on_startup(app):
     app["local"] = local_ai.LocalAI(app["session"])
     resume_timers(app)
     asyncio.create_task(install_agent(app))
+    asyncio.create_task(install_mangfall(app))
     asyncio.create_task(area_map(app))          # Raumliste vorab laden – der erste Befehl ist dann schon schnell
     app["voice"] = voice.Voice(app["session"])
     if FEATURES["voice"]:

@@ -10,7 +10,7 @@ Ablauf je Befehl:
 3. Aktionen laufen durch dieselben Prüfungen wie bei der Cloud (erlaubte Bereiche, Schlösser/Tore nur
    nach Bestätigung). Nichts verlässt das Heimnetz.
 
-Ist das Modell nicht da, nicht sicher oder der Wunsch zu groß, übernimmt wie bisher Claude.
+Ist das Modell nicht da, nicht sicher oder der Wunsch zu groß, übernimmt wie bisher die Cloud.
 """
 
 import asyncio
@@ -39,9 +39,9 @@ SYSTEM = ("Du bist Haglo Local, der lokale Smart-Home-Assistent. Antworte nur mi
           '{"a":[{"s":Dienst,"e":[Nummern],"d":{Daten}}],"t":Bestätigung} oder {"t":Antwort} '
           'oder {"f":Rückfrage} oder {"c":1} wenn es zu komplex ist.')
 
-LIMIT_S = 30             # danach übernimmt Claude (schwache Hubs, z. B. VM mit 2 GB, brauchen so lange)
-LIMIT_PLAN_S = 120       # Timer, Automation, Dashboard dürfen länger dauern – das baut sonst Claude
-MAX_LEN = 140            # längere Wünsche sind fast nie „schalte X“ – direkt an Claude
+LIMIT_S = 30             # danach übernimmt die Cloud (schwache Hubs, z. B. VM mit 2 GB, brauchen so lange)
+LIMIT_PLAN_S = 120       # Timer, Automation, Dashboard dürfen länger dauern – das baut sonst die Cloud
+MAX_LEN = 140            # längere Wünsche sind fast nie „schalte X“ – direkt an die Cloud
 MAX_DEVICES = 10
 SHOWN = {"light", "switch", "cover", "climate", "lock", "media_player", "vacuum", "scene", "script",
          "fan", "input_boolean"}
@@ -298,7 +298,7 @@ def to_actions(out: dict, idx: dict[int, str]) -> list[dict] | None:
             return None
         if any(i.split(".")[0] != dom for i in ids):
             # An/Aus/Umschalten ist für alle schaltbaren Typen gleich gemeint („Steckdose“ kann technisch ein
-            # light sein) – dann je Gerät den passenden Dienst nehmen. Alles andere: lieber Claude.
+            # light sein) – dann je Gerät den passenden Dienst nehmen. Alles andere: lieber die Cloud.
             if s not in ("turn_on", "turn_off", "toggle"):
                 return None
             data = a.get("d") if isinstance(a.get("d"), dict) else {}
@@ -322,7 +322,7 @@ RE_CLOSE = re.compile(r"\b(zu|schliess\w*|runter)\b")
 
 def model_guard(wish: str, acts: list[dict], states: list[dict], areas: dict[str, str]) -> dict | None:
     """Prüft die Aktionen des kleinen Modells gegen den Wortlaut, bevor etwas schaltet.
-    → None: in Ordnung. → {"kind": "question", ...}: lieber nachfragen. → {"kind": "claude"}: Cloud übernimmt."""
+    → None: in Ordnung. → {"kind": "question", ...}: lieber nachfragen. → {"kind": "cloud"}: Cloud übernimmt."""
     w = norm(wish)
     toks = set(w.split())
     by_id = {s["entity_id"]: s for s in states}
@@ -330,15 +330,15 @@ def model_guard(wish: str, acts: list[dict], states: list[dict], areas: dict[str
         dom, svc = a["action"].split(".", 1)
         # Schlösser nie über das kleine Modell (auf/zu verwechselt = Haustür offen)
         if dom in ("lock", "alarm_control_panel"):
-            return {"kind": "claude"}
+            return {"kind": "cloud"}
         # Richtung muss zum Wortlaut passen (Szenen/Skripte heißen oft „Alles aus“, Helligkeit ist kein An)
         directional = dom not in ("scene", "script") and not a.get("data")
         if directional and svc == "turn_on" and toks & OFF_WORDS and not toks & ON_WORDS:
-            return {"kind": "claude"}
+            return {"kind": "cloud"}
         if directional and svc == "turn_off" and toks & ON_WORDS and not toks & OFF_WORDS:
-            return {"kind": "claude"}
+            return {"kind": "cloud"}
         if dom == "cover" and ("close" in svc and RE_OPEN.search(w) or "open" in svc and RE_CLOSE.search(w)):
-            return {"kind": "claude"}
+            return {"kind": "cloud"}
         # Gleicher Name in mehreren Räumen und kein Raum genannt → nachfragen statt raten
         for e in a["target"]["entity_id"]:
             name = norm((by_id.get(e, {}).get("attributes") or {}).get("friendly_name") or "").strip()
@@ -1123,7 +1123,7 @@ def power_answer(wish: str, states: list[dict], areas: dict[str, str]) -> str | 
     if not re.search(r"\bwatt\b|strom|verbrauch|leistung|\bzieht\b", low) or not re.search(r"\bwie ?viel|\bwieviel|\bwas zieht|\bwie hoch", low):
         return None
     if re.search(r"heute|gestern|woche|monat|jahr|kosten|insgesamt|gesamt", low):
-        return None                       # Verlauf und Summen sind Sache von Claude
+        return None                       # Verlauf und Summen sind Sache der Cloud
     rooms = rooms_named(wish, areas)
     sensors = [st for st in states if st["entity_id"].startswith("sensor.")
                and (st.get("attributes") or {}).get("device_class") == "power"
@@ -1150,7 +1150,7 @@ def code_plan(wish: str, states: list[dict], areas: dict[str, str]) -> dict | No
     if not (sec or clock or side) or RE_QUESTION.search(wish) or re.search(r"\b(wenn|falls|sobald|warum|wieso)\b|beweg|keiner|niemand", low):
         return None
     if re.search(r"\balle \d|\balle (zwei|drei|fuenf|zehn|paar)\b|\bstuendlich|\bjede (minute|stunde)", low):
-        return None                              # „alle 10 Minuten“: Wiederholung – macht Claude
+        return None                              # „alle 10 Minuten“: Wiederholung – macht die Cloud
     repeat = bool(re.search(r"\b(jeden|jede|taeglich|immer|werktags|werktagen|wochenende|montags|dienstags|mittwochs|"
                             r"donnerstags|freitags|samstags|sonntags|morgens|abends|nachts|mittags|automati\w*|woche)\b", low)) \
         or any(len(t) >= 6 and (similar(t, "wochenende") or similar(t, "werktags") or similar(t, "taeglich")) for t in low.split()) \
@@ -1211,7 +1211,7 @@ def code_plan(wish: str, states: list[dict], areas: dict[str, str]) -> dict | No
             elif re.search(r"wochenende|samstags und sonntags", low) or fz("wochenende") or (fz("samstags") and fz("sonntags")):
                 trig["tage"] = ["sa", "so"]
             elif any(fz(d) for d in ("montags", "dienstags", "mittwochs", "donnerstags", "freitags", "samstags", "sonntags", "woche")):
-                return None                      # einzelne Wochentage o. Ä.: lieber das Modell / Claude
+                return None                      # einzelne Wochentage o. Ä.: lieber das Modell / die Cloud
         idx = {i: e for i, e in enumerate(sorted({e for a in acts for e in a["target"]["entity_id"]}), 1)}
         inv = {e: i for i, e in idx.items()}
         by_id = {st["entity_id"]: st for st in states}
@@ -1242,7 +1242,7 @@ def nice_wait(sec: int) -> str:
 
 # ---------------------------------------------------------------- Regel-Maschine: häufige Wünsche ohne Modell
 # Jede Regel findet das Gerät wie der Schnellweg und liefert dasselbe wie das Modell – die Prüfungen danach gelten genauso.
-# Was keine Regel sicher versteht, bekommt das Modell (oder Claude).
+# Was keine Regel sicher versteht, bekommt das Modell (oder die Cloud).
 COLORS = {"rot": "red", "gruen": "green", "blau": "blue", "gelb": "yellow", "orange": "orange", "lila": "purple",
           "violett": "violet", "pink": "pink", "rosa": "pink", "tuerkis": "turquoise"}
 RE_BRIGHT = re.compile(r"\b(heller|dunkler|dimm|dimme|dimmen|runterdimmen|hochdimmen|aufhellen)\b|weniger hell|zu hell|zu dunkel|"
@@ -1706,7 +1706,7 @@ class LocalAI:
             self.last_ms = max(1, int((time.time() - t_start) * 1000))
             return {"kind": "answer", "text": talk, "ms": self.last_ms}
         if RE_ADMIN.search(wish):
-            # Umbenennen, Löschen, Einrichten, Fehlersuche: nie lokal schalten – das macht Claude (oder gar nicht)
+            # Umbenennen, Löschen, Einrichten, Fehlersuche: nie lokal schalten – das macht die Cloud (oder gar nicht)
             print(f"[Lokal] Verwaltung/Fehlersuche → nicht lokal | {wish!r}", flush=True)
             return None
         if re.search(r"\b(nicht|niemals|nie)\b", norm(wish)) and not RE_QUESTION.search(wish) and \
@@ -1800,7 +1800,7 @@ class LocalAI:
             guard = model_guard(wish, acts, states, areas)
             if guard:
                 print(f"[Lokal] Prüfung: {guard} | {wish!r}", flush=True)
-                return None if guard["kind"] == "claude" else {**guard, "ms": self.last_ms}
+                return None if guard["kind"] == "cloud" else {**guard, "ms": self.last_ms}
             if "in" in out:
                 sec = int(out["in"])
                 when = f"{sec} Sekunden" if sec < 60 else f"{sec // 60} Minute{'n' if sec >= 120 else ''}" if sec < 3600 \
