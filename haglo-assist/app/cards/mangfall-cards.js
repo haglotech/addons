@@ -1,10 +1,11 @@
 /*
  * MANGFALL Cards – Kartenbibliothek für Home Assistant
  * Karten: Zisterne (LEVEL), Energiefluss und Energieverlauf (WATT), Raumklima, Batterien, Fenster & Türen, Mähroboter,
- *         Müllabfuhr, Wetter, Anwesenheit, Lichter, Saugroboter, Strompreis, E-Auto, Heizung
+ *         Müllabfuhr, Wetter, Anwesenheit, Lichter, Saugroboter, Strompreis, E-Auto, Heizung, Wasserwaage (FLAT),
+ *         Haus auf einen Blick, Rollläden, Sicherheit, Kameras, Musik, Schnellaktionen, Verbraucher, Luftqualität, Termine, Haus-Check
  * (c) Mangfall · MIT-Lizenz
  */
-const MC_VERSION = "1.4.0";
+const MC_VERSION = "1.5.0";
 
 const fmt = (n, d = 0) =>
   Number(n).toLocaleString("de-DE", { minimumFractionDigits: d, maximumFractionDigits: d });
@@ -42,7 +43,8 @@ const fmtNum = (v, unit = "") => {
   return `${fmt(v, Math.abs(v) < 10 && v % 1 !== 0 ? 1 : 0)}${u ? (u === "%" || u.startsWith("°") ? (u === "%" ? " %" : u) : " " + u) : ""}`;
 };
 /* Gerätenamen ohne technische Anhängsel */
-const cleanName = (s) => String(s || "").replace(/[\s_-]*(battery\s*level|battery|batterie(stand)?|akku(stand)?|ladestand|temperature|temperatur|humidity|luftfeuchtigkeit|luftfeuchte|power|leistung|contact|kontakt|opening|sensor)\s*$/i, "").trim() || String(s || "");
+const CLEAN_RE = /[\s_-]*(battery\s*level|battery|batterie(stand)?|akku(stand)?|ladestand|temperature|temperatur|humidity|luftfeuchtigkeit|luftfeuchte|power|leistung|energy|contact|kontakt|opening|sensor)\s*$/i;
+const cleanName = (s) => String(s || "").replace(CLEAN_RE, "").replace(CLEAN_RE, "").trim() || String(s || "");
 const STATE_DE = { on: "an", off: "aus", home: "zu Hause", not_home: "unterwegs", open: "offen", closed: "zu", unavailable: "offline", unknown: "unbekannt",
   cleaning: "saugt", docked: "in der Station", mowing: "mäht", paused: "pausiert", returning: "fährt zurück", idle: "bereit", error: "Fehler",
   heat: "Heizen", cool: "Kühlen", auto: "Automatik", heat_cool: "Automatik", locked: "verriegelt", unlocked: "offen", playing: "spielt" };
@@ -145,11 +147,16 @@ class MangfallBase extends HTMLElement {
       ? `<a class="brand" href="https://mangfall.eu" target="_blank" rel="noopener" title="MANGFALL${p ? " " + p : ""}">${MARK}${p ? `<span class="prod">${p}</span>` : ""}</a>`
       : "";
     this.shadowRoot.innerHTML = `<style>${BASE_CSS}${extraCss}</style>
-      <ha-card class="st-${stateKey}${this._config.show_branding ? " branded" : ""}">${body}${this._sheet?.startsWith?.("e:") && this._hass ? this._entSheet() : ""}${brand}</ha-card>`;
+      <ha-card class="st-${stateKey}${this._config.show_branding ? " branded" : ""}">${body}${this._sheet && this._hass ? (this._sheet.startsWith("e:") ? this._entSheet() : this._extraSheet?.(this._sheet) || "") : ""}${brand}</ha-card>`;
     // Alles Antippbare: Detailansicht (data-entity) oder eigenes Verlaufsfeld (data-sheet), auch per Tastatur
     this.shadowRoot.querySelectorAll("[data-entity], [data-sheet]").forEach((el) => {
       const go = () => (el.dataset.sheet ? this._toggleSheet(el.dataset.sheet) : el.classList.contains("shd") ? this._moreInfo(el.dataset.entity) : this._toggleSheet("e:" + el.dataset.entity));
       if (!/^(BUTTON|A)$/.test(el.tagName)) { el.setAttribute("role", "button"); el.setAttribute("tabindex", "0"); }
+      el.addEventListener("click", (ev) => { ev.stopPropagation(); go(); });
+      el.addEventListener("keydown", (ev) => { if (ev.key === "Enter" || ev.key === " ") { ev.preventDefault(); go(); } });
+    });
+    this.shadowRoot.querySelectorAll("[data-more]").forEach((el) => {
+      const go = () => this._moreInfo(el.dataset.more);
       el.addEventListener("click", (ev) => { ev.stopPropagation(); go(); });
       el.addEventListener("keydown", (ev) => { if (ev.key === "Enter" || ev.key === " ") { ev.preventDefault(); go(); } });
     });
@@ -231,6 +238,18 @@ class MangfallBase extends HTMLElement {
     }
     return `<div class="sheet${this._sheetAnim ? " in" : ""}"><div class="shh"><span>${title}</span>
       <span><button class="shd" data-entity="${id}">Details</button><button class="shc" data-close aria-label="Schließen"><ha-icon icon="mdi:close"></ha-icon></button></span></div>${seg}${body}</div>`;
+  }
+  /* Aktion mit sichtbarer Rückmeldung („Schließt …“), verschwindet nach 5 s oder wenn der Zustand sich ändert */
+  _act(key, text, run) {
+    (this._fb ||= {})[key] = { text, at: Date.now() };
+    this._lastKey = null; this._render();
+    Promise.resolve().then(run).catch(() => { this._fb[key] = { text: "Hat nicht geklappt", at: Date.now() }; this._lastKey = null; this._render(); });
+    clearTimeout(this._fbT); this._fbT = setTimeout(() => { this._lastKey = null; this._render(); }, 5100);
+  }
+  _fbText(key, ms = 5000) { const f = this._fb?.[key]; return f && Date.now() - f.at < ms ? f.text : ""; }
+  _frame(title, body, entity = "") {
+    return `<div class="sheet${this._sheetAnim ? " in" : ""}"><div class="shh"><span>${esc(title)}</span>
+      <span>${entity ? `<button class="shd" data-entity="${entity}">Details</button>` : ""}<button class="shc" data-close aria-label="Schließen"><ha-icon icon="mdi:close"></ha-icon></button></span></div>${body}</div>`;
   }
   _head(title, chip) {
     return `<div class="head"><div class="title">${title}</div>
@@ -2524,6 +2543,876 @@ class MangfallFlatCard extends MangfallBase {
   }
 }
 
+/* ================= Gemeinsames für die Alltagskarten (1.5.0) ================= */
+const wParts = (w) => { const s = fmtW(w), i = s.lastIndexOf(" "); return [s.slice(0, i), s.slice(i + 1)]; };
+const listIds = (hass, dom, f = () => true) => Object.values(hass?.states || {}).filter((e) => e.entity_id.startsWith(dom + ".") && !isHidden(hass, e.entity_id) && f(e)).map((e) => e.entity_id);
+const areaName = (hass, id) => { const a = areaOf(hass, id); return (a && hass.areas?.[a]?.name) || ""; };
+const stripArea = (name, area) => (area ? name.replace(new RegExp(`^${area.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}\\s+`, "i"), "") || name : name);
+const nice = (hass, e) => stripArea(cleanName(fname(e)), areaName(hass, e.entity_id));
+const byArea = (hass, list) => {
+  const m = new Map();
+  for (const e of list) { const n = areaName(hass, e.entity_id) || "Ohne Raum"; if (!m.has(n)) m.set(n, []); m.get(n).push(e); }
+  return [...m.entries()].sort((a, b) => (a[0] === "Ohne Raum") - (b[0] === "Ohne Raum") || a[0].localeCompare(b[0], "de"));
+};
+const DAY_LONG = (d) => d.toLocaleDateString("de-DE", { weekday: "long", day: "numeric", month: "long" });
+const dayWord = (d) => { const n = Math.round((dayStart(d) - dayStart()) / 864e5); return n === 0 ? "Heute" : n === 1 ? "Morgen" : d.toLocaleDateString("de-DE", { weekday: "long", day: "numeric", month: "short" }); };
+const CHIP_CSS = `
+  .chips { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 12px; }
+  .hc { display: inline-flex; align-items: center; gap: 6px; padding: 6px 12px 6px 8px; border: none; border-radius: 999px; cursor: pointer; font: inherit; font-size: 13px;
+    font-weight: 500; color: var(--primary-text-color); background: var(--secondary-background-color, rgba(127,127,127,.1)); transition: background .15s; }
+  .hc ha-icon { --mdc-icon-size: 17px; color: var(--hc, var(--secondary-text-color)); }
+  .hc:hover, .hc.sel { background: color-mix(in srgb, var(--hc, var(--primary-text-color)) 14%, var(--secondary-background-color, transparent)); }
+  .hc:focus-visible { outline: 2px solid var(--primary-color, #2a78d6); outline-offset: 2px; }
+  .k-ok { --hc: var(--success-color, #0ca30c); } .k-info { --hc: var(--info-color, #2a78d6); } .k-low { --hc: var(--warning-color, #eda100); } .k-crit { --hc: var(--error-color, #e34948); }`;
+const ACT_CSS = `
+  .ib { display: grid; place-items: center; width: 32px; height: 32px; flex: 0 0 32px; border: none; border-radius: 50%; cursor: pointer; color: var(--primary-text-color);
+    background: var(--secondary-background-color, rgba(127,127,127,.1)); transition: background .15s, transform .1s; }
+  .ib:hover:not([disabled]) { background: color-mix(in srgb, var(--primary-color, #2a78d6) 16%, var(--secondary-background-color, #eee)); }
+  .ib:active { transform: scale(.94); } .ib[disabled] { opacity: .35; cursor: default; }
+  .ib ha-icon { --mdc-icon-size: 18px; }
+  .pill { display: inline-flex; align-items: center; gap: 4px; border: none; border-radius: 999px; padding: 6px 12px; cursor: pointer; font: inherit; font-size: 13px; font-weight: 500;
+    color: var(--primary-text-color); background: var(--secondary-background-color, rgba(127,127,127,.12)); transition: background .15s; }
+  .pill:hover:not([disabled]) { background: color-mix(in srgb, var(--primary-color, #2a78d6) 16%, var(--secondary-background-color, #eee)); }
+  .pill[disabled] { opacity: .5; cursor: default; } .pill ha-icon { --mdc-icon-size: 16px; }
+  .pill.warn { background: color-mix(in srgb, var(--error-color, #e34948) 16%, var(--secondary-background-color, #eee)); }
+  .ib:focus-visible, .pill:focus-visible { outline: 2px solid var(--primary-color, #2a78d6); outline-offset: 2px; }
+  .fb { font-size: 12px; color: var(--mc-state); font-weight: 500; }
+  .ask { margin: 6px 0 4px; padding: 10px 12px; border-radius: 12px; background: color-mix(in srgb, var(--warning-color, #eda100) 12%, var(--secondary-background-color, transparent));
+    display: flex; flex-wrap: wrap; align-items: center; gap: 8px; font-size: 13.5px; color: var(--primary-text-color); }
+  .ask b { flex: 1 1 100%; font-weight: 500; }
+  .ask input { flex: 1 1 120px; min-width: 0; font: inherit; padding: 7px 10px; border-radius: 10px; border: 1px solid var(--divider-color, rgba(127,127,127,.4));
+    background: var(--card-background-color, #fff); color: var(--primary-text-color); }
+  .rh2 { display: flex; justify-content: space-between; font-size: 11.5px; font-weight: 600; letter-spacing: .06em; text-transform: uppercase; color: var(--secondary-text-color); margin: 12px 0 2px; }`;
+
+/* Haushaltsgeräte an der Leistung erkennen: läuft, oder fertig seit … (Pausen unter 10 min zählen zum Lauf) */
+const APL_RE = /wasch|washer|washing|trockner|dryer|sp(ü|ue)lmasch|dishwasher|geschirr/;
+const aplType = (n) => (/trockner|dryer/.test(n) ? ["Trockner", "mdi:tumble-dryer"] : /sp(ü|ue)l|dish|geschirr/.test(n) ? ["Spülmaschine", "mdi:dishwasher"] : ["Waschmaschine", "mdi:washing-machine"]);
+function aplState(pts, now = Date.now(), on = 8) {
+  const runs = [];
+  for (let i = 0; i < pts.length; i++) {
+    const a = pts[i].t, z = i + 1 < pts.length ? pts[i + 1].t : now;
+    if (!(pts[i].v > on) || z <= a) continue;
+    const l = runs[runs.length - 1];
+    if (l && a - l[1] <= 6e5) l[1] = z; else runs.push([a, z]);
+  }
+  const r = runs[runs.length - 1];
+  if (!r) return null;
+  if (r[1] >= now - 6e5 && (pts[pts.length - 1].v > on || r[1] - r[0] >= 6e5)) return { run: true, since: r[0], paused: !(pts[pts.length - 1].v > on) };
+  if (r[1] - r[0] >= 6e5 && now - r[1] < 3 * 36e5) return { done: true, at: r[1] };
+  return null;
+}
+async function aplFetch(card, ids) {
+  if (!ids.length || card._aplBusy || !card._hass?.callWS || (card._aplAt && Date.now() - card._aplAt < 6e5)) return;
+  card._aplBusy = true; card._aplAt = Date.now();
+  try {
+    const end = new Date(), res = await card._hass.callWS({ type: "history/history_during_period", start_time: new Date(+end - 4 * 36e5).toISOString(), end_time: end.toISOString(),
+      entity_ids: ids, minimal_response: true, no_attributes: true, significant_changes_only: false });
+    const unitK = (id) => ((card._hass.states[id]?.attributes.unit_of_measurement || "W").toLowerCase() === "kw" ? 1000 : 1);
+    card._apl = Object.fromEntries(ids.map((id) => [id, (res?.[id] || []).map((r) => ({ t: (r.lu || 0) * 1000, v: parseFloat(r.s) * unitK(id) })).filter((p) => isFinite(p.v) && p.t > 0)]));
+  } catch (e) { card._aplAt = Date.now() - 6e5 + 6e4; }
+  card._aplBusy = false; card._lastKey = null; card._render();
+}
+function aplNow(card, id) {
+  const st = card._hass.states[id], pts = [...(card._apl?.[id] || [])], v = toWatt(st);
+  if (v !== null) { const t = toMs(st.last_changed); if (!pts.length || t > pts[pts.length - 1].t) pts.push({ t, v }); }
+  return pts.length ? aplState(pts) : null;
+}
+/* Gerätestatus von Home Connect, Miele u. a. (Textsensoren) */
+const aplText = (e) => { const s = String(e.state).toLowerCase();
+  return /finish|fertig|beendet|\bend\b|ende|complete/.test(s) ? { done: true, at: toMs(e.last_changed) } : /run|l(ä|ae)uft|active|in.?betrieb|wash|dry|rinse|sp(ü|ue)l/.test(s) ? { run: true, since: toMs(e.last_changed) } : null; };
+const isAplText = (e) => e.entity_id.startsWith("sensor.") && APL_RE.test(lcName(e)) && /operation.?state|betriebszustand|programm.?status|status|zustand/.test(lcName(e)) && isNaN(parseFloat(e.state));
+const isConsumer = (e) => isPower(e) && !/netz|grid|3em|em3|smart.?meter|hausanschluss|z(ä|ae)hler|solar|\bpv\b|_pv|pv_|batter|speicher|akku|inverter|wechselrichter|phase|_l[123]\b|einspeis|export|import|bezug|total|gesamt|house|haus.?verbrauch|home|load|limit|max|min|setting|ziel|target|apparent|reactive|schein|blind|forecast|prognose|production|erzeugung|rated|threshold|clip|transmitted|netto|bkw|balkonkraftwerk|heute|today|daily|t(ä|ae)glich/.test(lcName(e)) && !NOT_POWER.test(lcName(e));
+
+/* ================= 17 · Haus auf einen Blick ================= */
+class MangfallHomeCard extends MangfallBase {
+  static defaults = { name: "", weather: "", show_weather: true };
+  static getStubConfig(hass) { return { weather: FIND.weather(hass) }; }
+  static getConfigForm() {
+    return { schema: [{ name: "weather", selector: { entity: { domain: "weather" } } },
+      { type: "expandable", name: "", title: "Weitere Einstellungen", flatten: true, schema: [{ name: "name", selector: { text: {} } }, { name: "show_weather", selector: { boolean: {} } }, BRANDING] }],
+      computeLabel: (s) => ({ weather: "Wetter", name: "Überschrift", show_weather: "Wetter anzeigen", show_branding: "MANGFALL-Zeichen anzeigen" }[s.name]),
+      computeHelper: (s) => ({ weather: "Leer lassen – die Karte nimmt deinen Wetterdienst von selbst.", name: "Leer lassen zeigt „Guten Abend“ mit deinem Namen." }[s.name]) };
+  }
+  _auto(c, hass) {
+    if (!c.weather && c.show_weather) c.weather = FIND.weather(hass);
+    c._open = listIds(hass, "binary_sensor", (e) => OPEN_CLASSES.includes(e.attributes.device_class));
+    c._lights = listIds(hass, "light", (e) => !Array.isArray(e.attributes.entity_id));
+    c._bats = listIds(hass, "sensor", (e) => e.attributes.device_class === "battery" && unitOf(e) === "%" && !PHONE_RE.test(lcName(e)));
+    c._waste = MangfallWasteCard._find(hass);
+    c._apl = listIds(hass, "sensor", (e) => isPower(e) && APL_RE.test(lcName(e))).slice(0, 4);
+    c._aplT = listIds(hass, "sensor", isAplText).slice(0, 4);
+    c._people = listIds(hass, "person");
+    return c;
+  }
+  _watch() { const c = this._config; return [c.weather, ...c._open, ...c._lights, ...c._bats, ...c._waste, ...c._apl, ...c._aplT, ...c._people].filter(Boolean); }
+  connectedCallback() {
+    clearInterval(this._clk);
+    this._clk = setInterval(() => { const m = new Date().getMinutes(); if (m !== this._min && this._hass) { this._min = m; this._lastKey = null; this._render(); } }, 5000);
+  }
+  disconnectedCallback() { clearInterval(this._clk); }
+  _onHass() { aplFetch(this, this._config._apl); }
+  _chips() {
+    const c = this._config, S = this._hass.states, out = [];
+    const open = c._open.map((id) => S[id]).filter((e) => e?.state === "on");
+    if (open.length) {
+      const win = open.every((e) => e.attributes.device_class === "window"), door = open.every((e) => e.attributes.device_class !== "window");
+      out.push({ k: "open", key: "low", icon: win ? "mdi:window-open-variant" : "mdi:door-open", ids: open.map((e) => e.entity_id),
+        label: open.length === 1 ? `${nice(this._hass, open[0])} offen` : `${open.length} ${win ? "Fenster" : door ? "Türen" : "Fenster und Türen"} offen`, title: "Offen" });
+    }
+    const lit = c._lights.map((id) => S[id]).filter((e) => e?.state === "on");
+    const away = c._people.length && c._people.every((id) => S[id]?.state && S[id].state !== "home" && isLive(S[id]));
+    if (lit.length) out.push({ k: "lights", key: away ? "low" : "info", icon: "mdi:lightbulb-on", ids: lit.map((e) => e.entity_id), title: "Lichter an",
+      label: away ? `Niemand da, ${lit.length === 1 ? "1 Licht" : lit.length + " Lichter"} an` : `${lit.length === 1 ? "1 Licht" : lit.length + " Lichter"} an` });
+    if (c._waste.length) {
+      const items = [];
+      for (const id of c._waste) {
+        const e = S[id]; if (!e) continue;
+        if (id.startsWith("calendar.")) { if (e.attributes.message && e.attributes.start_time) items.push({ d: dayStart(new Date(e.attributes.start_time.replace(" ", "T"))), t: e.attributes.message }); }
+        else items.push(...wasteFromSensor(e));
+      }
+      const t0 = +dayStart(), soon = items.filter((x) => +x.d >= t0 && +x.d <= t0 + 864e5).sort((a, b) => a.d - b.d);
+      if (soon.length) {
+        const n = Math.round((soon[0].d - t0) / 864e5), types = [...new Set(soon.filter((x) => +x.d === +soon[0].d).map((x) => x.t))];
+        out.push({ k: "waste", key: n === 1 ? "low" : "info", icon: /sack/i.test(types[0]) ? "mdi:sack" : "mdi:delete", ids: c._waste, title: "Müllabfuhr", label: `${n ? "Morgen" : "Heute"} ${types.join(", ")}` });
+      }
+    }
+    for (const id of [...c._apl, ...c._aplT]) {
+      const e = S[id]; if (!e) continue;
+      const st = id.startsWith("sensor.") && isAplText(e) ? aplText(e) : aplNow(this, id), [type, icon] = aplType(lcName(e));
+      if (st?.done) out.push({ k: "apl:" + id, key: "ok", icon, ids: [id], title: type, label: `${type} fertig` });
+      else if (st?.run) out.push({ k: "apl:" + id, key: "info", icon, ids: [id], title: type, label: `${type} läuft` });
+    }
+    const weak = c._bats.map((id) => S[id]).filter((e) => isLive(e) && parseFloat(e.state) <= 20);
+    if (weak.length) out.push({ k: "bat", key: "low", icon: "mdi:battery-low", ids: weak.map((e) => e.entity_id), title: "Akku schwach",
+      label: weak.length === 1 ? `Akku schwach: ${nice(this._hass, weak[0])}` : `${weak.length} Akkus schwach` });
+    return out;
+  }
+  _extraSheet(k) {
+    if (!k.startsWith("l:")) return "";
+    const ch = this._chips().find((x) => "l:" + x.k === k);
+    if (!ch) { this._sheet = null; return ""; }
+    const S = this._hass.states, rows = ch.ids.map((id) => S[id]).filter(Boolean).map((e) => `<div class="row" data-entity="${e.entity_id}">
+      <div class="rn">${esc(nice(this._hass, e))}<div class="rs">${esc(areaName(this._hass, e.entity_id) || stateDe(e.state))}</div></div>
+      <div class="rs">${e.attributes.device_class === "battery" ? fmtNum(parseFloat(e.state), "%") : ago(e.last_changed)}</div></div>`).join("");
+    return this._frame(ch.title, `<div class="rows">${rows}</div>`);
+  }
+  _render() {
+    if (!this._config || !this._hass) return;
+    const c = this._config, now = new Date(), h = now.getHours(), S = this._hass.states;
+    const hello = h < 5 ? "Gute Nacht" : h < 11 ? "Guten Morgen" : h < 17 ? "Guten Tag" : h < 22 ? "Guten Abend" : "Gute Nacht";
+    const who = (this._hass.user?.name || "").trim().split(/\s+/)[0];
+    const chips = this._chips(), w = c.show_weather && S[c.weather];
+    const state = chips.some((x) => x.key === "low" || x.key === "crit") ? { key: "low", label: `${chips.length} ${chips.length === 1 ? "Hinweis" : "Hinweise"}`, icon: "mdi:bell-outline" }
+      : chips.length ? { key: "info", label: `${chips.length} ${chips.length === 1 ? "Hinweis" : "Hinweise"}`, icon: "mdi:information-outline" }
+      : { key: "ok", label: "Alles ruhig", icon: "mdi:check-circle" };
+    const wx = w && isLive(w) ? `<span class="wx" data-sheet="e:${c.weather}|temperature"><ha-icon icon="${(WX[w.state] || [])[1] || "mdi:weather-cloudy"}"></ha-icon>${typeof w.attributes.temperature === "number" ? fmt(w.attributes.temperature) + "°" : ""} ${esc((WX[w.state] || [w.state])[0])}</span>` : "";
+    this._shell(state.key, `
+      ${this._head(esc(c.name || (who ? `${hello}, ${who}` : hello)), state)}
+      <div class="big" style="margin-top:6px"><span class="num">${now.toLocaleTimeString("de-DE", { hour: "2-digit", minute: "2-digit" })}</span><span class="u">Uhr</span></div>
+      <div class="muted dl"><span>${DAY_LONG(now)}</span>${wx}</div>
+      ${chips.length ? `<div class="chips">${chips.map((x) => `<button class="hc k-${x.key}" data-sheet="l:${x.k}"><ha-icon icon="${x.icon}"></ha-icon>${esc(x.label)}</button>`).join("")}</div>`
+        : `<div class="muted calm">${[c._open.length && "Alles zu", c._lights.length && (c._open.length ? "alles aus" : "Alles aus")].filter(Boolean).join(", ") || "Nichts Besonderes"} – nichts zu tun.</div>`}`, CHIP_CSS + `
+      .dl { display: flex; flex-wrap: wrap; gap: 4px 12px; align-items: center; }
+      .wx { display: inline-flex; align-items: center; gap: 4px; border-radius: 8px; } .wx ha-icon { --mdc-icon-size: 17px; }
+      .wx:hover { color: var(--primary-text-color); }
+      .calm { margin-top: 12px; }`);
+  }
+}
+
+/* ================= 18 · Rollläden & Jalousien ================= */
+const COVER_ICON = { awning: "mdi:awning-outline", blind: "mdi:blinds", curtain: "mdi:curtains", shade: "mdi:roller-shade", shutter: "mdi:window-shutter", window: "mdi:window-closed-variant", garage: "mdi:garage", gate: "mdi:gate", door: "mdi:door" };
+class MangfallCoverCard extends MangfallBase {
+  static defaults = { name: "Rollläden", exclude: [], include_garage: false };
+  static getStubConfig() { return {}; }   // leer = alle Rollläden, nach Räumen
+  static getConfigForm() {
+    return { schema: [{ name: "exclude", selector: { entity: { multiple: true, filter: { domain: "cover" } } } },
+      { type: "expandable", name: "", title: "Weitere Einstellungen", flatten: true, schema: [{ name: "name", selector: { text: {} } }, { name: "include_garage", selector: { boolean: {} } }, BRANDING] }],
+      computeLabel: (s) => ({ exclude: "Ausblenden", name: "Name", include_garage: "Garagentore und Tore zeigen", show_branding: "MANGFALL-Zeichen anzeigen" }[s.name]),
+      computeHelper: (s) => ({ exclude: "Die Karte findet alle Rollläden, Jalousien und Markisen von selbst. Hier wählst du nur, was sie nicht zeigen soll.",
+        include_garage: "Garagentore stehen sonst in der Sicherheitskarte." }[s.name]) };
+  }
+  _list() {
+    const c = this._config, H = this._hass;
+    return listIds(H, "cover", (e) => !Array.isArray(e.attributes.entity_id) && !c.exclude.includes(e.entity_id)
+      && (c.include_garage || !["garage", "gate", "door"].includes(e.attributes.device_class))).map((id) => H.states[id]);
+  }
+  _watch() { return this._hass ? this._list().map((e) => e.entity_id) : []; }
+  _pos(e) { const p = e.attributes.current_position; return typeof p === "number" ? p : e.state === "open" ? 100 : e.state === "closed" ? 0 : null; }
+  _render() {
+    if (!this._config || !this._hass) return;
+    const c = this._config, H = this._hass, all = this._list();
+    if (!all.length) return this._setup(c.name, "Ich habe keine Rollläden oder Jalousien gefunden.");
+    const live = all.filter(isLive), open = live.filter((e) => (this._pos(e) ?? 0) > 0 || e.state === "open" || e.state === "opening");
+    const moving = live.filter((e) => ["opening", "closing"].includes(e.state));
+    const state = moving.length ? { key: "info", label: `${moving.length} ${moving.length === 1 ? "fährt" : "fahren"}`, icon: "mdi:swap-vertical" }
+      : open.length ? { key: "info", label: `${open.length} offen`, icon: "mdi:window-shutter-open" } : { key: "ok", label: "Alle zu", icon: "mdi:window-shutter" };
+    const row = (e, room) => {
+      const f = e.attributes.supported_features ?? 15, p = this._pos(e), id = e.entity_id, ok = isLive(e);
+      const txt = this._fbText(id) || (!ok ? "nicht erreichbar" : e.state === "opening" ? "öffnet …" : e.state === "closing" ? "schließt …" : p === null ? stateDe(e.state) : p >= 99 ? "offen" : p <= 0 ? "zu" : `${fmt(p)} % offen`);
+      const icon = (COVER_ICON[e.attributes.device_class] || "mdi:window-shutter") + (p > 0 && /shutter|blinds|shade|garage/.test(COVER_ICON[e.attributes.device_class] || "shutter") ? "-open" : "");
+      return `<div class="row cv"><ha-icon class="ri" icon="${icon}"></ha-icon>
+        <div class="rn" data-sheet="e:${id}${typeof e.attributes.current_position === "number" ? "|current_position" : ""}">${esc(stripArea(cleanName(fname(e)), room))}
+          <div class="rs${this._fbText(id) ? " fb" : ""}">${txt}</div>${p !== null && ok ? `<div class="pos"><i style="width:${Math.max(0, Math.min(100, p))}%"></i></div>` : ""}</div>
+        <div class="cb">
+          ${f & 1 ? `<button class="ib" data-cv="open_cover" data-id="${id}" aria-label="Auf"${!ok || p >= 100 ? " disabled" : ""}><ha-icon icon="mdi:arrow-up"></ha-icon></button>` : ""}
+          ${f & 8 ? `<button class="ib" data-cv="stop_cover" data-id="${id}" aria-label="Stopp"${!ok ? " disabled" : ""}><ha-icon icon="mdi:stop"></ha-icon></button>` : ""}
+          ${f & 2 ? `<button class="ib" data-cv="close_cover" data-id="${id}" aria-label="Ab"${!ok || p === 0 ? " disabled" : ""}><ha-icon icon="mdi:arrow-down"></ha-icon></button>` : ""}
+        </div></div>`;
+    };
+    const groups = byArea(H, all).map(([r, ls]) => `${byArea(H, all).length > 1 ? `<div class="rh2"><span>${esc(r)}</span></div>` : ""}<div class="rows">${ls.map((e) => row(e, r === "Ohne Raum" ? "" : r)).join("")}</div>`).join("");
+    this._shell(state.key, `
+      ${this._head(c.name, state)}
+      <div class="top"><div class="big"><span class="num">${open.length}</span><span class="u">von ${all.length} offen</span></div>
+        <div class="allb"><button class="pill" data-all="open_cover"><ha-icon icon="mdi:arrow-up"></ha-icon>${this._fbText("all:open_cover") || "Alle auf"}</button>
+        <button class="pill" data-all="close_cover"><ha-icon icon="mdi:arrow-down"></ha-icon>${this._fbText("all:close_cover") || "Alle zu"}</button></div></div>
+      ${groups}`, ACT_CSS + `
+      .top { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 8px; margin-top: 6px; }
+      .allb { display: flex; gap: 6px; }
+      .row.cv { cursor: default; }
+      .cb { display: flex; gap: 4px; }
+      .pos { height: 3px; border-radius: 2px; margin-top: 5px; background: var(--divider-color, rgba(127,127,127,.25)); overflow: hidden; max-width: 160px; }
+      .pos i { display: block; height: 100%; border-radius: 2px; background: var(--primary-text-color); opacity: .55; transition: width .6s; }`);
+    const R = this.shadowRoot, label = { open_cover: "Öffnet …", close_cover: "Schließt …", stop_cover: "Stoppt …" };
+    R.querySelectorAll("[data-cv]").forEach((b) => b.addEventListener("click", () => this._act(b.dataset.id, label[b.dataset.cv], () => H.callService("cover", b.dataset.cv, { entity_id: b.dataset.id }))));
+    R.querySelectorAll("[data-all]").forEach((b) => b.addEventListener("click", () => {
+      const svc = b.dataset.all, bit = svc === "open_cover" ? 1 : 2, ids = live.filter((e) => (e.attributes.supported_features ?? 15) & bit).map((e) => e.entity_id);
+      if (ids.length) this._act("all:" + svc, svc === "open_cover" ? "Öffnet alle …" : "Schließt alle …", () => H.callService("cover", svc, { entity_id: ids }));
+    }));
+  }
+}
+
+/* ================= 19 · Sicherheit ================= */
+const ALARM_DE = { disarmed: "Unscharf", armed_home: "Scharf · zu Hause", armed_away: "Scharf · abwesend", armed_night: "Scharf · Nacht", armed_vacation: "Scharf · Urlaub",
+  armed_custom_bypass: "Scharf · eigene Zonen", pending: "Alarm in Kürze", arming: "Schaltet scharf …", disarming: "Schaltet unscharf …", triggered: "Alarm ausgelöst" };
+const LOCK_DE = { locked: "abgeschlossen", unlocked: "offen", open: "geöffnet", opening: "öffnet …", locking: "schließt ab …", unlocking: "schließt auf …", jammed: "klemmt" };
+const DETECT = { smoke: ["Rauch", "mdi:smoke-detector-variant"], carbon_monoxide: ["Kohlenmonoxid", "mdi:molecule-co"], gas: ["Gas", "mdi:gas-cylinder"], moisture: ["Wasser", "mdi:water-alert"] };
+class MangfallSecurityCard extends MangfallBase {
+  static defaults = { name: "Sicherheit", alarm: "", locks: [], exclude: [] };
+  static getStubConfig(hass) { return { alarm: listIds(hass, "alarm_control_panel")[0] || "" }; }
+  static getConfigForm() {
+    return { schema: [{ name: "alarm", selector: { entity: { domain: "alarm_control_panel" } } },
+      { name: "locks", selector: { entity: { multiple: true, filter: { domain: "lock" } } } },
+      { type: "expandable", name: "", title: "Weitere Einstellungen", flatten: true, schema: [
+        { name: "exclude", selector: { entity: { multiple: true, filter: [...Object.keys(DETECT).map((device_class) => ({ domain: "binary_sensor", device_class })), { domain: "cover" }] } } },
+        { name: "name", selector: { text: {} } }, BRANDING] }],
+      computeLabel: (s) => ({ alarm: "Alarmanlage", locks: "Türschlösser", exclude: "Ausblenden", name: "Name", show_branding: "MANGFALL-Zeichen anzeigen" }[s.name]),
+      computeHelper: (s) => ({ alarm: "Leer lassen – die Karte nimmt deine Alarmanlage von selbst.", locks: "Leer lassen – die Karte zeigt alle Schlösser.",
+        exclude: "Die Karte findet Rauch-, CO-, Gas- und Wassermelder und Garagentore von selbst. Hier wählst du aus, was sie nicht zeigen soll." }[s.name]) };
+  }
+  _auto(c, hass) {
+    if (!c.alarm) c.alarm = listIds(hass, "alarm_control_panel")[0] || "";
+    c._locks = c.locks?.length ? c.locks : listIds(hass, "lock");
+    c._det = listIds(hass, "binary_sensor", (e) => DETECT[e.attributes.device_class] && !c.exclude.includes(e.entity_id));
+    c._gar = listIds(hass, "cover", (e) => ["garage", "gate"].includes(e.attributes.device_class) && !c.exclude.includes(e.entity_id));
+    return c;
+  }
+  _watch() { const c = this._config; return [c.alarm, ...c._locks, ...c._det, ...c._gar].filter(Boolean); }
+  _ask(a) { this._asking = a; this._code = ""; this._lastKey = null; this._render(); }
+  _extraSheet(k) {
+    if (k !== "l:det") return "";
+    const S = this._hass.states, rows = this._config._det.map((id) => S[id]).filter(Boolean).map((e) => `<div class="row" data-entity="${e.entity_id}">
+      <ha-icon class="ri" icon="${DETECT[e.attributes.device_class][1]}"></ha-icon><div class="rn">${esc(nice(this._hass, e))}<div class="rs">${esc(areaName(this._hass, e.entity_id) || DETECT[e.attributes.device_class][0])}</div></div>
+      <div class="rs">${e.state === "on" ? "Alarm" : isLive(e) ? "ruhig" : "offline"}</div></div>`).join("");
+    return this._frame("Melder", `<div class="rows">${rows}</div>`);
+  }
+  _render() {
+    if (!this._config || !this._hass) return;
+    const c = this._config, H = this._hass, S = H.states;
+    const alarm = c.alarm && S[c.alarm], locks = c._locks.map((id) => S[id]).filter(Boolean), det = c._det.map((id) => S[id]).filter(Boolean), gar = c._gar.map((id) => S[id]).filter(Boolean);
+    if (!alarm && !locks.length && !det.length && !gar.length) return this._setup(c.name, "Ich habe weder Alarmanlage noch Schlösser oder Melder gefunden.");
+    const fired = det.filter((e) => e.state === "on"), jammed = locks.filter((e) => e.state === "jammed"), openL = locks.filter((e) => ["unlocked", "open", "opening"].includes(e.state));
+    const openG = gar.filter((e) => ["open", "opening"].includes(e.state)), offline = [...locks, ...det, ...(alarm ? [alarm] : [])].filter((e) => !isLive(e));
+    let state, big, say;
+    if (alarm?.state === "triggered" || fired.length) {
+      const f = fired[0];
+      state = { key: "crit", label: "Alarm", icon: "mdi:alarm-light" };
+      big = f ? `${DETECT[f.attributes.device_class][0]} erkannt` : "Alarm ausgelöst";
+      say = f ? `${fired.map((e) => nice(H, e)).join(", ")} · ${ago(f.last_changed)}` : esc(fname(alarm));
+    } else if (jammed.length) { state = { key: "crit", label: "Schloss klemmt", icon: "mdi:lock-alert" }; big = "Schloss klemmt"; say = jammed.map((e) => nice(H, e)).join(", "); }
+    else if (openL.length || openG.length) {
+      state = { key: "low", label: `${openL.length + openG.length} offen`, icon: "mdi:lock-open-variant" }; big = "Nicht alles zu";
+      say = [...openL, ...openG].map((e) => `${nice(H, e)} ${e.entity_id.startsWith("cover.") ? "offen" : LOCK_DE[e.state] || "offen"}`).join(", ");
+    } else { state = { key: "ok", label: "Alles sicher", icon: "mdi:shield-check" }; big = "Alles sicher"; say = offline.length ? `${offline.length} ${offline.length === 1 ? "Gerät meldet" : "Geräte melden"} sich nicht.` : "Türen zu, keine Meldung."; }
+    const ask = (key) => { const a = this._asking; if (!a || a.key !== key) return "";
+      return `<div class="ask"><b>${esc(a.q)}</b>${a.code ? `<input type="password" autocomplete="off" inputmode="${a.code === "number" ? "numeric" : "text"}" placeholder="Code" aria-label="Code" data-code>` : ""}
+        <button class="pill" data-no>Abbrechen</button><button class="pill warn" data-yes>${esc(a.yes)}</button></div>`; };
+    let rows = "";
+    if (alarm) {
+      const f = alarm.attributes.supported_features ?? 0, armed = alarm.state.startsWith("armed") || ["arming", "pending", "triggered"].includes(alarm.state);
+      const needArm = alarm.attributes.code_format && alarm.attributes.code_arm_required !== false, needDis = !!alarm.attributes.code_format;
+      const arm = [[1, "alarm_arm_home", "Zu Hause"], [2, "alarm_arm_away", "Abwesend"], [4, "alarm_arm_night", "Nacht"]].filter(([b]) => f & b);
+      rows += `<div class="row sx"><ha-icon class="ri" icon="${armed ? "mdi:shield-lock" : "mdi:shield-off-outline"}"></ha-icon>
+        <div class="rn" data-sheet="e:${c.alarm}">${esc(cleanName(fname(alarm)))}<div class="rs${this._fbText(c.alarm) ? " fb" : ""}">${this._fbText(c.alarm) || ALARM_DE[alarm.state] || stateDe(alarm.state)}</div></div>
+        <div class="cb">${!isLive(alarm) ? "" : armed ? `<button class="pill" data-arm="alarm_disarm" data-code-need="${needDis ? alarm.attributes.code_format : ""}">Unscharf</button>`
+          : arm.map(([, s, l]) => `<button class="pill" data-arm="${s}" data-code-need="${needArm ? alarm.attributes.code_format : ""}">${l}</button>`).join("")}</div></div>${ask(c.alarm)}`;
+    }
+    for (const e of locks) {
+      const id = e.entity_id, f = e.attributes.supported_features ?? 0, code = e.attributes.code_format ? (/^\^\\d/.test(e.attributes.code_format) ? "number" : "text") : "";
+      const lockedNow = e.state === "locked";
+      rows += `<div class="row sx"><ha-icon class="ri" icon="${e.state === "jammed" ? "mdi:lock-alert" : lockedNow ? "mdi:lock" : "mdi:lock-open-variant"}"></ha-icon>
+        <div class="rn" data-sheet="e:${id}">${esc(nice(H, e))}<div class="rs${this._fbText(id) ? " fb" : ""}">${this._fbText(id) || (isLive(e) ? LOCK_DE[e.state] || stateDe(e.state) : "nicht erreichbar")}</div></div>
+        <div class="cb">${!isLive(e) ? "" : lockedNow ? `<button class="pill" data-lock="unlock" data-id="${id}" data-c="${code}">Aufschließen</button>${f & 1 ? `<button class="pill" data-lock="open" data-id="${id}" data-c="${code}">Öffnen</button>` : ""}`
+          : `<button class="pill" data-lock="lock" data-id="${id}" data-c="${code}">Abschließen</button>`}</div></div>${ask(id)}`;
+    }
+    for (const e of gar) {
+      const id = e.entity_id, op = ["open", "opening"].includes(e.state);
+      rows += `<div class="row sx"><ha-icon class="ri" icon="${op ? "mdi:garage-open-variant" : "mdi:garage-variant"}"></ha-icon>
+        <div class="rn" data-sheet="e:${id}">${esc(nice(H, e))}<div class="rs${this._fbText(id) ? " fb" : ""}">${this._fbText(id) || (isLive(e) ? ({ opening: "öffnet …", closing: "schließt …" }[e.state] || (op ? "offen" : "zu")) : "nicht erreichbar")}</div></div>
+        <div class="cb">${!isLive(e) ? "" : op ? `<button class="pill" data-gar="close_cover" data-id="${id}">Schließen</button>` : `<button class="pill" data-gar="open_cover" data-id="${id}">Öffnen</button>`}</div></div>${ask(id)}`;
+    }
+    if (det.length) {
+      const kinds = [...new Set(det.map((e) => DETECT[e.attributes.device_class][0]))];
+      rows += `<div class="row" data-sheet="l:det"><ha-icon class="ri" icon="${fired.length ? "mdi:alarm-light" : "mdi:smoke-detector-variant"}"></ha-icon>
+        <div class="rn">${det.length} ${det.length === 1 ? "Melder" : "Melder"}<div class="rs">${kinds.join(", ")}</div></div>
+        <div class="rs">${fired.length ? `${fired.length} Alarm` : det.some((e) => !isLive(e)) ? `${det.filter((e) => !isLive(e)).length} offline` : "alle ruhig"}</div></div>`;
+    }
+    this._shell(state.key, `
+      ${this._head(c.name, state)}
+      <div class="big" style="margin-top:6px"><span class="num w">${big}</span></div>
+      <div class="muted">${esc(say)}</div>
+      <div class="rows">${rows}</div>`, ACT_CSS + `
+      .num.w { font-size: 30px; } .st-crit .num.w { color: var(--error-color, #e34948); }
+      .st-crit ha-card, ha-card.st-crit { box-shadow: inset 0 0 0 2px color-mix(in srgb, var(--error-color, #e34948) 55%, transparent); }
+      .row.sx { cursor: default; } .cb { display: flex; gap: 6px; flex-wrap: wrap; justify-content: flex-end; }`);
+    const R = this.shadowRoot;
+    const run = (key, q, yes, codeKind, fn) => this._ask({ key, q: q.text, yes, code: codeKind, fn });
+    R.querySelectorAll("[data-arm]").forEach((b) => b.addEventListener("click", () => {
+      const svc = b.dataset.arm, need = b.dataset.codeNeed, kind = need ? (need === "number" ? "number" : "text") : "";
+      const go = (code) => this._act(c.alarm, svc === "alarm_disarm" ? "Schaltet unscharf …" : "Schaltet scharf …", () => H.callService("alarm_control_panel", svc, { entity_id: c.alarm, ...(code ? { code } : {}) }));
+      if (svc === "alarm_disarm" || kind) run(c.alarm, { svc, text: svc === "alarm_disarm" ? "Alarmanlage wirklich unscharf schalten?" : "Code zum Scharfschalten eingeben" }, svc === "alarm_disarm" ? "Unscharf" : "Scharf", kind, go);
+      else go();
+    }));
+    R.querySelectorAll("[data-lock]").forEach((b) => b.addEventListener("click", () => {
+      const svc = b.dataset.lock, id = b.dataset.id, kind = b.dataset.c, name = nice(H, S[id]);
+      const go = (code) => this._act(id, { lock: "Schließt ab …", unlock: "Schließt auf …", open: "Öffnet …" }[svc], () => H.callService("lock", svc, { entity_id: id, ...(code ? { code } : {}) }));
+      if (svc === "lock" && !kind) go(); else run(id, { svc, text: svc === "lock" ? `${name} abschließen?` : svc === "open" ? `${name} wirklich öffnen?` : `${name} wirklich aufschließen?` }, svc === "lock" ? "Abschließen" : svc === "open" ? "Öffnen" : "Aufschließen", kind, go);
+    }));
+    R.querySelectorAll("[data-gar]").forEach((b) => b.addEventListener("click", () => {
+      const svc = b.dataset.gar, id = b.dataset.id, go = () => this._act(id, svc === "open_cover" ? "Öffnet …" : "Schließt …", () => H.callService("cover", svc, { entity_id: id }));
+      if (svc === "open_cover") run(id, { svc, text: `${nice(H, S[id])} wirklich öffnen?` }, "Öffnen", "", go); else go();
+    }));
+    const inp = R.querySelector("[data-code]");
+    if (inp) { inp.value = this._code || ""; inp.addEventListener("input", () => { this._code = inp.value; }); if (this._askFocus) inp.focus?.(); this._askFocus = true;
+      inp.addEventListener("keydown", (ev) => { if (ev.key === "Enter") R.querySelector("[data-yes]")?.click(); }); }
+    R.querySelector("[data-no]")?.addEventListener("click", () => { this._asking = null; this._askFocus = false; this._lastKey = null; this._render(); });
+    R.querySelector("[data-yes]")?.addEventListener("click", () => {
+      const a = this._asking; if (!a) return;
+      if (a.code && !this._code) { inp?.focus?.(); return; }
+      const code = this._code; this._asking = null; this._code = ""; this._askFocus = false; a.fn(code);
+    });
+  }
+}
+
+/* ================= 20 · Kameras ================= */
+class MangfallCameraCard extends MangfallBase {
+  static defaults = { name: "Kameras", entities: [], refresh: 10 };
+  static getStubConfig(hass) { return { entities: listIds(hass, "camera").slice(0, 6) }; }
+  static getConfigForm() {
+    return { schema: [{ name: "entities", selector: { entity: { multiple: true, filter: { domain: "camera" } } } },
+      { type: "expandable", name: "", title: "Weitere Einstellungen", flatten: true, schema: [
+        { name: "refresh", selector: { number: { min: 2, max: 120, mode: "box", unit_of_measurement: "s" } } }, { name: "name", selector: { text: {} } }, BRANDING] }],
+      computeLabel: (s) => ({ entities: "Kameras", refresh: "Bild erneuern alle", name: "Name", show_branding: "MANGFALL-Zeichen anzeigen" }[s.name]),
+      computeHelper: (s) => ({ entities: "Leer lassen – die Karte zeigt alle Kameras.", refresh: "Antippen vergrößert eine Kamera, sie erneuert sich dann jede Sekunde." }[s.name]) };
+  }
+  _auto(c, hass) {
+    c._cams = c.entities?.length ? c.entities : listIds(hass, "camera").slice(0, 8);
+    c._motion = Object.fromEntries(c._cams.map((id) => [id, sameDevice(hass, id, (e) => e.entity_id.startsWith("binary_sensor.") && ["motion", "occupancy", "presence"].includes(e.attributes.device_class))?.entity_id || ""]));
+    return c;
+  }
+  _watch() { const c = this._config; return [...c._cams, ...Object.values(c._motion)].filter(Boolean); }
+  disconnectedCallback() { clearInterval(this._tm); this._tm = null; }
+  _url(e, fast) { const pic = e?.attributes.entity_picture; if (!pic) return ""; const u = this._hass.hassUrl ? this._hass.hassUrl(pic) : pic; return `${u}${u.includes("?") ? "&" : "?"}_=${Math.floor(Date.now() / (fast ? 1000 : 2000))}`; }
+  _tick() {
+    if (typeof document !== "undefined" && document.visibilityState === "hidden") return;
+    const now = Date.now();
+    this.shadowRoot?.querySelectorAll("img[data-cam]").forEach((img) => {
+      const fast = img.dataset.cam === this._big, every = fast ? 1000 : Math.max(2, this._config.refresh) * 1000;
+      if (now - (+img.dataset.at || 0) < every - 200) return;
+      img.dataset.at = now;
+      const pre = new Image(), url = this._url(this._hass.states[img.dataset.cam], fast);
+      pre.onload = () => { img.src = url; img.classList.remove("err"); };
+      pre.onerror = () => img.classList.add("err");
+      pre.src = url;
+    });
+  }
+  _render() {
+    if (!this._config || !this._hass) return;
+    const c = this._config, H = this._hass, cams = c._cams.map((id) => H.states[id]).filter(Boolean);
+    if (!cams.length) return this._setup(c.name, "Ich habe keine Kamera in deinem Home Assistant gefunden.");
+    if (!this._tm) this._tm = setInterval(() => this._tick(), 1000);
+    const moving = cams.filter((e) => H.states[c._motion[e.entity_id]]?.state === "on"), off = cams.filter((e) => !isLive(e));
+    const state = moving.length ? { key: "info", label: `Bewegung: ${nice(H, moving[0])}`, icon: "mdi:motion-sensor" }
+      : off.length ? { key: "low", label: `${off.length} offline`, icon: "mdi:cctv-off" } : { key: "ok", label: `${cams.length} ${cams.length === 1 ? "Kamera" : "Kameras"}`, icon: "mdi:cctv" };
+    if (this._big && !cams.some((e) => e.entity_id === this._big)) this._big = null;
+    const tile = (e, big) => {
+      const id = e.entity_id, mv = H.states[c._motion[id]]?.state === "on", ok = isLive(e);
+      return `<div class="cam${big ? " big" : ""}" data-cam-tap="${id}" role="button" tabindex="0" aria-label="${esc(nice(H, e))} vergrößern">
+        ${ok ? `<img data-cam="${id}" data-at="${Date.now()}" src="${esc(this._url(e, big))}" alt="" loading="lazy">` : `<div class="off"><ha-icon icon="mdi:cctv-off"></ha-icon>offline</div>`}
+        <span class="cn">${mv ? `<i class="mv"></i>` : ""}${esc(nice(H, e))}</span></div>`;
+    };
+    const big = this._big && H.states[this._big];
+    this._shell(state.key, `
+      ${this._head(c.name, state)}
+      ${big ? `${tile(big, true)}<div class="bb"><button class="pill" data-more="${big.entity_id}"><ha-icon icon="mdi:play-circle-outline"></ha-icon>Live in Home Assistant</button>
+        <button class="pill" data-shrink><ha-icon icon="mdi:view-grid-outline"></ha-icon>Alle Kameras</button></div>` : ""}
+      <div class="grid${cams.length === 1 ? " one" : ""}">${cams.filter((e) => e.entity_id !== this._big).map((e) => tile(e, false)).join("")}</div>`, ACT_CSS + `
+      .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 8px; margin-top: 12px; } .grid.one { grid-template-columns: 1fr; }
+      .cam { position: relative; aspect-ratio: 16 / 9; border-radius: 12px; overflow: hidden; cursor: pointer; background: var(--secondary-background-color, rgba(127,127,127,.12)); }
+      .cam.big { margin-top: 12px; }
+      .cam img { width: 100%; height: 100%; object-fit: cover; display: block; transition: opacity .3s; } .cam img.err { opacity: .35; }
+      .cam:focus-visible { outline: 2px solid var(--primary-color, #2a78d6); outline-offset: 2px; }
+      .cn { position: absolute; left: 8px; bottom: 6px; right: 8px; display: flex; align-items: center; gap: 5px; font-size: 12px; font-weight: 500; color: #fff;
+        text-shadow: 0 1px 3px rgba(0,0,0,.7); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+      .mv { width: 7px; height: 7px; border-radius: 50%; background: var(--warning-color, #eda100); flex: 0 0 7px; animation: mc-blink 1.4s ease-in-out infinite; }
+      @keyframes mc-blink { 50% { opacity: .3; } }
+      .off { height: 100%; display: grid; place-content: center; justify-items: center; gap: 4px; font-size: 12px; color: var(--secondary-text-color); }
+      .off ha-icon { --mdc-icon-size: 26px; }
+      .bb { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 8px; }`);
+    const R = this.shadowRoot;
+    R.querySelectorAll("[data-cam-tap]").forEach((el) => {
+      const go = () => { this._big = this._big === el.dataset.camTap ? null : el.dataset.camTap; this._lastKey = null; this._render(); };
+      el.addEventListener("click", go); el.addEventListener("keydown", (ev) => { if (ev.key === "Enter" || ev.key === " ") { ev.preventDefault(); go(); } });
+    });
+    R.querySelector("[data-shrink]")?.addEventListener("click", () => { this._big = null; this._lastKey = null; this._render(); });
+  }
+}
+
+/* ================= 21 · Musik & Medien ================= */
+const MP = { PAUSE: 1, SEEK: 2, VOL: 4, MUTE: 8, PREV: 16, NEXT: 32, ON: 128, OFF: 256, PLAY: 16384 };
+const mmss = (s) => { s = Math.max(0, Math.round(s)); const h = Math.floor(s / 3600), m = Math.floor((s % 3600) / 60), x = String(s % 60).padStart(2, "0"); return h ? `${h}:${String(m).padStart(2, "0")}:${x}` : `${m}:${x}`; };
+class MangfallMediaCard extends MangfallBase {
+  static defaults = { name: "Musik", entities: [], show_off: false };
+  static getStubConfig(hass) { return { entities: MangfallMediaCard._find(hass) }; }
+  static _find(hass) { return listIds(hass, "media_player").slice(0, 8); }
+  static getConfigForm() {
+    return { schema: [{ name: "entities", selector: { entity: { multiple: true, filter: { domain: "media_player" } } } },
+      { type: "expandable", name: "", title: "Weitere Einstellungen", flatten: true, schema: [{ name: "show_off", selector: { boolean: {} } }, { name: "name", selector: { text: {} } }, BRANDING] }],
+      computeLabel: (s) => ({ entities: "Player", show_off: "Ausgeschaltete Player zeigen", name: "Name", show_branding: "MANGFALL-Zeichen anzeigen" }[s.name]),
+      computeHelper: (s) => ({ entities: "Leer lassen – die Karte zeigt alle Lautsprecher und Fernseher, der aktive zuerst." }[s.name]) };
+  }
+  _auto(c, hass) { c._mp = c.entities?.length ? c.entities : MangfallMediaCard._find(hass); return c; }
+  _watch() { return this._dragging ? [] : this._config._mp; }
+  _rank(e) { return { playing: 0, paused: 1, buffering: 1, on: 2, idle: 3, standby: 4, off: 5 }[e.state] ?? 6; }
+  _render() {
+    if (!this._config || !this._hass || this._dragging) return;
+    const c = this._config, H = this._hass, all = c._mp.map((id) => H.states[id]).filter(Boolean);
+    if (!all.length) return this._setup(c.name, "Ich habe keinen Lautsprecher oder Fernseher gefunden.");
+    const sorted = [...all].sort((a, b) => this._rank(a) - this._rank(b));
+    const act = (this._sel && H.states[this._sel]) || sorted[0], a = act.attributes, f = a.supported_features || 0, on = !["off", "standby", "unavailable", "unknown"].includes(act.state);
+    const playing = act.state === "playing", id = act.entity_id;
+    const state = !isLive(act) ? { key: "low", label: "Nicht erreichbar", icon: "mdi:speaker-off" } : playing ? { key: "ok", label: "Spielt", icon: "mdi:play" }
+      : act.state === "paused" ? { key: "info", label: "Pausiert", icon: "mdi:pause" } : on ? { key: "info", label: "Bereit", icon: "mdi:speaker" } : { key: "info", label: "Aus", icon: "mdi:power" };
+    const pic = a.entity_picture ? (H.hassUrl ? H.hassUrl(a.entity_picture) : a.entity_picture) : "";
+    const title = a.media_title || (on ? a.app_name || a.source || "" : ""), sub = [a.media_artist || a.media_series_title, a.media_album_name].filter(Boolean).join(" · ");
+    let prog = "";
+    if (on && a.media_duration > 0 && a.media_position != null) {
+      const pos = Math.min(a.media_duration, a.media_position + (playing && a.media_position_updated_at ? (Date.now() - toMs(a.media_position_updated_at)) / 1000 : 0));
+      const p = (pos / a.media_duration) * 100, rest = a.media_duration - pos;
+      prog = `<div class="prog"><i class="${playing ? "run" : ""}" style="--p0:${p.toFixed(2)}%;--dur:${rest.toFixed(1)}s"></i></div><div class="pt"><span>${mmss(pos)}</span><span>${mmss(a.media_duration)}</span></div>`;
+    }
+    const grp = Array.isArray(a.group_members) && a.group_members.length > 1 ? ` · mit ${a.group_members.length - 1} ${a.group_members.length === 2 ? "weiterem Raum" : "weiteren Räumen"}` : "";
+    const vol = typeof a.volume_level === "number" ? Math.round(a.volume_level * 100) : null;
+    const others = sorted.filter((e) => e !== act && (c.show_off || !["off", "unavailable", "unknown", "standby"].includes(e.state)));
+    const ctrl = on ? `<div class="mc">
+        ${f & MP.PREV ? `<button class="ib" data-mp="media_previous_track" aria-label="Zurück"><ha-icon icon="mdi:skip-previous"></ha-icon></button>` : ""}
+        ${f & (MP.PAUSE | MP.PLAY) ? `<button class="ib main" data-mp="media_play_pause" aria-label="${playing ? "Pause" : "Abspielen"}"><ha-icon icon="${playing ? "mdi:pause" : "mdi:play"}"></ha-icon></button>` : ""}
+        ${f & MP.NEXT ? `<button class="ib" data-mp="media_next_track" aria-label="Weiter"><ha-icon icon="mdi:skip-next"></ha-icon></button>` : ""}
+        ${vol !== null && f & MP.VOL ? `<div class="vol"><button class="ib sm" data-mp="volume_mute" aria-label="Stumm"${f & MP.MUTE ? "" : " disabled"}><ha-icon icon="${a.is_volume_muted ? "mdi:volume-off" : "mdi:volume-medium"}"></ha-icon></button>
+          <input type="range" min="0" max="100" step="1" value="${vol}" aria-label="Lautstärke" data-vol><span class="vv">${vol} %</span></div>` : ""}
+      </div>` : isLive(act) && f & MP.ON ? `<div class="mc"><button class="pill" data-mp="turn_on"><ha-icon icon="mdi:power"></ha-icon>${this._fbText(id) || "Einschalten"}</button></div>` : "";
+    this._shell(state.key, `
+      ${this._head(c.name, state)}
+      <div class="np">
+        <div class="art${pic ? "" : " none"}" data-sheet="e:${id}">${pic ? `<img src="${esc(pic)}" alt="">` : `<ha-icon icon="${/tv/.test(lcName(act)) || a.device_class === "tv" ? "mdi:television" : "mdi:speaker"}"></ha-icon>`}</div>
+        <div class="meta" data-sheet="e:${id}"><div class="mt">${esc(title || (on ? "Bereit" : isLive(act) ? "Aus" : "Nicht erreichbar"))}</div>
+          <div class="ms">${esc(sub)}</div><div class="mr">${esc(cleanName(fname(act)))}${grp}</div></div>
+      </div>${prog}${ctrl}
+      ${others.length ? `<div class="rows">${others.map((e) => `<div class="row" data-pick="${e.entity_id}" role="button" tabindex="0">
+        <ha-icon class="ri" icon="${e.state === "playing" ? "mdi:play-circle" : "mdi:speaker"}"></ha-icon><div class="rn">${esc(cleanName(fname(e)))}
+        <div class="rs">${esc(e.attributes.media_title ? [e.attributes.media_title, e.attributes.media_artist].filter(Boolean).join(" · ") : stateDe(e.state))}</div></div></div>`).join("")}</div>` : ""}`, ACT_CSS + `
+      .np { display: flex; gap: 14px; align-items: center; margin-top: 10px; }
+      .art { flex: 0 0 76px; width: 76px; height: 76px; border-radius: 12px; overflow: hidden; display: grid; place-items: center; background: var(--secondary-background-color, rgba(127,127,127,.12)); }
+      .art img { width: 100%; height: 100%; object-fit: cover; } .art ha-icon { --mdc-icon-size: 34px; color: var(--secondary-text-color); }
+      .meta { flex: 1; min-width: 0; border-radius: 8px; }
+      .mt { font-size: 17px; font-weight: 600; color: var(--primary-text-color); display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+      .ms, .mr { font-size: 13px; color: var(--secondary-text-color); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; } .mr { font-size: 12px; opacity: .8; margin-top: 2px; }
+      .prog { height: 3px; border-radius: 2px; margin-top: 12px; background: var(--divider-color, rgba(127,127,127,.25)); overflow: hidden; }
+      .prog i { display: block; height: 100%; width: var(--p0); background: var(--primary-text-color); opacity: .7; border-radius: 2px; }
+      .prog i.run { animation: mc-prog var(--dur) linear forwards; } @keyframes mc-prog { to { width: 100%; } }
+      .pt { display: flex; justify-content: space-between; font-size: 11px; color: var(--secondary-text-color); margin-top: 3px; font-variant-numeric: tabular-nums; }
+      .mc { display: flex; align-items: center; justify-content: center; gap: 10px; margin-top: 8px; flex-wrap: wrap; }
+      .ib.main { width: 44px; height: 44px; flex-basis: 44px; background: var(--primary-text-color); color: var(--card-background-color, #fff); }
+      .ib.main ha-icon { --mdc-icon-size: 24px; } .ib.sm { width: 28px; height: 28px; flex-basis: 28px; }
+      .vol { display: flex; align-items: center; gap: 6px; flex: 1 1 160px; min-width: 140px; }
+      .vol input { flex: 1; min-width: 0; accent-color: var(--primary-text-color); } .vv { font-size: 11.5px; color: var(--secondary-text-color); width: 34px; text-align: right; font-variant-numeric: tabular-nums; }`);
+    const R = this.shadowRoot;
+    R.querySelectorAll("[data-mp]").forEach((b) => b.addEventListener("click", () => {
+      const svc = b.dataset.mp;
+      this._act(id, svc === "turn_on" ? "Schaltet ein …" : "", () => H.callService("media_player", svc, svc === "volume_mute" ? { entity_id: id, is_volume_muted: !a.is_volume_muted } : { entity_id: id }));
+    }));
+    const v = R.querySelector("[data-vol]");
+    if (v) {
+      v.addEventListener("pointerdown", () => { this._dragging = true; });
+      v.addEventListener("pointerup", () => setTimeout(() => { this._dragging = false; }, 400));
+      v.addEventListener("input", () => { const s = R.querySelector(".vv"); if (s) s.textContent = v.value + " %"; });
+      v.addEventListener("change", () => { this._dragging = false; H.callService("media_player", "volume_set", { entity_id: id, volume_level: +v.value / 100 }); });
+    }
+    R.querySelectorAll("[data-pick]").forEach((el) => {
+      const go = () => { this._sel = el.dataset.pick; this._lastKey = null; this._render(); };
+      el.addEventListener("click", go); el.addEventListener("keydown", (ev) => { if (ev.key === "Enter" || ev.key === " ") { ev.preventDefault(); go(); } });
+    });
+  }
+}
+
+/* ================= 22 · Szenen & Schnellaktionen ================= */
+const TECH_BTN = /restart|neu.?start|reboot|identify|identifiz|reset|update|firmware|ping|calibrat|kalibr|backup|test|wake|scan|sync|refresh|aktualis|messen|measure|nullpunkt|zero|reconnect|verbinden|aufr(ä|ae)umen|cleanup|factory|werkseinst/;
+class MangfallActionsCard extends MangfallBase {
+  static defaults = { name: "Schnellaktionen", entities: [] };
+  static getStubConfig(hass) { return { entities: MangfallActionsCard._find(hass) }; }
+  static _find(hass) {
+    const user = (id) => { const r = regOf(hass, id); return !r.entity_category && !r.hidden; };
+    const sc = listIds(hass, "scene", (e) => user(e.entity_id)), sr = listIds(hass, "script", (e) => user(e.entity_id));
+    const bt = listIds(hass, "button", (e) => user(e.entity_id) && !TECH_BTN.test(lcName(e)) && e.state !== "unavailable");
+    return [...sc, ...sr, ...bt].slice(0, 12);
+  }
+  static getConfigForm() {
+    return { schema: [{ name: "entities", selector: { entity: { multiple: true, filter: [{ domain: "scene" }, { domain: "script" }, { domain: "button" }, { domain: "input_button" }] } } },
+      { type: "expandable", name: "", title: "Weitere Einstellungen", flatten: true, schema: [{ name: "name", selector: { text: {} } }, BRANDING] }],
+      computeLabel: (s) => ({ entities: "Szenen und Aktionen", name: "Name", show_branding: "MANGFALL-Zeichen anzeigen" }[s.name]),
+      computeHelper: (s) => ({ entities: "Leer lassen – die Karte nimmt deine Szenen und Skripte. Technische Knöpfe wie „Neu starten“ lässt sie weg." }[s.name]) };
+  }
+  _auto(c, hass) { c._ids = c.entities?.length ? c.entities : MangfallActionsCard._find(hass); return c; }
+  _watch() { return this._config._ids; }
+  _render() {
+    if (!this._config || !this._hass) return;
+    const c = this._config, H = this._hass, list = c._ids.map((id) => H.states[id]).filter(Boolean);
+    if (!list.length) return this._setup(c.name, "Ich habe noch keine Szenen oder Skripte gefunden. Leg sie in Home Assistant unter Automationen & Szenen an.");
+    const running = list.filter((e) => e.entity_id.startsWith("script.") && e.state === "on");
+    const state = running.length ? { key: "info", label: `${running.length} läuft`, icon: "mdi:play-circle-outline" } : { key: "ok", label: "Bereit", icon: "mdi:gesture-tap" };
+    const DEF = { scene: "mdi:palette-outline", script: "mdi:script-text-play-outline", button: "mdi:gesture-tap-button", input_button: "mdi:gesture-tap-button" };
+    const last = (e) => { const t = e.entity_id.startsWith("script.") ? e.attributes.last_triggered : isNaN(toMs(e.state)) ? null : e.state; return t ? ago(t).replace(/^seit /, "vor ") : ""; };
+    const tiles = list.map((e) => {
+      const id = e.entity_id, dom = id.split(".")[0], fb = this._fbText(id, 2500), run = dom === "script" && e.state === "on", ok = isLive(e) || dom === "scene" || dom === "button";
+      return `<button class="act${fb ? " done" : ""}${run ? " run" : ""}" data-act="${id}"${e.state === "unavailable" ? " disabled" : ""}>
+        <ha-icon icon="${fb ? "mdi:check" : run ? "mdi:loading" : e.attributes.icon || DEF[dom]}"></ha-icon><span class="an">${esc(cleanName(fname(e)))}</span>
+        <span class="as">${fb || (run ? "läuft …" : e.state === "unavailable" ? "nicht verfügbar" : last(e))}</span></button>`;
+    }).join("");
+    this._shell(state.key, `${this._head(c.name, state)}<div class="acts">${tiles}</div><div class="muted hint">Lange drücken zeigt, wann es zuletzt lief.</div>`, `
+      .acts { display: grid; grid-template-columns: repeat(auto-fill, minmax(104px, 1fr)); gap: 8px; margin-top: 12px; }
+      .act { display: flex; flex-direction: column; align-items: flex-start; gap: 6px; min-height: 84px; padding: 12px; border: none; border-radius: 14px; cursor: pointer; font: inherit; text-align: left;
+        color: var(--primary-text-color); background: var(--secondary-background-color, rgba(127,127,127,.08)); transition: background .2s, transform .1s; }
+      .act:hover:not([disabled]) { background: color-mix(in srgb, var(--primary-color, #2a78d6) 12%, var(--secondary-background-color, #eee)); }
+      .act:active { transform: scale(.97); } .act[disabled] { opacity: .45; cursor: default; }
+      .act:focus-visible { outline: 2px solid var(--primary-color, #2a78d6); outline-offset: 2px; }
+      .act ha-icon { --mdc-icon-size: 24px; color: var(--secondary-text-color); transition: color .2s; }
+      .act.done { background: color-mix(in srgb, var(--success-color, #0ca30c) 16%, var(--secondary-background-color, #eee)); } .act.done ha-icon { color: var(--success-color, #0ca30c); }
+      .act.run ha-icon { color: var(--info-color, #2a78d6); animation: mc-spin 1.2s linear infinite; } @keyframes mc-spin { to { transform: rotate(360deg); } }
+      .an { font-size: 13.5px; font-weight: 500; line-height: 1.25; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+      .as { font-size: 11px; color: var(--secondary-text-color); margin-top: auto; }
+      .hint { font-size: 11.5px; margin-top: 8px; opacity: .75; }`);
+    this.shadowRoot.querySelectorAll("[data-act]").forEach((b) => {
+      const id = b.dataset.act, dom = id.split(".")[0];
+      let t = null, long = false;
+      b.addEventListener("pointerdown", () => { long = false; t = setTimeout(() => { long = true; this._toggleSheet("e:" + id); }, 550); });
+      ["pointerup", "pointerleave", "pointercancel"].forEach((x) => b.addEventListener(x, () => clearTimeout(t)));
+      b.addEventListener("contextmenu", (ev) => { ev.preventDefault(); });
+      b.addEventListener("click", () => {
+        if (long) return;
+        const svc = dom === "button" || dom === "input_button" ? [dom, "press"] : [dom, "turn_on"];
+        this._act(id, dom === "scene" ? "Aktiviert" : dom === "script" ? "Gestartet" : "Gedrückt", () => H.callService(svc[0], svc[1], { entity_id: id }));
+        clearTimeout(this._fbClr); this._fbClr = setTimeout(() => { this._lastKey = null; this._render(); }, 2600);
+      });
+    });
+  }
+}
+
+/* ================= 23 · Stromfresser ================= */
+class MangfallConsumersCard extends MangfallBase {
+  static product = "WATT";
+  static defaults = { name: "Verbraucher", exclude: [], show: 6 };
+  static getStubConfig() { return {}; }   // leer = alle Steckdosen und Geräte mit Leistungsmessung
+  static getConfigForm() {
+    return { schema: [{ name: "exclude", selector: { entity: { multiple: true, filter: { domain: "sensor", device_class: "power" } } } },
+      { type: "expandable", name: "", title: "Weitere Einstellungen", flatten: true, schema: [
+        { name: "show", selector: { number: { min: 3, max: 20, mode: "box" } } }, { name: "name", selector: { text: {} } }, BRANDING] }],
+      computeLabel: (s) => ({ exclude: "Ausblenden", show: "Anzahl anzeigen", name: "Name", show_branding: "MANGFALL-Zeichen anzeigen" }[s.name]),
+      computeHelper: (s) => ({ exclude: "Die Karte findet Steckdosen und Geräte mit Leistungsmessung von selbst. Waschmaschine, Trockner und Spülmaschine erkennt sie am Namen." }[s.name]) };
+  }
+  _auto(c, hass) {
+    const seen = new Map();
+    for (const id of listIds(hass, "sensor", (e) => isConsumer(e) && !c.exclude.includes(e.entity_id))) {   // je Gerät nur ein Leistungssensor
+      const d = regOf(hass, id).device_id || id;
+      if (!seen.has(d) || /power$|leistung$/.test(id)) seen.set(d, id);
+    }
+    c._ids = [...seen.values()];
+    c._apl = c._ids.filter((id) => APL_RE.test(lcName(hass.states[id]))).slice(0, 4);
+    return c;
+  }
+  _watch() { return this._config._ids; }
+  _onHass() { aplFetch(this, this._config._apl); }
+  _render() {
+    if (!this._config || !this._hass) return;
+    const c = this._config, H = this._hass, S = H.states;
+    if (!c._ids.length) return this._setup(c.name, "Ich habe keine Steckdose oder kein Gerät mit Leistungsmessung gefunden.");
+    const rows = c._ids.map((id) => ({ id, e: S[id], w: toWatt(S[id]) })).filter((r) => r.e);
+    const live = rows.filter((r) => r.w !== null).sort((a, b) => b.w - a.w), off = rows.filter((r) => r.w === null);
+    const total = live.reduce((s, r) => s + Math.max(0, r.w), 0), on = live.filter((r) => r.w >= 5), max = Math.max(1, ...live.map((r) => r.w));
+    const apl = c._apl.map((id) => ({ id, s: aplNow(this, id), t: aplType(lcName(S[id])) })).filter((x) => x.s);
+    const done = apl.find((x) => x.s.done);
+    const state = done ? { key: "ok", label: `${done.t[0]} fertig`, icon: "mdi:check-circle" } : on.length ? { key: "info", label: `${on.length} ${on.length === 1 ? "Gerät" : "Geräte"} an`, icon: "mdi:power-plug" }
+      : { key: "ok", label: "Alles aus", icon: "mdi:power-plug-off-outline" };
+    const sub = (r) => {
+      const a = apl.find((x) => x.id === r.id);
+      if (a?.s.run) return `${a.s.paused ? "pausiert" : "läuft"} seit ${ago(a.s.since).replace(/^seit /, "")}`;
+      if (a?.s.done) return `fertig ${ago(a.s.at).replace(/^seit /, "seit ")}`;
+      return areaName(H, r.id) || (r.w < 5 ? "aus" : "");
+    };
+    const icon = (r) => (APL_RE.test(lcName(r.e)) ? aplType(lcName(r.e))[1] : r.w >= 5 ? "mdi:power-plug" : "mdi:power-plug-off-outline");
+    const shown = live.slice(0, c.show);
+    const list = shown.map((r) => `<div class="row" data-entity="${r.id}"><ha-icon class="ri${r.w >= 5 ? " on" : ""}" icon="${icon(r)}"></ha-icon>
+      <div class="rn">${esc(stripArea(cleanName(fname(r.e)).replace(/\s+energy$/i, ""), areaName(H, r.id)))}<div class="rs">${esc(sub(r))}</div></div>
+      <div class="bar"><i style="width:${Math.max(r.w >= 1 ? 3 : 0, Math.min(100, (r.w / max) * 100))}%"></i></div><div class="rv">${fmtW(r.w)}</div></div>`).join("");
+    if (!live.length) return this._shell("low", `${this._head(c.name, { key: "low", label: "Keine Werte", icon: "mdi:power-plug-off-outline" })}
+      <div class="muted pad">${off.length === 1 ? `${esc(cleanName(fname(off[0].e)))} meldet sich gerade nicht.` : `Deine ${off.length} Geräte mit Leistungsmessung melden sich gerade nicht.`}</div>`);
+    const [num, u] = wParts(total);
+    this._shell(state.key, `
+      ${this._head(c.name, state)}
+      <div class="big" style="margin-top:6px"><span class="num">${num}</span><span class="u">${u} in ${live.length} ${live.length === 1 ? "Gerät" : "Geräten"}</span></div>
+      ${done ? `<div class="muted">${esc(done.t[0])} ist seit ${ago(done.s.at).replace(/^seit /, "")} fertig.</div>` : ""}
+      <div class="rows">${list || `<div class="muted pad">Gerade meldet kein Gerät einen Wert.</div>`}</div>
+      ${live.length > c.show ? `<div class="muted more">+ ${live.length - c.show} weitere unter ${fmtW(shown[shown.length - 1].w)}</div>` : ""}
+      ${off.length ? `<div class="muted more">${off.length} ${off.length === 1 ? "Gerät meldet" : "Geräte melden"} sich nicht.</div>` : ""}`, `
+      .row .rn { flex: 0 1 44%; } .ri.on { color: var(--mc-state); }
+      .bar { flex: 1; height: 6px; border-radius: 3px; background: var(--secondary-background-color, rgba(127,127,127,.12)); overflow: hidden; }
+      .bar i { display: block; height: 100%; border-radius: 3px; background: var(--primary-text-color); opacity: .5; transition: width .6s; }
+      .row .rv { min-width: 62px; text-align: right; font-size: 13.5px; } .more { font-size: 12px; }`);
+  }
+}
+
+/* ================= 24 · Luftqualität ================= */
+const AQ = {
+  carbon_dioxide: { n: "CO₂", u: "ppm", lv: [800, 1000, 1400] },
+  pm25: { n: "Feinstaub", u: "µg/m³", lv: [15, 25, 50] },
+  pm10: { n: "PM10", u: "µg/m³", lv: [45, 60, 100] },
+  volatile_organic_compounds: { n: "VOC", u: "µg/m³", lv: [300, 1000, 3000] },
+  volatile_organic_compounds_parts: { n: "VOC", u: "ppb", lv: [220, 660, 2200] },
+};
+const AQ_OUT = /au(ß|ss)en|outdoor|outside|garten|balkon|terrasse|wetter|weather|dwd|forecast/;
+const aqLevel = (dc, v) => { const l = AQ[dc].lv; return v < l[0] ? 0 : v < l[1] ? 1 : v < l[2] ? 2 : 3; };
+class MangfallAirCard extends MangfallBase {
+  static defaults = { name: "Luftqualität", sensors: [], co2_warn: 1000, co2_alarm: 1400 };
+  static getStubConfig() { return {}; }   // leer = alle Räume mit CO₂-, Feinstaub- oder VOC-Sensor
+  static getConfigForm() {
+    return { schema: [{ name: "sensors", selector: { entity: { multiple: true, filter: Object.keys(AQ).map((device_class) => ({ domain: "sensor", device_class })) } } },
+      { type: "expandable", name: "", title: "Weitere Einstellungen", flatten: true, schema: [
+        { type: "grid", name: "", schema: [
+          { name: "co2_warn", selector: { number: { min: 600, max: 2000, step: 50, mode: "box", unit_of_measurement: "ppm" } } },
+          { name: "co2_alarm", selector: { number: { min: 800, max: 3000, step: 50, mode: "box", unit_of_measurement: "ppm" } } }] },
+        { name: "name", selector: { text: {} } }, BRANDING] }],
+      computeLabel: (s) => ({ sensors: "Sensoren", co2_warn: "Bald lüften ab", co2_alarm: "Jetzt lüften ab", name: "Name", show_branding: "MANGFALL-Zeichen anzeigen" }[s.name]),
+      computeHelper: (s) => ({ sensors: "Leer lassen – die Karte findet CO₂-, Feinstaub- und VOC-Sensoren je Raum von selbst." }[s.name]) };
+  }
+  _auto(c, hass) {
+    const ids = c.sensors?.length ? c.sensors : listIds(hass, "sensor", (e) => AQ[e.attributes.device_class] && !AQ_OUT.test(lcName(e)) && !AQ_OUT.test(areaName(hass, e.entity_id).toLowerCase()));
+    const rooms = new Map();
+    for (const id of ids) {
+      const e = hass.states[id]; if (!e) continue;
+      const key = areaOf(hass, id) || regOf(hass, id).device_id || id;
+      if (!rooms.has(key)) rooms.set(key, { name: areaName(hass, id) || cleanName(fname(e)).replace(/\s*(co2|co₂|carbon dioxide|kohlendioxid|pm2[.,]?5|feinstaub|voc)\s*$/i, "") || fname(e), ids: {} });
+      const r = rooms.get(key); if (!r.ids[e.attributes.device_class]) r.ids[e.attributes.device_class] = id;
+    }
+    c._rooms = [...rooms.values()].slice(0, 10);
+    return c;
+  }
+  _watch() { return this._config._rooms.flatMap((r) => Object.values(r.ids)); }
+  _render() {
+    if (!this._config || !this._hass) return;
+    const c = this._config, S = this._hass.states;
+    if (!c._rooms.length) return this._setup(c.name, "Ich habe keinen CO₂-, Feinstaub- oder VOC-Sensor in deinen Räumen gefunden.");
+    const co2lv = (v) => (v < 800 ? 0 : v < c.co2_warn ? 1 : v < c.co2_alarm ? 2 : 3);
+    const data = c._rooms.map((r) => {
+      const vals = Object.entries(r.ids).map(([dc, id]) => ({ dc, id, v: parseFloat(S[id]?.state), live: isLive(S[id]) })).filter((x) => x.live && isFinite(x.v));
+      const lv = vals.map((x) => ({ ...x, l: x.dc === "carbon_dioxide" ? co2lv(x.v) : aqLevel(x.dc, x.v) }));
+      const worst = lv.reduce((a, b) => (!a || b.l > a.l ? b : a), null);
+      return { r, lv, worst, offline: !vals.length };
+    });
+    const sortd = [...data].sort((a, b) => (b.worst?.l ?? -1) - (a.worst?.l ?? -1));
+    const top = sortd[0], tl = top.worst?.l ?? 0, co2 = top.lv.find((x) => x.dc === "carbon_dioxide");
+    const tip = (d) => { if (!d.worst) return d.offline ? "meldet sich nicht" : "kein Wert";
+      const w = d.worst; return w.l >= 3 ? (w.dc === "carbon_dioxide" ? "jetzt lüften" : "Luft belastet – lüften") : w.l === 2 ? "bald lüften" : w.l === 1 ? "in Ordnung" : "frische Luft"; };
+    const state = tl >= 3 ? { key: "crit", label: "Jetzt lüften", icon: "mdi:window-open-variant" } : tl === 2 ? { key: "low", label: "Bald lüften", icon: "mdi:weather-windy" }
+      : { key: "ok", label: "Gute Luft", icon: "mdi:leaf" };
+    const fmtAQ = (x) => `${fmt(x.v, x.v < 10 ? 1 : 0)} ${AQ[x.dc].u}`;
+    const say = tl >= 2 ? `${esc(top.r.name)} ${tl >= 3 ? "jetzt" : "bald"} lüften – ${fmtAQ(top.worst)}` : "Überall frische Luft.";
+    const main = co2 || top.worst;
+    const rows = sortd.map((d) => `<div class="row"><span class="dot ${["d-ok", "d-ok", "d-low", "d-crit"][d.worst?.l ?? 0]}${d.worst ? "" : " na"}"></span>
+      <div class="rn">${esc(d.r.name)}<div class="rs">${tip(d)}</div></div>
+      <div class="vals">${d.lv.map((x) => `<span class="aq${x.dc === "carbon_dioxide" ? " main" : ""}" data-sheet="e:${x.id}" title="${AQ[x.dc].n}">${x.dc === "carbon_dioxide" ? "" : `<i>${AQ[x.dc].n}</i>`}${fmtAQ(x)}</span>`).join("")}</div></div>`).join("");
+    this._shell(state.key, `
+      ${this._head(c.name, state)}
+      ${main ? `<div class="big" style="margin-top:6px" data-sheet="e:${main.id}"><span class="num">${fmt(main.v, main.v < 10 ? 1 : 0)}</span><span class="u">${AQ[main.dc].u} ${main.dc === "carbon_dioxide" ? "CO₂" : AQ[main.dc].n} · ${esc(top.r.name)}</span></div>` : ""}
+      <div class="say">${say}</div><div class="rows">${rows}</div>`, `
+      .say { font-size: 14px; color: var(--primary-text-color); margin-top: 6px; }
+      .row { cursor: default; } .dot.na { background: var(--disabled-text-color, #9e9e9e); opacity: .5; }
+      .vals { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 4px 10px; }
+      .aq { font-size: 12.5px; color: var(--secondary-text-color); font-variant-numeric: tabular-nums; white-space: nowrap; border-radius: 6px; padding: 1px 3px; }
+      .aq:hover { color: var(--primary-text-color); } .aq.main { font-size: 15px; font-weight: 600; color: var(--primary-text-color); }
+      .aq i { font-style: normal; opacity: .7; margin-right: 3px; }`);
+  }
+}
+
+/* ================= 25 · Termine ================= */
+const CAL_COL = ["#2a78d6", "#e36f2c", "#2f9e6a", "#9c5cc8", "#d6457a", "#8a7a2b", "#3a9fb0"];
+class MangfallCalendarCard extends MangfallBase {
+  static defaults = { name: "Termine", entities: [], days: 7, show: 8 };
+  static getStubConfig(hass) { return { entities: MangfallCalendarCard._find(hass) }; }
+  static _find(hass) { return listIds(hass, "calendar", (e) => !WASTE_RE.test(lcName(e)) && regOf(hass, e.entity_id).platform !== "waste_collection_schedule").slice(0, 8); }
+  static getConfigForm() {
+    return { schema: [{ name: "entities", selector: { entity: { multiple: true, filter: { domain: "calendar" } } } },
+      { type: "expandable", name: "", title: "Weitere Einstellungen", flatten: true, schema: [
+        { type: "grid", name: "", schema: [{ name: "days", selector: { number: { min: 1, max: 31, mode: "box", unit_of_measurement: "Tage" } } }, { name: "show", selector: { number: { min: 3, max: 30, mode: "box" } } }] },
+        { name: "name", selector: { text: {} } }, BRANDING] }],
+      computeLabel: (s) => ({ entities: "Kalender", days: "Vorschau", show: "Termine anzeigen", name: "Name", show_branding: "MANGFALL-Zeichen anzeigen" }[s.name]),
+      computeHelper: (s) => ({ entities: "Leer lassen – die Karte nimmt alle Kalender außer dem Müllkalender." }[s.name]) };
+  }
+  _check() { this._ev = null; this._evAt = 0; }
+  _auto(c, hass) { c._cals = c.entities?.length ? c.entities : MangfallCalendarCard._find(hass); return c; }
+  _watch() { return this._config._cals; }
+  disconnectedCallback() { clearInterval(this._clk); this._clk = null; }
+  _onHass() {
+    if (!this._clk) this._clk = setInterval(() => { const m = Math.floor(Date.now() / 6e4); if (m !== this._min && this._hass) { this._min = m; this._lastKey = null; this._render(); } }, 15000);
+    const c = this._config;
+    if (!c._cals.length || !this._hass.callApi || this._evBusy || Date.now() - this._evAt < 6e5) return;
+    this._evBusy = true; this._evAt = Date.now();
+    const s = dayStart(), e = new Date(+s + (c.days + 1) * 864e5), q = `start=${encodeURIComponent(s.toISOString())}&end=${encodeURIComponent(e.toISOString())}`;
+    let failed = 0;
+    Promise.all(c._cals.map((id, i) => this._hass.callApi("GET", `calendars/${id}?${q}`).then((evs) => (evs || []).map((ev) => {
+      const allDay = !!ev.start?.date, a = allDay ? new Date(ev.start.date + "T00:00") : new Date(ev.start?.dateTime || ev.start), z = allDay ? new Date((ev.end?.date || ev.start.date) + "T00:00") : new Date(ev.end?.dateTime || ev.end || a);
+      return { id, col: CAL_COL[i % CAL_COL.length], t: ev.summary || "Ohne Titel", loc: ev.location || "", a: +a, z: +z, allDay };
+    })).catch(() => { failed++; return []; }))).then((lists) => {
+      this._evErr = failed === c._cals.length; if (this._evErr) this._evAt = Date.now() - 6e5 + 3e4;
+      this._ev = lists.flat().filter((x) => isFinite(x.a)).sort((x, y) => x.a - y.a || y.allDay - x.allDay);
+      this._evBusy = false; this._lastKey = null; this._render();
+    });
+  }
+  _render() {
+    if (!this._config || !this._hass) return;
+    const c = this._config, now = Date.now(), t0 = +dayStart();
+    if (!c._cals.length) return this._setup(c.name, "Ich habe keinen Kalender gefunden. Verbinde zum Beispiel Google- oder iCloud-Kalender in Home Assistant.");
+    let evs = this._ev;
+    if (!evs) evs = c._cals.map((id, i) => { const a = this._hass.states[id]?.attributes || {}; return a.message && a.start_time ? { id, col: CAL_COL[i % CAL_COL.length], t: a.message, loc: a.location || "",
+      a: +new Date(a.start_time.replace(" ", "T")), z: +new Date((a.end_time || a.start_time).replace(" ", "T")), allDay: !!a.all_day } : null; }).filter(Boolean);
+    const up = evs.filter((x) => x.z > now || (x.allDay && x.z > t0)).filter((x) => x.a < t0 + (c.days + 1) * 864e5);
+    const days = new Map();
+    for (const x of up) { const d = Math.max(+dayStart(new Date(x.a)), t0); if (!days.has(d)) days.set(d, []); days.get(d).push(x); }
+    const today = days.get(t0) || [], next = up.find((x) => !x.allDay && x.a > now), cur = up.find((x) => !x.allDay && x.a <= now && x.z > now);
+    const mins = next ? Math.round((next.a - now) / 6e4) : null;
+    const state = cur ? { key: "info", label: "Läuft gerade", icon: "mdi:calendar-clock" } : mins !== null && mins <= 60 ? { key: "low", label: `In ${mins} min`, icon: "mdi:bell-ring-outline" }
+      : { key: "ok", label: up.length ? "Nichts Dringendes" : "Freie Tage", icon: "mdi:calendar-check" };
+    let n = 0;
+    const rows = [...days.entries()].map(([d, xs]) => {
+      const items = xs.filter(() => n++ < c.show || d === t0);
+      if (!items.length) return "";
+      return `<div class="rh2"><span>${dayWord(new Date(d))}</span>${d === t0 ? `<span>${new Date(d).toLocaleDateString("de-DE", { day: "numeric", month: "short" })}</span>` : ""}</div>
+        <div class="rows">${items.map((x) => {
+          const run = !x.allDay && x.a <= now && x.z > now;
+          const when = x.allDay ? "ganztägig" : run ? `bis ${hm(x.z)}` : hm(x.a);
+          return `<div class="row" data-more="${x.id}" role="button" tabindex="0"><span class="dot" style="background:${x.col}"></span>
+            <div class="rn">${esc(x.t)}${x.loc ? `<div class="rs">${esc(x.loc)}</div>` : ""}</div><div class="rs${run ? " now" : ""}">${when}</div></div>`; }).join("")}</div>`;
+    }).join("");
+    const loadingNote = this._evErr && !this._ev?.length ? "Termine nicht abrufbar – ich versuche es gleich noch einmal." : "";
+    this._shell(state.key, `
+      ${this._head(c.name, state)}
+      <div class="big" style="margin-top:6px"><span class="num">${today.length}</span><span class="u">${today.length === 1 ? "Termin" : "Termine"} heute</span></div>
+      <div class="muted">${loadingNote || (cur ? `Jetzt: ${esc(cur.t)}` : next ? `${mins !== null && mins < 120 ? `In ${mins} min` : `${dayWord(new Date(next.a))}, ${hm(next.a)}`}: ${esc(next.t)}` : up.length ? "" : `Keine Termine in den nächsten ${c.days} Tagen.`)}</div>
+      ${rows}`, ACT_CSS + `.row .rs.now { color: var(--mc-state); font-weight: 500; } .row .rn { white-space: normal; }`);
+  }
+}
+
+/* ================= 26 · Haus-Check ================= */
+class MangfallSystemCard extends MangfallBase {
+  static defaults = { name: "Haus-Check", backup_days: 3, disk_warn: 85 };
+  static getStubConfig() { return {}; }
+  static getConfigForm() {
+    return { schema: [{ type: "grid", name: "", schema: [
+        { name: "backup_days", selector: { number: { min: 1, max: 30, mode: "box", unit_of_measurement: "Tage" } } },
+        { name: "disk_warn", selector: { number: { min: 50, max: 99, mode: "box", unit_of_measurement: "%" } } }] },
+      { type: "expandable", name: "", title: "Weitere Einstellungen", flatten: true, schema: [{ name: "name", selector: { text: {} } }, BRANDING] }],
+      computeLabel: (s) => ({ backup_days: "Backup älter als", disk_warn: "Speicher voll ab", name: "Name", show_branding: "MANGFALL-Zeichen anzeigen" }[s.name]),
+      computeHelper: (s) => ({ backup_days: "Die Karte findet Updates, Backups, Geräte offline und den Speicherplatz von selbst." }[s.name]) };
+  }
+  _auto(c, hass) {
+    const S = hass.states;
+    c._upd = listIds(hass, "update");
+    c._backup = pick(hass, (e) => e.entity_id.startsWith("sensor.") && e.attributes.device_class === "timestamp" && /backup|sicherung/.test(lcName(e)),
+      (n) => 3 * has(/erfolgreich|successful|last.?success|letzte/, n) - 6 * has(/n(ä|ae)chst|next|versucht|attempt/, n), 3);
+    c._disk = pick(hass, (e) => e.entity_id.startsWith("sensor.") && unitOf(e) === "%" && /disk|datentr(ä|ae)ger|festplatte|storage|speicherplatz/.test(lcName(e)),
+      (n) => 3 * has(/use|usage|belegt|nutzung|used/, n) - 6 * has(/free|frei/, n), 3);
+    // Geräte, bei denen alles „nicht verfügbar“ meldet
+    const dev = new Map();
+    for (const e of Object.values(S)) {
+      const r = regOf(hass, e.entity_id); if (!r.device_id || r.hidden || e.entity_id.startsWith("update.")) continue;
+      if (!dev.has(r.device_id)) dev.set(r.device_id, []); dev.get(r.device_id).push(e);
+    }
+    const prefix = (es) => {   // Gerätename aus dem gemeinsamen Anfang der Entitätsnamen, falls Home Assistant keinen mitliefert
+      for (const k of [2, 1]) {   // häufigster Anfang aus zwei bzw. einem Wort
+        const cnt = {}; es.forEach((e) => { const p = fname(e).split(/\s+/).slice(0, k).join(" "); if (p.split(" ").length === k) cnt[p] = (cnt[p] || 0) + 1; });
+        const top = Object.entries(cnt).sort((x, y) => y[1] - x[1])[0];
+        if (top && top[1] >= 2 && top[1] >= es.length / 3) return top[0];
+      }
+      return cleanName(fname(es[0])) || es[0].entity_id;
+    };
+    c._off = [...dev.entries()].filter(([, es]) => es.every((e) => e.state === "unavailable")).map(([d, es]) => ({ d, id: es[0].entity_id,
+      name: hass.devices?.[d]?.name_by_user || hass.devices?.[d]?.name || prefix(es) }));
+    c._bats = listIds(hass, "sensor", (e) => e.attributes.device_class === "battery" && unitOf(e) === "%" && isLive(e) && parseFloat(e.state) <= 15 && !PHONE_RE.test(lcName(e)));
+    return c;
+  }
+  _watch() { const c = this._config; return [...c._upd, c._backup, c._disk, ...c._bats].filter(Boolean); }
+  _extraSheet(k) {
+    const c = this._config, S = this._hass.states;
+    if (k === "l:upd") return this._frame("Updates", `<div class="rows">${c._upd.map((id) => S[id]).filter((e) => e?.state === "on").map((e) => `<div class="row" data-more="${e.entity_id}" role="button" tabindex="0">
+      <div class="rn">${esc(e.attributes.title || cleanName(fname(e)).replace(/\s*update$/i, ""))}<div class="rs">${esc(e.attributes.installed_version || "")} → ${esc(e.attributes.latest_version || "")}</div></div>
+      <div class="rs">${e.attributes.in_progress ? "installiert …" : "Details"}</div></div>`).join("")}</div>`);
+    if (k === "l:off") return this._frame("Geräte offline", `<div class="rows">${c._off.map((o) => `<div class="row" data-entity="${o.id}"><div class="rn">${esc(o.name)}
+      <div class="rs">${esc(areaName(this._hass, o.id) || "")}</div></div><div class="rs">${S[o.id] ? ago(S[o.id].last_changed) : ""}</div></div>`).join("")}</div>`);
+    if (k === "l:bat") return this._frame("Akkus fast leer", `<div class="rows">${c._bats.map((id) => S[id]).filter(Boolean).map((e) => `<div class="row" data-entity="${e.entity_id}">
+      <div class="rn">${esc(cleanName(fname(e)))}</div><div class="rv">${fmtNum(parseFloat(e.state), "%")}</div></div>`).join("")}</div>`);
+    return "";
+  }
+  _render() {
+    if (!this._config || !this._hass) return;
+    const c = this._config, H = this._hass, S = H.states, todo = [], items = [];
+    const upd = c._upd.map((id) => S[id]).filter((e) => e?.state === "on" && !e.attributes.skipped_version);
+    const core = upd.find((e) => /home_assistant_(core|operating_system|supervisor)/.test(e.entity_id));
+    items.push(upd.length
+      ? { k: "l:upd", icon: "mdi:package-up", lv: core ? "low" : "info", t: `${upd.length} ${upd.length === 1 ? "Update" : "Updates"} verfügbar`, s: upd.slice(0, 2).map((e) => e.attributes.title || cleanName(fname(e)).replace(/\s*update$/i, "")).join(", ") + (upd.length > 2 ? " …" : "") }
+      : c._upd.length ? { icon: "mdi:package-check", lv: "ok", t: "Alles aktuell", s: `${c._upd.length} Komponenten geprüft` } : null);
+    const b = S[c._backup];
+    if (c._backup) {
+      const t = toMs(b?.state), age = (Date.now() - t) / 864e5;
+      items.push(!isFinite(t) ? { e: c._backup, icon: "mdi:backup-restore", lv: "low", t: "Noch kein Backup", s: "Richte unter Einstellungen › System › Backups eins ein" }
+        : { e: c._backup, icon: "mdi:backup-restore", lv: age > c.backup_days * 2 ? "crit" : age > c.backup_days ? "low" : "ok", t: `Backup ${ago(b.state).replace(/^seit /, "vor ")}`,
+          s: new Date(t).toLocaleString("de-DE", { weekday: "short", day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" }) });
+    }
+    if (c._off.length) items.push({ k: "l:off", icon: "mdi:lan-disconnect", lv: "low", t: `${c._off.length} ${c._off.length === 1 ? "Gerät" : "Geräte"} offline`, s: c._off.slice(0, 3).map((o) => o.name).join(", ") + (c._off.length > 3 ? " …" : "") });
+    const dk = S[c._disk], dv = parseFloat(dk?.state);
+    if (c._disk && isFinite(dv)) items.push({ e: c._disk, icon: "mdi:harddisk", lv: dv >= Math.max(c.disk_warn + 10, 95) ? "crit" : dv >= c.disk_warn ? "low" : "ok", t: `Speicher ${fmt(dv)} % belegt`, s: dv >= c.disk_warn ? "Alte Backups oder Aufzeichnungen löschen" : "genug Platz" });
+    if (c._bats.length) items.push({ k: "l:bat", icon: "mdi:battery-alert-variant-outline", lv: "low", t: `${c._bats.length} ${c._bats.length === 1 ? "Akku" : "Akkus"} fast leer`, s: "unter 15 %" });
+    const list = items.filter(Boolean);
+    if (!list.length) return this._setup(c.name, "Ich finde weder Updates noch Backups oder Systemsensoren.");
+    const bad = list.filter((x) => x.lv !== "ok"), worst = bad.some((x) => x.lv === "crit") ? "crit" : bad.some((x) => x.lv === "low") ? "low" : bad.length ? "info" : "ok";
+    const state = { key: worst, label: bad.length ? (worst === "crit" ? "Dringend" : "Bitte ansehen") : "Alles in Ordnung", icon: bad.length ? "mdi:clipboard-list-outline" : "mdi:check-circle" };
+    const rows = list.map((x) => `<div class="row"${x.k ? ` data-sheet="${x.k}"` : x.e ? ` data-entity="${x.e}"` : ""}><span class="dot d-${x.lv === "info" ? "low" : x.lv}"></span>
+      <ha-icon class="ri" icon="${x.icon}"></ha-icon><div class="rn">${esc(x.t)}<div class="rs">${esc(x.s)}</div></div>${x.k || x.e ? `<ha-icon class="ri chev" icon="mdi:chevron-right"></ha-icon>` : ""}</div>`).join("");
+    this._shell(state.key, `
+      ${this._head(c.name, state)}
+      <div class="big" style="margin-top:6px">${bad.length ? `<span class="num">${bad.length}</span><span class="u">${bad.length === 1 ? "Punkt" : "Punkte"} zu erledigen</span>` : `<span class="num w">Alles in Ordnung</span>`}</div>
+      <div class="rows">${rows}</div>`, `
+      .num.w { font-size: 28px; } .row:not([data-sheet]):not([data-entity]) { cursor: default; } .ri.chev { opacity: .5; --mdc-icon-size: 18px; }
+      .dot.d-info { background: var(--info-color, #2a78d6); }`);
+  }
+}
+
 /* ================= Registrierung ================= */
 const CARDS = [
   ["mangfall-level-card", MangfallLevelCard, "MANGFALL · Zisterne & Tank", "Animierter Tank mit Reichweite, Verbrauch, Regen-Zulauf und Ersparnis."],
@@ -2541,6 +3430,16 @@ const CARDS = [
   ["mangfall-price-card", MangfallPriceCard, "MANGFALL · Strompreis", "Dynamischer Preis jetzt, Balken für den Tag und die günstigsten Stunden."],
   ["mangfall-ev-card", MangfallEvCard, "MANGFALL · E-Auto", "Ladestand, Reichweite, Ladeleistung und wann das Auto voll ist."],
   ["mangfall-heating-card", MangfallHeatingCard, "MANGFALL · Heizung", "Ist- und Soll-Temperatur je Raum, mit Plus und Minus direkt in der Karte."],
+  ["mangfall-home-card", MangfallHomeCard, "MANGFALL · Haus auf einen Blick", "Begrüßung, Uhrzeit und kluge Hinweise wie „2 Fenster offen“ oder „Morgen Gelber Sack“."],
+  ["mangfall-cover-card", MangfallCoverCard, "MANGFALL · Rollläden", "Alle Rollläden und Jalousien nach Räumen, Auf, Stopp, Ab und „Alle zu“."],
+  ["mangfall-security-card", MangfallSecurityCard, "MANGFALL · Sicherheit", "Alarmanlage, Schlösser, Rauch-, CO-, Gas- und Wassermelder: ruhig „Alles sicher“ oder ein klarer Alarm."],
+  ["mangfall-camera-card", MangfallCameraCard, "MANGFALL · Kameras", "Standbilder aller Kameras als Raster, die sich selbst erneuern, Antippen vergrößert."],
+  ["mangfall-media-card", MangfallMediaCard, "MANGFALL · Musik & Medien", "Was gerade läuft, mit Cover, Steuerung und Lautstärke, der aktive Player zuerst."],
+  ["mangfall-actions-card", MangfallActionsCard, "MANGFALL · Schnellaktionen", "Szenen, Skripte und Knöpfe als große Kacheln mit kurzer Bestätigung."],
+  ["mangfall-consumers-card", MangfallConsumersCard, "MANGFALL · Verbraucher", "Wer gerade Strom braucht, sortiert, und wann die Waschmaschine fertig ist."],
+  ["mangfall-air-card", MangfallAirCard, "MANGFALL · Luftqualität", "CO₂, Feinstaub und VOC je Raum mit klarer Lüftungsempfehlung."],
+  ["mangfall-calendar-card", MangfallCalendarCard, "MANGFALL · Termine", "Die nächsten Termine aus allen Kalendern, Heute und Morgen klar getrennt."],
+  ["mangfall-system-card", MangfallSystemCard, "MANGFALL · Haus-Check", "Updates, Backup, Geräte offline und Speicherplatz – „Alles in Ordnung“ oder eine kurze Liste."],
   ["mangfall-flat-card", MangfallFlatCard, "MANGFALL · Wasserwaage (FLAT)", "Wohnwagen oder Wohnmobil gerade stellen: welches Rad wie viele Zentimeter Keil braucht."],
 ];
 if (!customElements.get("mangfall-level-card-editor")) customElements.define("mangfall-level-card-editor", MangfallLevelEditor);

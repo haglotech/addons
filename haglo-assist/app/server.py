@@ -1017,7 +1017,9 @@ MANGFALL: dict = {"ready": None, "own": False}    # ready: Home Assistant liefer
 MANGFALL_CARDS = {"mangfall-energy-card", "mangfall-level-card", "mangfall-climate-card",
                   "mangfall-battery-card", "mangfall-openings-card", "mangfall-mower-card",
                   "mangfall-energy-history-card", "mangfall-waste-card", "mangfall-weather-card", "mangfall-presence-card",
-                  "mangfall-lights-card", "mangfall-vacuum-card", "mangfall-price-card", "mangfall-ev-card", "mangfall-heating-card", "mangfall-flat-card"}
+                  "mangfall-lights-card", "mangfall-vacuum-card", "mangfall-price-card", "mangfall-ev-card", "mangfall-heating-card", "mangfall-flat-card",
+                  "mangfall-home-card", "mangfall-cover-card", "mangfall-security-card", "mangfall-camera-card", "mangfall-media-card",
+                  "mangfall-actions-card", "mangfall-consumers-card", "mangfall-air-card", "mangfall-calendar-card", "mangfall-system-card"}
 
 
 def mangfall_version() -> str:
