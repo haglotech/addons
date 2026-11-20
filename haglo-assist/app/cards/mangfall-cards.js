@@ -1196,6 +1196,12 @@ class MangfallBatteryCard extends MangfallBase {
       .sort((a, b) => a.v - b.v);
   }
   _watch() { return this._hass ? this._list().map((b) => b.id) : []; }
+  _extraSheet(k) {
+    if (k !== "l:all") return "";
+    const c = this._config, all = this._list();
+    return this._frame(`Alle ${all.length} Akkus`, `<div class="rows">${all.map((b) => `<div class="row" data-entity="${b.id}"><div class="rn">${esc(b.name)}</div>
+      <div class="rv">${fmt(b.v)} %</div></div>`).join("") || `<div class="muted pad">Keine Batteriesensoren gefunden.</div>`}</div>`);
+  }
   _render() {
     if (!this._config || !this._hass) return;
     const c = this._config, all = this._list();
@@ -1211,9 +1217,10 @@ class MangfallBatteryCard extends MangfallBase {
     }).join("");
     this._shell(state.key, `
       ${this._head(c.name, state)}
-      <div class="big" style="margin-top:6px"><span class="num">${all.length}</span><span class="u">Geräte überwacht</span></div>
+      <div class="big tapn" style="margin-top:6px" data-sheet="l:all"><span class="num">${all.length}</span><span class="u">Geräte überwacht</span></div>
       <div class="rows">${rows || `<div class="muted pad">Keine Batteriesensoren gefunden.</div>`}</div>
-      ${all.length > c.show ? `<div class="muted more">+ ${all.length - c.show} weitere über ${fmt(all[c.show - 1].v)} %</div>` : ""}`, `
+      ${all.length > c.show ? `<div class="muted more tapn" data-sheet="l:all">+ ${all.length - c.show} weitere über ${fmt(all[c.show - 1].v)} % – alle zeigen</div>` : ""}`, `
+      .tapn { cursor: pointer; border-radius: 8px; } .tapn:hover { background: color-mix(in srgb, var(--primary-text-color) 5%, transparent); }
       .row .rn { flex: 0 1 45%; }
       .bar { flex: 1; height: 6px; border-radius: 3px; background: var(--secondary-background-color, rgba(127,127,127,.12)); overflow: hidden; }
       .bf { height: 100%; border-radius: 3px; }
@@ -1240,6 +1247,12 @@ class MangfallOpeningsCard extends MangfallBase {
     return ids.filter((id) => !this._config.exclude.includes(id) && this._hass.states[id]).map((id) => this._hass.states[id]);
   }
   _watch() { return this._hass ? this._list().map((e) => e.entity_id) : []; }
+  _extraSheet(k) {
+    if (k !== "l:all") return "";
+    const all = this._list().sort((a, b) => (b.state === "on") - (a.state === "on"));
+    return this._frame(`Alle ${all.length} Fenster und Türen`, `<div class="rows">${all.map((e) => `<div class="row" data-entity="${e.entity_id}">
+      <div class="rn">${esc(cleanName(fname(e)))}</div><div class="rs">${e.state === "on" ? "offen" : e.state === "off" ? "zu" : "offline"} · ${ago(e.last_changed)}</div></div>`).join("")}</div>`);
+  }
   _render() {
     if (!this._config || !this._hass) return;
     const all = this._list(), open = all.filter((e) => e.state === "on").sort((a, b) => new Date(a.last_changed) - new Date(b.last_changed));
@@ -1252,8 +1265,9 @@ class MangfallOpeningsCard extends MangfallBase {
       <div class="rn">${esc(cleanName(fname(e)))}</div><div class="rs">${ago(e.last_changed)}</div></div>`).join("");
     this._shell(state.key, `
       ${this._head(this._config.name, state)}
-      <div class="big" style="margin-top:6px"><span class="num">${open.length}</span><span class="u">von ${all.length} offen</span></div>
-      ${open.length ? `<div class="rows">${rows}</div>` : `<div class="muted">Alle Fenster und Türen sind geschlossen.</div>`}`);
+      <div class="big tapn" style="margin-top:6px" data-sheet="l:all"><span class="num">${open.length}</span><span class="u">von ${all.length} offen</span></div>
+      ${open.length ? `<div class="rows">${rows}</div>` : `<div class="muted">Alle Fenster und Türen sind geschlossen.</div>`}`,
+      `.tapn { cursor: pointer; border-radius: 8px; } .tapn:hover { background: color-mix(in srgb, var(--primary-text-color) 5%, transparent); }`);
   }
 }
 
@@ -1933,7 +1947,7 @@ class MangfallPresenceCard extends MangfallBase {
     const c = this._config, S = this._hass.states;
     const ppl = c.entities.map((id) => S[id]).filter(Boolean);
     if (!ppl.length) return this._setup(c.name, "Ich habe noch keine Personen gefunden. Lege sie unter Einstellungen › Personen an und verknüpfe ein Handy.");
-    const where = (p) => (p.state === "home" ? "zu Hause" : p.state === "not_home" ? "unterwegs" : ["unknown", "unavailable"].includes(p.state) ? "unbekannt" : esc(p.state));
+    const where = (p) => (p.state === "home" ? "zu Hause" : p.state === "not_home" ? "unterwegs" : p.state === "unknown" ? "Standort unbekannt" : p.state === "unavailable" ? "keine Verbindung" : esc(p.state));
     const sorted = [...ppl].sort((a, b) => (b.state === "home") - (a.state === "home") || fname(a).localeCompare(fname(b), "de"));
     const home = ppl.filter((p) => p.state === "home").length;
     const state = home === ppl.length ? { key: "ok", label: ppl.length > 1 ? "Alle zu Hause" : "Zu Hause", icon: "mdi:home-account" }
@@ -2946,7 +2960,7 @@ class MangfallCameraCard extends MangfallBase {
     if (this._big && !cams.some((e) => e.entity_id === this._big)) this._big = null;
     const tile = (e, big) => {
       const id = e.entity_id, mv = H.states[c._motion[id]]?.state === "on", ok = isLive(e);
-      return `<div class="cam${big ? " big" : ""}" data-cam-tap="${id}" role="button" tabindex="0" aria-label="${esc(nice(H, e))} vergrößern">
+      return `<div class="cam${big ? " big" : ""}${ok ? "" : " na"}" ${ok ? `data-cam-tap="${id}"` : `data-entity="${id}"`} role="button" tabindex="0" aria-label="${esc(nice(H, e))} ${ok ? "vergrößern" : "Verlauf"}">
         ${ok ? `<img data-cam="${id}" data-at="${Date.now()}" src="${esc(this._url(e, big))}" alt="" loading="lazy">` : `<div class="off"><ha-icon icon="mdi:cctv-off"></ha-icon>offline</div>`}
         <span class="cn">${mv ? `<i class="mv"></i>` : ""}${esc(nice(H, e))}</span></div>`;
     };
@@ -2967,6 +2981,7 @@ class MangfallCameraCard extends MangfallBase {
       @keyframes mc-blink { 50% { opacity: .3; } }
       .off { height: 100%; display: grid; place-content: center; justify-items: center; gap: 4px; font-size: 12px; color: var(--secondary-text-color); }
       .off ha-icon { --mdc-icon-size: 26px; }
+      .cam.na .cn { color: var(--primary-text-color); text-shadow: none; }
       .bb { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 8px; }`);
     const R = this.shadowRoot;
     R.querySelectorAll("[data-cam-tap]").forEach((el) => {
