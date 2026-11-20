@@ -2365,6 +2365,134 @@ class MangfallHeatingCard extends MangfallBase {
   }
 }
 
+/* ================= 16 · FLAT – Wasserwaage für Wohnwagen und Wohnmobil ================= */
+// Längsneigung: + = vorne höher. Querneigung: + = rechts höher (in Fahrtrichtung). Aus den Winkeln und den Maßen
+// des Fahrzeugs rechnet die Karte aus, welches Rad wie viele Zentimeter Keil braucht.
+const isTilt = (e) => /^(sensor|input_number)\./.test(e.entity_id) && /^(°|deg|grad)$/i.test((e.attributes.unit_of_measurement || "").trim());
+FIND.pitch = (h) => pick(h, isTilt, (n) => 3 * has(/pitch|l(ä|ae)ngs|nick|front|vorn|forward/, n) + 2 * has(/flat|neigung|tilt|level|wasserwaage/, n) - 4 * has(/roll|quer|seit|side/, n));
+FIND.roll = (h) => pick(h, isTilt, (n) => 3 * has(/roll|quer|seit|side|lateral/, n) + 2 * has(/flat|neigung|tilt|level|wasserwaage/, n) - 4 * has(/pitch|l(ä|ae)ngs|nick/, n));
+const fmtCm = (cm) => (cm < 10 ? fmt(cm, 1) : fmt(cm)) + " cm";
+const fmtDeg = (d) => fmt(Math.abs(d), Math.abs(d) < 10 ? 1 : 0) + "°";
+
+class MangfallFlatCard extends MangfallBase {
+  static product = "FLAT";
+  static defaults = { name: "Wasserwaage", pitch: "", roll: "", battery: "", vehicle: "caravan", length: null, width: null, tolerance: 0.3 };
+  static getStubConfig(hass) { return { pitch: FIND.pitch(hass), roll: FIND.roll(hass) }; }
+  static getConfigForm() {
+    const tilt = { entity: { filter: [{ domain: "sensor" }, { domain: "input_number" }] } };
+    return { schema: [
+      { name: "vehicle", selector: { select: { mode: "list", options: [{ value: "caravan", label: "Wohnwagen" }, { value: "motorhome", label: "Wohnmobil" }] } } },
+      { name: "pitch", selector: tilt }, { name: "roll", selector: tilt },
+      { type: "expandable", name: "", title: "Maße und weitere Einstellungen", flatten: true, schema: [
+        { type: "grid", name: "", schema: [
+          { name: "length", selector: { number: { min: 1, max: 12, step: 0.1, unit_of_measurement: "m", mode: "box" } } },
+          { name: "width", selector: { number: { min: 1, max: 3, step: 0.05, unit_of_measurement: "m", mode: "box" } } },
+          { name: "tolerance", selector: { number: { min: 0.1, max: 2, step: 0.1, unit_of_measurement: "°", mode: "box" } } }] },
+        { name: "battery", selector: sensorSel("battery") }, { name: "name", selector: { text: {} } }, BRANDING] }],
+      computeLabel: (s) => ({ vehicle: "Fahrzeug", pitch: "Längsneigung", roll: "Querneigung", length: "Abstand Achse – Stützrad", width: "Spurbreite",
+        tolerance: "Gilt als gerade bis", battery: "Akku", name: "Name", show_branding: "MANGFALL-Zeichen anzeigen" }[s.name]),
+      computeHelper: (s) => ({ pitch: "Leer lassen – die Karte nimmt deinen FLAT von selbst.", roll: "Leer lassen – die Karte nimmt deinen FLAT von selbst.",
+        length: "Wohnwagen: Achse bis Stützrad. Wohnmobil: Radstand. Leer lassen = übliche Werte.", width: "Abstand der Räder links und rechts. Leer lassen = 1,9 m." }[s.name]) };
+  }
+  _auto(c, hass) {
+    if (!c.pitch) c.pitch = FIND.pitch(hass);
+    if (!c.roll) c.roll = FIND.roll(hass);
+    const any = c.pitch || c.roll;
+    if (any && !c.battery) c.battery = sameDevice(hass, any, (e) => e.attributes.device_class === "battery" && e.entity_id.startsWith("sensor."))?.entity_id || "";
+    return c;
+  }
+  _watch() { const c = this._config; return [c.pitch, c.roll, c.battery].filter(Boolean); }
+  getCardSize() { return 6; }
+  // Höhe, die jedes Rad (bzw. das Stützrad) braucht, damit das Fahrzeug gerade steht
+  static plan(p, r, c) {
+    const mh = c.vehicle === "motorhome", L = c.length || (mh ? 3.8 : 4.2), W = c.width || 1.9;
+    const tp = Math.tan((p * Math.PI) / 180), tr = Math.tan((r * Math.PI) / 180);
+    if (mh) {          // vier Räder: das höchste bleibt, die anderen bekommen Keile
+      const z = { fl: (L / 2) * tp - (W / 2) * tr, fr: (L / 2) * tp + (W / 2) * tr, rl: -(L / 2) * tp - (W / 2) * tr, rr: -(L / 2) * tp + (W / 2) * tr };
+      const top = Math.max(...Object.values(z));
+      return { wheels: Object.fromEntries(Object.entries(z).map(([k, v]) => [k, (top - v) * 100])), jack: null };
+    }
+    const lift = Math.abs(W * tr) * 100;      // Wohnwagen: tiefes Rad unterlegen, dann Stützrad nachkurbeln
+    return { wheels: { l: r > 0 ? lift : 0, r: r < 0 ? lift : 0 }, jack: -L * tp * 100 };
+  }
+  _render() {
+    if (!this._config || !this._hass) return;
+    const c = this._config, S = this._hass.states;
+    if (!c.pitch && !c.roll) return this._setup(c.name, "Ich habe keinen FLAT-Neigungssensor gefunden.");
+    const ps = S[c.pitch], rs = S[c.roll], p = parseFloat(ps?.state), r = parseFloat(rs?.state);
+    if ((c.pitch && !isLive(ps)) && (c.roll && !isLive(rs))) return this._missing(c.name, "Dein FLAT meldet sich gerade nicht – ist er in Bluetooth-Reichweite?");
+    const P = isFinite(p) ? p : 0, R = isFinite(r) ? r : 0, tilt = Math.max(Math.abs(P), Math.abs(R)), tol = c.tolerance || 0.3;
+    const mh = c.vehicle === "motorhome", plan = MangfallFlatCard.plan(P, R, c);
+    const need = Object.entries(plan.wheels).filter(([, v]) => v >= 0.5), maxLift = Math.max(0, ...Object.values(plan.wheels));
+    const state = tilt <= tol ? { key: "ok", label: "Steht gerade", icon: "mdi:check-circle" }
+      : maxLift > 12 ? { key: "crit", label: "Zu schief", icon: "mdi:alert" }
+      : tilt <= 1 ? { key: "info", label: "Fast gerade", icon: "mdi:approximately-equal" }
+      : { key: "low", label: "Schief", icon: "mdi:angle-acute" };
+    const NAME = { l: "links", r: "rechts", fl: "vorne links", fr: "vorne rechts", rl: "hinten links", rr: "hinten rechts" };
+    let say;
+    if (tilt <= tol) say = "Alles im Lot – Kühlschrank, Dusche und Bett passen.";
+    else if (maxLift > 12) say = `Dafür bräuchtest du ${fmtCm(maxLift)} Keil – such dir lieber einen ebeneren Platz.`;
+    else {
+      const parts = need.sort((a, b) => b[1] - a[1]).map(([k, v]) => `${NAME[k]} ${fmtCm(v)}`);
+      say = parts.length ? `Unterlegen: ${parts.join(", ")}` : "";
+      if (!mh && Math.abs(plan.jack) >= 0.5) say += `${say ? ", dann " : ""}Stützrad ${fmtCm(Math.abs(plan.jack))} ${plan.jack > 0 ? "hochkurbeln" : "runterkurbeln"}`;
+      say = say.charAt(0).toUpperCase() + say.slice(1) + ".";
+      if (tilt > 3) say += " Der Absorber-Kühlschrank braucht weniger als 3°.";
+    }
+    // Draufsicht: Fahrzeug, Räder mit Keil-Angabe, Libelle in der Mitte
+    const Wv = 300, Hv = 200, bx = 95, by = 22, bw = 110, bh = mh ? 160 : 140;
+    const wheel = (k, x, y) => {
+      const v = plan.wheels[k], on = v >= 0.5;
+      return `<g class="wh ${on ? "on" : ""}" data-sheet="e:${c.roll || c.pitch}"><rect x="${x - 7}" y="${y - 16}" width="14" height="32" rx="4"/>
+        ${on ? `<text x="${x < 150 ? x - 14 : x + 14}" y="${y + 4}" text-anchor="${x < 150 ? "end" : "start"}" class="lift">+${fmtCm(v)}</text>` : ""}</g>`;
+    };
+    const cy = by + bh / 2, ax = mh ? null : by + bh * 0.62;
+    const wheels = mh ? wheel("fl", bx, by + 34) + wheel("fr", bx + bw, by + 34) + wheel("rl", bx, by + bh - 30) + wheel("rr", bx + bw, by + bh - 30)
+      : wheel("l", bx, ax) + wheel("r", bx + bw, ax);
+    const jackOn = !mh && Math.abs(plan.jack) >= 0.5;
+    const front = mh ? `<path d="M${bx} ${by + 26} Q${bx} ${by} ${bx + 26} ${by} H${bx + bw - 26} Q${bx + bw} ${by} ${bx + bw} ${by + 26}" class="cab"/>`
+      : `<path d="M${bx + 30} ${by} L150 ${by - 14} L${bx + bw - 30} ${by}" class="bar"/><g class="jack ${jackOn ? "on" : ""}" data-sheet="e:${c.pitch || c.roll}"><circle cx="150" cy="${by - 14}" r="6"/>
+        ${jackOn ? `<text x="162" y="${by - 10}" class="lift">${plan.jack > 0 ? "↑" : "↓"} ${fmtCm(Math.abs(plan.jack))}</text>` : ""}</g>`;
+    const RNG = 5, bubX = 150 + Math.max(-1, Math.min(1, R / RNG)) * 34, bubY = cy - Math.max(-1, Math.min(1, P / RNG)) * 34;
+    const svg = `<svg viewBox="0 0 ${Wv} ${Hv}" class="van" role="img" aria-label="Neigung ${fmtDeg(tilt)}">
+      <rect x="${bx}" y="${by}" width="${bw}" height="${bh}" rx="${mh ? 18 : 14}" class="body"/>${front}${wheels}
+      <g class="vial" data-sheet="e:${c.pitch || c.roll}"><circle cx="150" cy="${cy}" r="40" class="ring"/><circle cx="150" cy="${cy}" r="${(tol / RNG) * 34 + 9}" class="ring in"/>
+        <line x1="110" x2="190" y1="${cy}" y2="${cy}" class="cross"/><line x1="150" x2="150" y1="${cy - 40}" y2="${cy + 40}" class="cross"/>
+        <circle cx="0" cy="0" r="9" class="bub" style="transform:translate(${bubX.toFixed(1)}px,${bubY.toFixed(1)}px)"/></g>
+      <text x="150" y="${by + bh + 15}" class="dir">${mh ? "Heck" : "Heck"}</text></svg>`;
+    const bat = c.battery ? parseFloat(S[c.battery]?.state) : NaN;
+    const tiles = [
+      { label: "Längs", value: isFinite(p) ? fmtDeg(p) : "–", unit: "", sub: !isFinite(p) ? "kein Wert" : Math.abs(p) <= tol ? "gerade" : p > 0 ? "vorne höher" : "hinten höher", icon: "mdi:arrow-up-down", sheet: c.pitch ? `e:${c.pitch}` : "" },
+      { label: "Quer", value: isFinite(r) ? fmtDeg(r) : "–", unit: "", sub: !isFinite(r) ? "kein Wert" : Math.abs(r) <= tol ? "gerade" : r > 0 ? "rechts höher" : "links höher", icon: "mdi:arrow-left-right", sheet: c.roll ? `e:${c.roll}` : "" },
+    ];
+    if (c.battery) tiles.push({ label: "Akku", value: isFinite(bat) ? fmt(bat) : "–", unit: "%", sub: isFinite(bat) && bat < 20 ? "bald laden" : "", icon: "mdi:battery-high", sheet: `e:${c.battery}` });
+    this._shell(state.key, `
+      ${this._head(c.name, state)}
+      <div class="big" style="margin-top:6px" data-sheet="e:${c.pitch || c.roll}"><span class="num">${fmtDeg(tilt)}</span><span class="u">${tilt <= tol ? "gerade" : "Neigung"}</span></div>
+      <div class="say">${say}</div>
+      <div class="vwrap">${svg}</div>
+      ${this._tiles(tiles)}`, `
+      .say { font-size: 13.5px; color: var(--primary-text-color); margin-top: 6px; line-height: 1.45; }
+      .big[data-sheet] { cursor: pointer; }
+      .vwrap { margin: 8px auto 0; max-width: 340px; }
+      .van { width: 100%; display: block; overflow: visible; }
+      .body { fill: var(--secondary-background-color, rgba(127,127,127,.08)); stroke: var(--divider-color, rgba(127,127,127,.35)); stroke-width: 1.5; }
+      .cab { fill: none; stroke: var(--secondary-text-color); stroke-width: 2; opacity: .5; }
+      .bar { fill: none; stroke: var(--secondary-text-color); stroke-width: 2.5; stroke-linejoin: round; opacity: .55; }
+      .wh rect { fill: var(--secondary-text-color); opacity: .55; transition: fill .3s, opacity .3s; }
+      .wh.on rect, .jack.on circle { fill: var(--mc-state); opacity: 1; }
+      .jack circle { fill: var(--secondary-text-color); opacity: .55; }
+      .wh, .jack, .vial { cursor: pointer; }
+      .lift { font-size: 12px; font-weight: 600; fill: var(--primary-text-color); font-variant-numeric: tabular-nums; }
+      .ring { fill: color-mix(in srgb, var(--mc-state) 7%, transparent); stroke: var(--divider-color, rgba(127,127,127,.35)); stroke-width: 1.2; }
+      .ring.in { fill: none; stroke: var(--mc-state); stroke-dasharray: 2 3; opacity: .7; }
+      .cross { stroke: var(--divider-color, rgba(127,127,127,.3)); stroke-width: 1; }
+      .bub { fill: var(--mc-state); opacity: .9; transition: transform .8s cubic-bezier(.3,1.4,.5,1); filter: drop-shadow(0 1px 2px rgba(0,0,0,.25)); }
+      .dir { font-size: 10px; letter-spacing: .14em; text-transform: uppercase; fill: var(--secondary-text-color); text-anchor: middle; opacity: .7; }
+      @media (prefers-reduced-motion: reduce) { .bub { transition: none; } }`);
+  }
+}
+
 /* ================= Registrierung ================= */
 const CARDS = [
   ["mangfall-level-card", MangfallLevelCard, "MANGFALL · Zisterne & Tank", "Animierter Tank mit Reichweite, Verbrauch, Regen-Zulauf und Ersparnis."],
@@ -2382,6 +2510,7 @@ const CARDS = [
   ["mangfall-price-card", MangfallPriceCard, "MANGFALL · Strompreis", "Dynamischer Preis jetzt, Balken für den Tag und die günstigsten Stunden."],
   ["mangfall-ev-card", MangfallEvCard, "MANGFALL · E-Auto", "Ladestand, Reichweite, Ladeleistung und wann das Auto voll ist."],
   ["mangfall-heating-card", MangfallHeatingCard, "MANGFALL · Heizung", "Ist- und Soll-Temperatur je Raum, mit Plus und Minus direkt in der Karte."],
+  ["mangfall-flat-card", MangfallFlatCard, "MANGFALL · Wasserwaage (FLAT)", "Wohnwagen oder Wohnmobil gerade stellen: welches Rad wie viele Zentimeter Keil braucht."],
 ];
 if (!customElements.get("mangfall-level-card-editor")) customElements.define("mangfall-level-card-editor", MangfallLevelEditor);
 window.customCards = window.customCards || [];
