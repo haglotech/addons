@@ -4,6 +4,7 @@
 
 - Neu: MANGFALL-Karten sind mit dabei – sechs Dashboard-Karten in einem Design: Energiefluss (PV, Speicher, Netz), Zisterne und Tank, Raumklima, Batterien, Türen und Fenster, Mähroboter. Haglo Assist richtet sie selbst ein, ohne HACS, hell und dunkel
 - Haglo Assist nimmt diese Karten bevorzugt, wenn sie zu deinem Wunsch und deinen Geräten passen – sonst wie bisher die Karten von Home Assistant
+- Energiefluss-Karte genauer: Speist der Speicher ins Netz ein, ist das jetzt zu sehen. Liefern Sonne und Speicher gemeinsam, nennt der Satz beide. Ein nachlaufender Haus-Sensor zeigt keinen Netzbezug mehr, während eingespeist wird. Die Flussanimation springt bei neuen Messwerten nicht mehr
 - Hast du die MANGFALL-Karten schon selbst installiert, bleibt deine Installation unverändert
 - Gab es den Ordner www in deiner Konfiguration noch nicht, erscheinen die Karten nach einem Neustart von Home Assistant
 

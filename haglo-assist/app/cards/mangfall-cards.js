@@ -3,7 +3,7 @@
  * Karten: Zisterne (LEVEL), Energiefluss (WATT), Raumklima, Batterien, Fenster & Türen, Mähroboter
  * (c) Mangfall · MIT-Lizenz
  */
-const MC_VERSION = "1.2.0";
+const MC_VERSION = "1.2.1";
 
 const fmt = (n, d = 0) =>
   Number(n).toLocaleString("de-DE", { minimumFractionDigits: d, maximumFractionDigits: d });
@@ -30,7 +30,7 @@ const toWatt = (st) => {
   const u = (st.attributes.unit_of_measurement || "W").toLowerCase();
   return u === "kw" ? v * 1000 : u === "mw" ? v * 1e6 : v;
 };
-const fmtW = (w) => (Math.abs(w) >= 1000 ? `${fmt(w / 1000, 1)} kW` : `${fmt(w)} W`);
+const fmtW = (w) => (Math.abs(w) >= 999.5 ? `${fmt(w / 1000, 1)} kW` : `${fmt(w)} W`);
 
 /* ================= Basis für alle Karten ================= */
 class MangfallBase extends HTMLElement {
@@ -381,12 +381,14 @@ class MangfallEnergyCard extends MangfallBase {
     const s2b = Math.min(rs, chg); rs -= s2b;
     const s2g = Math.min(rs, exp);
     const b2h = Math.min(dis, h - s2h);
-    const g2h = Math.max(0, h - s2h - b2h), g2b = Math.max(0, chg - s2b);
+    const b2g = Math.max(0, Math.min(dis - b2h, exp - s2g));          // Speicher speist ein (z. B. dynamischer Tarif)
+    const imp = Math.max(0, g);                                        // mehr als der Bezug kann nicht aus dem Netz kommen
+    const g2b = Math.min(Math.max(0, chg - s2b), imp), g2h = Math.min(Math.max(0, h - s2h - b2h), imp - g2b);
     const own = h > 0 ? Math.max(0, Math.min(100, ((s2h + b2h) / h) * 100)) : 100;
     const T = 15;
 
     let state;
-    if (s2g > T || exp > T) state = { key: "ok", label: "Speist ein", icon: "mdi:transmission-tower-export" };
+    if (s2g + b2g > T || exp > T) state = { key: "ok", label: "Speist ein", icon: "mdi:transmission-tower-export" };
     else if (g2h + g2b <= T) state = { key: "ok", label: "Autark", icon: "mdi:check-circle" };
     else if (own >= 50) state = { key: "info", label: "Teilweise Netzstrom", icon: "mdi:transmission-tower-import" };
     else state = { key: "low", label: "Bezieht Netzstrom", icon: "mdi:transmission-tower-import" };
@@ -395,13 +397,16 @@ class MangfallEnergyCard extends MangfallBase {
     let say;
     if (s2h + s2b + s2g > T) {
       const p = [];
-      if (s2h > T) p.push(s2h >= h - T ? "deckt das ganze Haus" : `deckt ${fmt((s2h / h) * 100)} % vom Haus`);
+      if (s2h > T) p.push(s2h >= h - T ? "deckt das ganze Haus" : `deckt ${fmt(Math.min(99, Math.round((s2h / h) * 100)))} % vom Haus`);
       if (s2b > T) p.push("lädt den Speicher");
       if (s2g > T) p.push(`speist ${fmtW(s2g)} ein`);
       const last = p.pop(); say = "Die Sonne " + (p.length ? p.join(", ") + " und " : "") + last;
-      if (g2h > T) say += `, ${fmtW(g2h)} kommen aus dem Netz`;
-    } else if (b2h > T) say = "Der Speicher versorgt das Haus" + (g2h > T ? `, ${fmtW(g2h)} kommen aus dem Netz` : "");
-    else if (g2b > T) say = "Der Speicher lädt aus dem Netz";
+      if (b2h > T) say += `, der Speicher liefert ${fmtW(b2h)}`;
+      if (b2g > T) say += `, der Speicher speist ${fmtW(b2g)} ein`;
+      if (g2h + g2b > T) say += `, ${fmtW(g2h + g2b)} kommen aus dem Netz`;
+    } else if (b2h > T || b2g > T) say = (b2h > T ? "Der Speicher versorgt das Haus" + (b2g > T ? ` und speist ${fmtW(b2g)} ein` : "")
+        : `Der Speicher speist ${fmtW(b2g)} ein`) + (g2h > T ? `, ${fmtW(g2h)} kommen aus dem Netz` : "");
+    else if (g2b > T) say = g2h > T ? `Haus und Speicher beziehen ${fmtW(g2h + g2b)} aus dem Netz` : "Der Speicher lädt aus dem Netz";
     else say = h > T ? `Das Haus bezieht ${fmtW(g2h)} aus dem Netz` : "Gerade fließt kaum Strom";
 
     // Grafik
@@ -414,13 +419,17 @@ class MangfallEnergyCard extends MangfallBase {
     };
     const routes = [
       ["solar", "home", s2h, "solar", hasS], ["solar", "batt", s2b, "solar", hasS && hasB], ["solar", "grid", s2g, "solar", hasS],
-      ["batt", "home", b2h, "batt", hasB], ["grid", "home", g2h, "grid", true], ["grid", "batt", g2b, "grid", hasB],
+      ["batt", "home", b2h, "batt", hasB], ["grid", "home", g2h, "grid", true],
+      b2g > g2b ? ["batt", "grid", b2g, "batt", hasB] : ["grid", "batt", g2b, "grid", hasB],
     ].filter((r) => r[4]);
+    const now = Date.now() / 1000;
     const lines = routes.map(([a, z, w, col]) => {
       const d = curve(a, z);
       if (w <= T) return `<path d="${d}" class="base"/>`;
       const sw = (3 + Math.min(3, w / 1500)).toFixed(1), dur = Math.max(0.28, Math.min(1.4, 1.7 - Math.log10(w) * 0.35)).toFixed(2);
-      return `<path d="${d}" class="lane" style="stroke:${EC[col]}"/><path d="${d}" class="run" style="stroke:${EC[col]};stroke-width:${sw};animation-duration:${dur}s"/>`;
+      // Neu zeichnen startet Animationen von vorn – mit der Uhrzeit als Phase läuft der Fluss ohne Sprung weiter
+      const delay = (-(now % dur)).toFixed(3);
+      return `<path d="${d}" class="lane" style="stroke:${EC[col]}"/><path d="${d}" class="run" style="stroke:${EC[col]};stroke-width:${sw};animation-duration:${dur}s;animation-delay:${delay}s"/>`;
     }).join("");
 
     const CIRC = 2 * Math.PI * P.R;
@@ -439,7 +448,7 @@ class MangfallEnergyCard extends MangfallBase {
       return `<div class="hit" style="left:${(x / P.W) * 100}%;top:${(y / P.H) * 100}%;color:${col}"${entity ? ` data-entity="${entity}"` : ""}><ha-icon icon="${icon}"></ha-icon></div>`;
     };
     const battIcon = soc !== null ? (soc >= 95 ? "mdi:battery" : `mdi:battery-${Math.max(10, Math.round(soc / 10) * 10)}`) : "mdi:home-battery-outline";
-    const gridActive = g2h + g2b + s2g > T;
+    const gridActive = g2h + g2b + s2g + b2g > T;
     const td = this._today;
 
     const svg = `<svg viewBox="0 0 ${P.W} ${P.H}" aria-hidden="true">${lines}
