@@ -494,9 +494,23 @@ class MangfallLevelCard extends MangfallBase {
       }
       c.capacity = c.capacity || 5000; c._capGuess = !this._user.capacity && !other;
     }
+    // „Jetzt messen“ und Pumpe vom selben Gerät (MANGFALL LEVEL und andere Sensoren mit Mess-Knopf)
+    if (c.entity) {
+      c._measure = c.measure_button || sameDevice(hass, c.entity, (e) => e.entity_id.startsWith("button.") && /jetzt.?messen|messen|measure|refresh|aktualisier/.test(lcName(e)))?.entity_id || "";
+      c._pump = sameDevice(hass, c.entity, (e) => e.entity_id.startsWith("binary_sensor.") && (e.attributes.device_class === "running" || /pumpe|pump/.test(lcName(e))))?.entity_id || "";
+    }
     return c;
   }
-  _watch() { return [this._config.entity].filter(Boolean); }
+  _watch() { return [this._config.entity, this._config._pump].filter(Boolean); }
+  _measureBtn() {
+    const c = this._config; if (!c._measure) return "";
+    const st = this._hass.states[c.entity], pump = c._pump && this._hass.states[c._pump]?.state === "on";
+    const waiting = this._measAt && Date.now() - this._measAt < 60000 && !(st && toMs(st.last_updated) > this._measAt + 3000);
+    const busy = pump || waiting, na = !isLive(this._hass.states[c._measure]) && this._hass.states[c._measure]?.state === "unavailable";
+    return `<div class="mrow"><button class="mbtn${busy ? " busy" : ""}" data-measure ${busy || na ? "disabled" : ""}>
+      <ha-icon icon="${busy ? "mdi:loading" : "mdi:gauge"}"></ha-icon>${na ? "Sensor offline" : busy ? "Misst gerade …" : "Jetzt messen"}</button>
+      <span class="mwhen">${st && isLive(st) ? "gemessen " + ago(st.last_updated).replace(/^seit /, "vor ") : ""}</span></div>`;
+  }
   getCardSize() { return 5; }
   _onHass() {
     if (this._config.entity && Date.now() - this._histFetched > 6e5) this._fetchHistory();
@@ -580,7 +594,20 @@ class MangfallLevelCard extends MangfallBase {
         { label: "Verbrauch", value: s ? fmtL(s.perDay) : "–", unit: "L/Tag", sub: `Ø ${c.days} Tage`, icon: "mdi:water-minus", sheet: "use" },
         { label: oil ? "Nachgetankt" : "Regen-Zulauf", value: s ? (s.inflow24 > 0 ? "+" + fmtL(s.inflow24) : "0") : "–", unit: "L", sub: "letzte 24 h", icon: oil ? "mdi:gas-station" : "mdi:weather-pouring", sheet: "in" },
       ])}
-      ${this._sheet ? this._sheetHtml(liters, pct, s) : this._spark()}`, `
+      ${this._sheet ? this._sheetHtml(liters, pct, s) : this._spark()}
+      ${this._measureBtn()}`, `
+      .mrow { display: flex; align-items: center; gap: 10px; margin-top: 12px; }
+      .mbtn { display: inline-flex; align-items: center; gap: 6px; padding: 8px 14px 8px 11px; border: none; border-radius: 10px; cursor: pointer;
+        font: inherit; font-size: 13px; font-weight: 500; color: var(--primary-text-color); background: var(--secondary-background-color, rgba(127,127,127,.1)); transition: background .15s; }
+      .mbtn:hover:not([disabled]) { background: color-mix(in srgb, var(--primary-color, #2a78d6) 15%, var(--secondary-background-color, #eee)); }
+      .mbtn:focus-visible { outline: 2px solid var(--primary-color, #2a78d6); outline-offset: 2px; }
+      .mbtn[disabled] { cursor: default; opacity: .75; }
+      .mbtn ha-icon { --mdc-icon-size: 17px; color: var(--mlc-w2); }
+      .mbtn.busy ha-icon { animation: mc-spin 1s linear infinite; }
+      @keyframes mc-spin { to { transform: rotate(360deg); } }
+      .mwhen { font-size: 12px; color: var(--secondary-text-color); }
+      @media (prefers-reduced-motion: reduce) { .mbtn.busy ha-icon { animation: none; } }
+
       ha-card { --mlc-w1: var(--mlc-water-top, ${w1}); --mlc-w2: var(--mlc-water-bottom, ${w2}); }
       .wrap { display: flex; gap: 16px; align-items: center; }
       .tankbox { flex: 0 0 104px; cursor: pointer; }
@@ -602,6 +629,10 @@ class MangfallLevelCard extends MangfallBase {
     this._sheetAnim = false;
     this.shadowRoot.querySelectorAll(".tile[data-sheet]").forEach((t) => t.classList.toggle("sel", t.dataset.sheet === this._sheet));
     this.shadowRoot.querySelector(".spark")?.addEventListener("click", () => this._toggleSheet("l"));
+    this.shadowRoot.querySelector("[data-measure]")?.addEventListener("click", () => {
+      this._measAt = Date.now(); this._hass.callService("button", "press", { entity_id: this._config._measure });
+      this._lastKey = null; this._render(); clearTimeout(this._measT); this._measT = setTimeout(() => { this._lastKey = null; this._render(); }, 61000);
+    });
   }
   /* Verlaufsfeld: jede Zahl der Karte ist antippbar und zeigt ihren Verlauf direkt in der Karte */
   _toggleSheet(k) {
