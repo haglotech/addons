@@ -123,6 +123,20 @@ test("Sonne und Speicher versorgen gemeinsam das Haus", async () => {
   assert.equal(r.say, "Die Sonne deckt 25 % vom Haus, der Speicher liefert 1,5 kW.");
 });
 
+test("Sonne lädt den Speicher, das Haus hängt am Netz (Netz und Haus gleich groß)", async () => {
+  const r = await render({ grid: 243, solar: 172, battery: -172, soc: 5 });              // Haus 243 W
+  assert.deepEqual(r.flows, ["grid>home", "solar>batt"]);
+  assert.equal(r.say, "Die Sonne lädt den Speicher, 243 W kommen aus dem Netz.");
+  assert.equal(r.hero, "0");
+  assert.equal(r.chip, "Bezieht Netzstrom");
+  assert.deepEqual(r.ring("home").map((s) => s[0]), ["grid"]);
+});
+
+test("Speicher lädt stärker, als die Sonne liefert: Rest aus dem Netz", async () => {
+  const r = await render({ grid: 1300, solar: 500, battery: -1500 });                    // Haus 300 W
+  assert.deepEqual(r.flows, ["grid>batt", "grid>home", "solar>batt"]);
+});
+
 test("Speicher lädt aus dem Netz", async () => {
   const r = await render({ grid: 2300, solar: 0, battery: -2000 });                    // Haus 300 W
   assert.deepEqual(r.flows, ["grid>batt", "grid>home"]);
