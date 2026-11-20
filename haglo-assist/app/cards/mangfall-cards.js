@@ -3,7 +3,7 @@
  * Karten: Zisterne (LEVEL), Energiefluss (WATT), Raumklima, Batterien, Fenster & Türen, Mähroboter
  * (c) Mangfall · MIT-Lizenz
  */
-const MC_VERSION = "1.2.0";
+const MC_VERSION = "1.3.0";
 
 const fmt = (n, d = 0) =>
   Number(n).toLocaleString("de-DE", { minimumFractionDigits: d, maximumFractionDigits: d });
@@ -32,17 +32,79 @@ const toWatt = (st) => {
 };
 const fmtW = (w) => (Math.abs(w) >= 1000 ? `${fmt(w / 1000, 1)} kW` : `${fmt(w)} W`);
 
+/* ================= Einrichten ohne Fachwissen =================
+ * Jede Karte sucht sich ihre Sensoren selbst: einfach hinzufügen, und sie zeigt Werte. Was der Kunde im Editor
+ * auswählt, hat immer Vorrang; im Editor stehen nur Sensoren der passenden Art zur Auswahl. */
+const PHONE_RE = /iphone|ipad|phone|handy|smartphone|pixel|galaxy|watch|tablet|macbook|laptop|notebook|kindle|airpods/;
+const lcName = (e) => (e.entity_id + " " + (e.attributes.friendly_name || "")).toLowerCase();
+const isLive = (e) => !!e && !["unavailable", "unknown"].includes(e.state);
+const isPower = (e) => e.entity_id.startsWith("sensor.") &&
+  (e.attributes.device_class === "power" || /^[km]?w$/i.test(e.attributes.unit_of_measurement || ""));
+const unitOf = (e) => (e?.attributes.unit_of_measurement || "").trim().toLowerCase();
+/* Bester Treffer nach Punkten; unter `min` Punkten lieber gar keiner als ein falscher */
+function pick(hass, filter, score, min = 3, not = []) {
+  let best = "", top = min - 0.001;
+  for (const e of Object.values(hass?.states || {})) {
+    if (not.includes(e.entity_id) || !filter(e)) continue;
+    const s = score(lcName(e), e) + (isLive(e) ? 0.5 : 0);
+    if (s > top) { top = s; best = e.entity_id; }
+  }
+  return best;
+}
+const has = (re, n) => (re.test(n) ? 1 : 0);
+const NOT_POWER = /inverter|wechselrichter|transmitted|ct_|automatic|size|limit|setting|einstellung|ziel|target|_max|_min|\bmax\b|\bmin\b|threshold|schwelle/;
+const NOT_GRID = /solar|\bpv\b|_pv|pv_|batter|speicher|akku|wechselrichter|inverter|steckdose|plug|socket|kaffee|tasmota|heizung|w(ä|ae)rmepumpe|wallbox|auto\b/;
+const FIND = {
+  grid: (h) => pick(h, isPower, (n, e) => 3 * has(/netz|grid|3em|em3|smart.?meter|stromz(ä|ae)hler|hausanschluss|power.?meter|z(ä|ae)hler/, n)
+    + 2 * has(/netzleistung|grid.?power|net.?power|total.?power|leistung.?gesamt|gesamtleistung/, n)
+    - 2 * has(/phase|_l[123]\b|_[abc]_|einspeis|export|feed|bezug|import|consum/, n)
+    - 6 * has(NOT_GRID, n) - 6 * has(NOT_POWER, n) + (parseFloat(e.state) < 0 ? 1 : 0)),
+  grid_import: (h) => pick(h, isPower, (n) => 2 * has(/netz|grid|3em|em3|z(ä|ae)hler|meter/, n) + 2 * has(/bezug|import|consum/, n)
+    - 2 * has(/phase|_l[123]\b|_[abc]_|gesamt_kwh|total_kwh/, n) - 6 * has(NOT_GRID, n), 4),
+  grid_export: (h) => pick(h, isPower, (n) => 2 * has(/netz|grid|3em|em3|z(ä|ae)hler|meter/, n) + 2 * has(/einspeis|export|feed/, n)
+    - 2 * has(/phase|_l[123]\b|_[abc]_/, n) - 6 * has(NOT_GRID, n), 4),
+  solar: (h) => pick(h, isPower, (n) => 3 * has(/\bpv\b|_pv|pv_|solar|photovolt|wechselrichter|inverter|mppt|erzeugung|production|input.?power/, n)
+    - 4 * has(/netz|grid|einspeis|export|forecast|prognose|tomorrow|morgen/, n)),
+  battery: (h) => pick(h, isPower, (n) => 3 * has(/batter|speicher|akku/, n) - 4 * has(/input|output|lad|charg|entlad|discharg|solar|pv|daily|heute/, n) - 6 * has(NOT_POWER, n)),
+  battery_charge: (h) => pick(h, isPower, (n) => 2 * has(/batter|speicher|akku/, n) + 2 * has(/input|ladeleistung|charg/, n) - 4 * has(/discharg|entlad|output|daily|heute/, n) - 6 * has(NOT_POWER, n) + has(/total|gesamt|summe/, n) - has(/_[1-4]_|\b[1-4]\b/, n), 4),
+  battery_discharge: (h) => pick(h, isPower, (n) => 2 * has(/batter|speicher|akku/, n) + 2 * has(/output|entlad|discharg/, n) - 4 * has(/daily|heute/, n) - 6 * has(NOT_POWER, n) + has(/total|gesamt|summe/, n) - has(/_[1-4]_|\b[1-4]\b/, n), 4),
+  battery_soc: (h) => pick(h, (e) => e.entity_id.startsWith("sensor.") && e.attributes.device_class === "battery" && unitOf(e) === "%",
+    (n) => 3 * has(/speicher|batteriespeicher|home.?battery|hausbatterie|marstek|zendure|anker|solix|ecoflow|byd|sonnen|growatt|huawei|victron|fronius|\bsoc\b|_soc|state.?of.?charge|ladestand/, n)
+    + has(/\bsoc\b|_soc|ladestand/, n) - 9 * has(PHONE_RE, n)),
+  home: (h) => pick(h, isPower, (n) => 3 * has(/hausverbrauch|house|home.?(power|consumption|load)|verbrauch.?haus|gesamtverbrauch|load.?power/, n)),
+  level: (h) => pick(h, (e) => e.entity_id.startsWith("sensor.") && e.attributes.device_class !== "battery" && !PHONE_RE.test(lcName(e)),
+    (n, e) => 3 * has(/zisterne|cistern|regenwasser|regentonne|tank|heiz(ö|oe)l|(ö|oe)ltank/, n)
+      + (["l", "liter", "m³", "m3"].includes(unitOf(e)) || e.attributes.device_class === "volume_storage" ? 4 : unitOf(e) === "%" ? 2 : 0)
+      + has(/f(ü|ue|u)llstand|f(ü|ue|u)llgrad|inhalt|fill|level|pegel|wasserstand/, n) + 2 * has(/mangfall/, n)
+      - 9 * has(/batter|akku|signal|rssi|temperatur|druck|chip|wlan|wifi|durchfluss|flow|(ä|a)nderung|f(ü|u)llzeit|fehler/, n)),
+};
+/* Zu einer Entität gehörige Geräte- und Raum-Angaben (Home Assistant liefert die Register mit, ältere Versionen nicht) */
+const regOf = (hass, id) => hass?.entities?.[id] || {};
+const areaOf = (hass, id) => { const r = regOf(hass, id); return r.area_id || hass?.devices?.[r.device_id]?.area_id || null; };
+const sameDevice = (hass, id, filter) => {
+  const d = regOf(hass, id).device_id;
+  return d ? Object.values(hass.states).find((e) => e.entity_id !== id && regOf(hass, e.entity_id).device_id === d && filter(e)) : null;
+};
+const sensorSel = (device_class, extra = {}) => ({ entity: { filter: device_class ? { domain: "sensor", device_class } : { domain: "sensor" }, ...extra } });
+
 /* ================= Basis für alle Karten ================= */
 class MangfallBase extends HTMLElement {
   static product = "";          // erscheint neben dem M, z. B. LEVEL oder WATT
+  // Nie ein roter Fehlerkasten: fehlt etwas, sucht die Karte selbst und erklärt sonst in einem Satz, was zu tun ist.
   setConfig(config) {
-    this._config = { show_branding: true, ...this.constructor.defaults, ...config };
+    this._user = { show_branding: true, ...this.constructor.defaults, ...config };
+    this._config = this._user;
     this._check?.(this._config);
     if (!this.shadowRoot) this.attachShadow({ mode: "open" });
-    this._lastKey = null;
+    this._lastKey = null; this._autoAt = 0;
   }
   set hass(hass) {
     this._hass = hass;
+    if (this._auto && (!this._autoAt || Date.now() - this._autoAt > 60000)) {   // Sensoren selbst suchen, einmal pro Minute
+      this._autoAt = Date.now();
+      const next = this._auto({ ...this._user }, hass);
+      if (JSON.stringify(next) !== JSON.stringify(this._config)) { this._config = next; this._lastKey = null; }
+    }
     const key = this._watch().map((id) => {
       const s = hass.states[id];
       return s ? s.state + s.last_updated : "-";
@@ -81,6 +143,10 @@ class MangfallBase extends HTMLElement {
         <div class="ts">${t.sub || ""}</div></div>`).join("")}</div>`;
   }
   _missing(title, msg) { this._shell("crit", `${this._head(title)}<div class="muted pad">${msg}</div>`); }
+  _setup(title, what) {
+    this._shell("info", `${this._head(title)}<div class="setup"><ha-icon icon="mdi:gesture-tap"></ha-icon>
+      <div><b>Fast fertig.</b> ${what}<br>Dashboard bearbeiten, auf diese Karte tippen und den Sensor aus der Liste wählen.</div></div>`);
+  }
 }
 
 const BASE_CSS = `
@@ -100,6 +166,9 @@ const BASE_CSS = `
   .u { font-size: 18px; color: var(--secondary-text-color); }
   .muted { font-size: 13px; color: var(--secondary-text-color); margin-top: 4px; }
   .pad { padding: 12px 0; }
+  .setup { display: flex; gap: 10px; align-items: flex-start; margin-top: 12px; padding: 12px; border-radius: 12px; font-size: 13.5px; line-height: 1.45;
+    color: var(--primary-text-color); background: color-mix(in srgb, var(--info-color, #2a78d6) 10%, transparent); }
+  .setup ha-icon { --mdc-icon-size: 22px; color: var(--info-color, #2a78d6); flex: 0 0 auto; }
   .tiles { display: grid; grid-template-columns: repeat(auto-fit, minmax(92px, 1fr)); gap: 8px; margin-top: 14px; }
   .tile { padding: 8px 10px; border-radius: 12px; background: var(--secondary-background-color, rgba(127,127,127,.08)); }
   .tile[data-entity] { cursor: pointer; }
@@ -130,37 +199,51 @@ const MEDIA = { water: ["#5aa7f0", "#1c5cab"], oil: ["#f2c14e", "#b8860b"] };
 
 class MangfallLevelCard extends MangfallBase {
   static product = "LEVEL";
-  static defaults = { name: "Zisterne", capacity: 5000, max_height: null, low: 25, critical: 10, days: 7, water_price: null, medium: "water" };
-  static getStubConfig(hass) {
-    const s = Object.values(hass.states).find((e) => e.entity_id.startsWith("sensor.") &&
-      /zisterne|cistern|tank|level|fuell|füll/i.test(e.entity_id + (e.attributes.friendly_name || "")));
-    return { entity: s ? s.entity_id : "", capacity: 5000 };
-  }
+  static defaults = { name: "Zisterne", entity: "", capacity: null, max_height: null, low: 25, critical: 10, days: 7, water_price: null, medium: "water" };
+  static getStubConfig(hass) { return { entity: FIND.level(hass) }; }
   static getConfigForm() {
     return {
       schema: [
-        { name: "entity", required: true, selector: { entity: { domain: "sensor" } } },
-        { name: "name", selector: { text: {} } },
-        { type: "grid", name: "", schema: [
-          { name: "capacity", selector: { number: { min: 100, max: 100000, step: 100, unit_of_measurement: "L", mode: "box" } } },
-          { name: "max_height", selector: { number: { min: 0.1, max: 10, step: 0.01, unit_of_measurement: "m", mode: "box" } } },
-          { name: "low", selector: { number: { min: 0, max: 100, unit_of_measurement: "%", mode: "box" } } },
-          { name: "critical", selector: { number: { min: 0, max: 100, unit_of_measurement: "%", mode: "box" } } },
-          { name: "days", selector: { number: { min: 2, max: 30, unit_of_measurement: "Tage", mode: "box" } } },
-          { name: "water_price", selector: { number: { min: 0, max: 20, step: 0.01, unit_of_measurement: "€/m³", mode: "box" } } },
-        ] },
+        { name: "entity", selector: sensorSel() },
+        { name: "capacity", selector: { number: { min: 100, max: 100000, step: 100, unit_of_measurement: "L", mode: "box" } } },
         { name: "medium", selector: { select: { mode: "dropdown", options: [{ value: "water", label: "Wasser" }, { value: "oil", label: "Heizöl" }] } } },
-        { name: "show_branding", selector: { boolean: {} } },
+        { type: "expandable", name: "", title: "Weitere Einstellungen", flatten: true, schema: [
+          { name: "name", selector: { text: {} } },
+          { name: "max_height", selector: { number: { min: 0.1, max: 10, step: 0.01, unit_of_measurement: "m", mode: "box" } } },
+          { type: "grid", name: "", schema: [
+            { name: "low", selector: { number: { min: 0, max: 100, unit_of_measurement: "%", mode: "box" } } },
+            { name: "critical", selector: { number: { min: 0, max: 100, unit_of_measurement: "%", mode: "box" } } },
+            { name: "days", selector: { number: { min: 2, max: 30, unit_of_measurement: "Tage", mode: "box" } } },
+            { name: "water_price", selector: { number: { min: 0, max: 20, step: 0.01, unit_of_measurement: "€/m³", mode: "box" } } } ] },
+          { name: "show_branding", selector: { boolean: {} } } ] },
       ],
-      computeLabel: (s) => ({ entity: "Füllstandssensor", name: "Name", capacity: "Fassungsvermögen", max_height: "Max. Füllhöhe (nur bei m/cm)",
-        low: "Warnung ab", critical: "Alarm ab", days: "Verlauf", water_price: "Wasserpreis (optional)", medium: "Inhalt",
+      computeLabel: (s) => ({ entity: "Füllstand", name: "Name", capacity: "Fassungsvermögen", max_height: "Max. Füllhöhe",
+        low: "Warnung ab", critical: "Alarm ab", days: "Verlauf", water_price: "Wasserpreis", medium: "Inhalt",
         show_branding: "MANGFALL-Zeichen anzeigen" }[s.name]),
+      computeHelper: (s) => ({ entity: "Der Sensor deiner Zisterne oder deines Tanks – in Litern, Prozent oder als Höhe.",
+        capacity: "Wie viele Liter passen hinein? Steht auf dem Typenschild oder in der Rechnung.",
+        max_height: "Nur nötig, wenn der Sensor eine Höhe misst (m oder cm): die Höhe, wenn der Tank voll ist." }[s.name]),
     };
   }
-  _check(c) { if (!c.entity) throw new Error("Bitte einen Füllstandssensor angeben (entity)."); this._history = null; this._histFetched = 0; }
-  _watch() { return [this._config.entity]; }
+  _check() { this._history = null; this._histFetched = 0; }
+  _auto(c, hass) {
+    if (!c.entity) c.entity = FIND.level(hass);
+    // Fassungsvermögen nicht eingetragen: aus Litern und Prozent desselben Geräts ausrechnen, sonst 5000 L annehmen
+    if (!c.capacity) {
+      const st = hass.states[c.entity], u = unitOf(st);
+      const other = st && sameDevice(hass, c.entity, (e) => isLive(e) && (u === "%" ? ["l", "m³", "m3"].includes(unitOf(e)) : unitOf(e) === "%"));
+      if (other && isLive(st)) {
+        const lit = (x) => parseFloat(x.state) * (["m³", "m3"].includes(unitOf(x)) ? 1000 : 1);
+        const [l, p] = u === "%" ? [lit(other), parseFloat(st.state)] : [lit(st), parseFloat(other.state)];
+        if (p > 1) c.capacity = Math.round(((l / p) * 100) / 100) * 100;
+      }
+      c.capacity = c.capacity || 5000; c._capGuess = !this._user.capacity && !other;
+    }
+    return c;
+  }
+  _watch() { return [this._config.entity].filter(Boolean); }
   getCardSize() { return 5; }
-  _onHass() { if (Date.now() - this._histFetched > 6e5) this._fetchHistory(); }
+  _onHass() { if (this._config.entity && Date.now() - this._histFetched > 6e5) this._fetchHistory(); }
 
   _toLiters(raw, unit) {
     const c = this._config, v = parseFloat(raw);
@@ -204,7 +287,9 @@ class MangfallLevelCard extends MangfallBase {
   _render() {
     if (!this._config || !this._hass) return;
     const c = this._config, st = this._hass.states[c.entity];
-    if (!st || ["unavailable", "unknown"].includes(st.state)) return this._missing(c.name, st ? "Sensor nicht erreichbar" : `„${c.entity}“ nicht gefunden`);
+    if (!c.entity) return this._setup(c.name, "Ich habe keinen Füllstandssensor gefunden.");
+    if (!st || ["unavailable", "unknown"].includes(st.state)) return this._missing(c.name, st ? `${st.attributes.friendly_name || c.entity} meldet sich gerade nicht.` : `„${c.entity}“ gibt es nicht mehr – bitte neu wählen.`);
+    if (["m", "cm", "mm"].includes(unitOf(st)) && !c.max_height) return this._setup(c.name, "Dein Sensor misst die Höhe. Trag noch ein, wie hoch das Wasser steht, wenn der Tank voll ist („Max. Füllhöhe“).");
     const liters = Math.max(0, Math.min(c.capacity, this._toLiters(st.state, st.attributes.unit_of_measurement)));
     const pct = (liters / c.capacity) * 100, s = this._stats(), oil = c.medium === "oil";
 
@@ -227,7 +312,7 @@ class MangfallLevelCard extends MangfallBase {
         <div class="info">
           ${this._head(c.name, state)}
           <div class="big" style="margin-top:6px"><span class="num">${fmt(liters)}</span><span class="u">L</span></div>
-          <div class="muted">von ${fmt(c.capacity)} L · ${fmt(pct)} %</div>
+          <div class="muted">von ${fmt(c.capacity)} L${c._capGuess ? " (angenommen – unter Bearbeiten eintragen)" : ""} · ${fmt(pct)} %</div>
           ${saved !== null ? `<div class="saved"><ha-icon icon="mdi:piggy-bank-outline"></ha-icon><b>${fmt(saved, 2)} €</b> gespart in 30 Tagen</div>` : ""}
         </div>
       </div>
@@ -298,34 +383,69 @@ const EC = { solar: "#f0a400", grid: "#8590a3", batt: "#7c5cff", home: "#2a78d6"
 const EG = { W: 360, H: 290, R: 30, solar: [180, 58], grid: [56, 148], home: [304, 148], batt: [180, 240] };
 class MangfallEnergyCard extends MangfallBase {
   static product = "WATT";
-  static defaults = { name: "Energie", grid: "", solar: "", battery: "", battery_soc: "", home: "", invert_grid: false, invert_battery: false,
+  static defaults = { name: "Energie", grid: "", grid_import: "", grid_export: "", solar: "", battery: "", battery_charge: "", battery_discharge: "",
+    battery_soc: "", home: "", invert_grid: false, invert_battery: false,
     solar_peak: 0, price: 0.35, feed_in: 0.079, show_today: true };
-  static getStubConfig() { return { grid: "" }; }
+  static getStubConfig(hass) {
+    const c = MangfallEnergyCard.prototype._auto({}, hass), out = {};
+    for (const k of ["grid", "grid_import", "grid_export", "solar", "battery", "battery_charge", "battery_discharge", "battery_soc"]) if (c[k]) out[k] = c[k];
+    return out;
+  }
   static getConfigForm() {
+    const pw = sensorSel("power");
     return {
       schema: [
-        { name: "grid", required: true, selector: { entity: { domain: "sensor" } } },
-        { name: "solar", selector: { entity: { domain: "sensor" } } },
-        { name: "battery", selector: { entity: { domain: "sensor" } } },
-        { name: "battery_soc", selector: { entity: { domain: "sensor" } } },
-        { name: "home", selector: { entity: { domain: "sensor" } } },
-        { name: "name", selector: { text: {} } },
-        { type: "grid", name: "", schema: [
-          { name: "price", selector: { number: { min: 0, max: 2, step: 0.01, mode: "box", unit_of_measurement: "€/kWh" } } },
-          { name: "feed_in", selector: { number: { min: 0, max: 1, step: 0.001, mode: "box", unit_of_measurement: "€/kWh" } } },
-          { name: "solar_peak", selector: { number: { min: 0, max: 100000, step: 100, mode: "box", unit_of_measurement: "W" } } },
-          { name: "show_today", selector: { boolean: {} } } ] },
-        { type: "grid", name: "", schema: [{ name: "invert_grid", selector: { boolean: {} } }, { name: "invert_battery", selector: { boolean: {} } }] },
-        { name: "show_branding", selector: { boolean: {} } },
+        { name: "grid", selector: pw },
+        { name: "solar", selector: pw },
+        { name: "battery_soc", selector: sensorSel("battery") },
+        { name: "battery", selector: pw },
+        { type: "expandable", name: "", title: "Zähler oder Speicher melden zwei getrennte Werte?", flatten: true, schema: [
+          { name: "grid_import", selector: pw }, { name: "grid_export", selector: pw },
+          { name: "battery_charge", selector: pw }, { name: "battery_discharge", selector: pw } ] },
+        { type: "expandable", name: "", title: "Weitere Einstellungen", flatten: true, schema: [
+          { name: "name", selector: { text: {} } },
+          { name: "home", selector: pw },
+          { type: "grid", name: "", schema: [
+            { name: "price", selector: { number: { min: 0, max: 2, step: 0.01, mode: "box", unit_of_measurement: "€/kWh" } } },
+            { name: "feed_in", selector: { number: { min: 0, max: 1, step: 0.001, mode: "box", unit_of_measurement: "€/kWh" } } },
+            { name: "solar_peak", selector: { number: { min: 0, max: 100000, step: 100, mode: "box", unit_of_measurement: "W" } } },
+            { name: "show_today", selector: { boolean: {} } } ] },
+          { type: "grid", name: "", schema: [{ name: "invert_grid", selector: { boolean: {} } }, { name: "invert_battery", selector: { boolean: {} } }] },
+          { name: "show_branding", selector: { boolean: {} } } ] },
       ],
-      computeLabel: (s) => ({ grid: "Netz-Leistung (+ Bezug, − Einspeisung)", solar: "PV-Leistung", battery: "Speicher-Leistung (+ Entladen, − Laden)",
-        battery_soc: "Speicher-Ladestand", home: "Hausverbrauch (optional, sonst berechnet)", name: "Name", price: "Strompreis brutto",
-        feed_in: "Einspeisevergütung", solar_peak: "PV-Spitzenleistung (für Solar-Ring)", show_today: "Tageswerte anzeigen",
+      computeLabel: (s) => ({ grid: "Stromzähler", solar: "Solaranlage", battery: "Speicher-Leistung",
+        battery_soc: "Speicher-Ladestand", grid_import: "Netzbezug", grid_export: "Einspeisung", battery_charge: "Speicher lädt mit",
+        battery_discharge: "Speicher entlädt mit", home: "Hausverbrauch", name: "Name", price: "Strompreis brutto",
+        feed_in: "Einspeisevergütung", solar_peak: "PV-Spitzenleistung", show_today: "Tageswerte anzeigen",
         invert_grid: "Netz-Vorzeichen umdrehen", invert_battery: "Speicher-Vorzeichen umdrehen", show_branding: "MANGFALL-Zeichen anzeigen" }[s.name]),
+      computeHelper: (s) => ({ grid: "Die Leistung am Hausanschluss, z. B. vom Shelly 3EM oder Smart Meter.",
+        solar: "Was die Solaranlage gerade erzeugt (Watt).", battery_soc: "Nur mit Batteriespeicher: der Ladestand in Prozent.",
+        battery: "Nur mit Batteriespeicher: Leistung mit Vorzeichen. Meldet dein Speicher Laden und Entladen getrennt, nimm die Felder darunter.",
+        home: "Leer lassen – die Karte rechnet den Verbrauch selbst aus.",
+        invert_grid: "Zeigt die Karte Einspeisung, obwohl du Strom beziehst? Dann einschalten." }[s.name]),
     };
   }
-  _check(c) { if (!c.grid) throw new Error("Bitte mindestens den Netz-Leistungssensor angeben (grid)."); }
-  _watch() { const c = this._config; return [c.grid, c.solar, c.battery, c.battery_soc, c.home].filter(Boolean); }
+  _auto(c, hass) {
+    if (!c.grid && !c.grid_import && !c.grid_export) {
+      c.grid = FIND.grid(hass);
+      if (!c.grid) { c.grid_import = FIND.grid_import(hass); c.grid_export = FIND.grid_export(hass); }
+    }
+    if (!c.solar) c.solar = FIND.solar(hass);
+    if (!c.battery_soc) c.battery_soc = FIND.battery_soc(hass);
+    if (!c.battery && !c.battery_charge && !c.battery_discharge && c.battery_soc) {   // Speicherleistung nur, wenn es einen Speicher gibt
+      c.battery = FIND.battery(hass);
+      if (!c.battery) { c.battery_charge = FIND.battery_charge(hass); c.battery_discharge = FIND.battery_discharge(hass); }
+    }
+    return c;
+  }
+  /* Netz und Speicher als ein Wert mit Vorzeichen, egal ob ein Sensor oder zwei getrennte */
+  _signed(one, plus, minus, inv) {
+    const S = this._hass.states;
+    if (one) { const v = toWatt(S[one]); return v === null ? null : inv ? -v : v; }
+    const p = plus ? toWatt(S[plus]) : null, m = minus ? toWatt(S[minus]) : null;
+    return p === null && m === null ? null : Math.abs(p ?? 0) - Math.abs(m ?? 0);
+  }
+  _watch() { const c = this._config; return [c.grid, c.grid_import, c.grid_export, c.solar, c.battery, c.battery_charge, c.battery_discharge, c.battery_soc, c.home].filter(Boolean); }
   getCardSize() { return 7; }
 
   /* Tageswerte: Leistungsverlauf seit Mitternacht integrieren, alle 5 min neu */
@@ -339,7 +459,8 @@ class MangfallEnergyCard extends MangfallBase {
     this._busy = true;
     const c = this._config, start = new Date(); start.setHours(0, 0, 0, 0);
     try {
-      const ids = [c.grid, c.solar, c.battery].filter(Boolean);
+      const ids = [c.grid, c.grid_import, c.grid_export, c.solar, c.battery, c.battery_charge, c.battery_discharge].filter(Boolean);
+      if (!ids.length) throw new Error("keine Sensoren");
       const res = await this._hass.callWS({ type: "history/history_during_period", start_time: start.toISOString(), end_time: new Date().toISOString(),
         entity_ids: ids, minimal_response: true, no_attributes: true, significant_changes_only: false });
       const integ = (id, sign) => {
@@ -352,9 +473,11 @@ class MangfallEnergyCard extends MangfallBase {
         }
         return [pos, neg];
       };
-      const [imp, exp] = integ(c.grid, c.invert_grid ? -1 : 1);
+      const pair = (one, plus, minus, inv) => one ? integ(one, inv ? -1 : 1)
+        : [plus ? integ(plus, 1)[0] + integ(plus, 1)[1] : 0, minus ? integ(minus, 1)[0] + integ(minus, 1)[1] : 0];
+      const [imp, exp] = pair(c.grid, c.grid_import, c.grid_export, c.invert_grid);
       const pv = c.solar ? integ(c.solar, 1)[0] : 0;
-      const [dis, chg] = c.battery ? integ(c.battery, c.invert_battery ? -1 : 1) : [0, 0];
+      const [dis, chg] = pair(c.battery, c.battery_discharge, c.battery_charge, c.invert_battery);
       const home = Math.max(0, imp - exp + pv + dis - chg);
       this._today = { imp, exp, pv, home, aut: home > 0.05 ? Math.max(0, Math.min(100, (1 - imp / home) * 100)) : null,
         saved: Math.max(0, pv - exp) * c.price + exp * c.feed_in };
@@ -365,13 +488,13 @@ class MangfallEnergyCard extends MangfallBase {
   _render() {
     if (!this._config || !this._hass) return;
     const c = this._config, S = this._hass.states;
-    let g = toWatt(S[c.grid]);
-    if (g === null) return this._missing(c.name, `Netzsensor „${c.grid}“ nicht verfügbar`);
-    if (c.invert_grid) g = -g;
-    const hasS = !!c.solar, hasB = !!c.battery;
+    const gridId = c.grid || c.grid_import || c.grid_export;
+    if (!gridId) return this._setup(c.name, "Ich habe deinen Stromzähler nicht gefunden.");
+    const g = this._signed(c.grid, c.grid_import, c.grid_export, c.invert_grid);
+    if (g === null) return this._missing(c.name, `${S[gridId]?.attributes.friendly_name || gridId} meldet sich gerade nicht.`);
+    const hasS = !!c.solar, hasB = !!(c.battery || c.battery_charge || c.battery_discharge);
     const s = hasS ? Math.max(0, toWatt(S[c.solar]) ?? 0) : 0;
-    let b = hasB ? toWatt(S[c.battery]) ?? 0 : 0;
-    if (c.invert_battery) b = -b;
+    const b = hasB ? this._signed(c.battery, c.battery_discharge, c.battery_charge, c.invert_battery) ?? 0 : 0;
     const socRaw = c.battery_soc ? parseFloat(S[c.battery_soc]?.state) : NaN, soc = isNaN(socRaw) ? null : socRaw;
     const h = Math.max(0, c.home ? toWatt(S[c.home]) ?? 0 : g + s + b);
 
@@ -464,9 +587,9 @@ class MangfallEnergyCard extends MangfallBase {
       <div class="say">${say}.</div>
       <div class="flow">${svg}
         ${hasS ? ico("solar", "mdi:solar-power-variant", EC.solar, c.solar) : ""}
-        ${ico("grid", g < -T ? "mdi:transmission-tower-export" : "mdi:transmission-tower", EC.grid, c.grid)}
+        ${ico("grid", g < -T ? "mdi:transmission-tower-export" : "mdi:transmission-tower", EC.grid, gridId)}
         ${ico("home", "mdi:home-lightning-bolt-outline", EC.home, c.home || null)}
-        ${hasB ? ico("batt", battIcon, EC.batt, c.battery_soc || c.battery) : ""}
+        ${hasB ? ico("batt", battIcon, EC.batt, c.battery_soc || c.battery || c.battery_discharge) : ""}
       </div>${tiles}`, `
       .hero { display: flex; align-items: baseline; gap: 6px; margin-top: 6px; color: var(--primary-text-color); }
       .say { font-size: 13px; line-height: 1.35; color: var(--secondary-text-color); margin-top: 4px; min-height: 2.7em; }
@@ -497,16 +620,47 @@ class MangfallEnergyCard extends MangfallBase {
 
 /* ================= 3 · Raumklima ================= */
 class MangfallClimateCard extends MangfallBase {
-  static defaults = { name: "Raumklima", rooms: [], humid_high: 65, humid_low: 35 };
-  static getStubConfig(hass) {
-    const t = Object.values(hass.states).filter((e) => e.attributes.device_class === "temperature" && e.entity_id.startsWith("sensor.")).slice(0, 3);
-    return { rooms: t.map((e) => ({ name: e.attributes.friendly_name || e.entity_id, temperature: e.entity_id })) };
+  static defaults = { name: "Raumklima", rooms: [], sensors: [], humid_high: 65, humid_low: 35 };
+  static getStubConfig() { return {}; }      // leer = alle Räume automatisch
+  static getConfigForm() {
+    return { schema: [
+      { name: "sensors", selector: { entity: { multiple: true, filter: { domain: "sensor", device_class: "temperature" } } } },
+      { type: "expandable", name: "", title: "Weitere Einstellungen", flatten: true, schema: [
+        { name: "name", selector: { text: {} } },
+        { type: "grid", name: "", schema: [
+          { name: "humid_high", selector: { number: { min: 40, max: 90, unit_of_measurement: "%", mode: "box" } } },
+          { name: "humid_low", selector: { number: { min: 10, max: 60, unit_of_measurement: "%", mode: "box" } } }] },
+        { name: "show_branding", selector: { boolean: {} } }] }],
+      computeLabel: (s) => ({ sensors: "Thermometer", name: "Name", humid_high: "Zu feucht ab", humid_low: "Zu trocken ab", show_branding: "MANGFALL-Zeichen anzeigen" }[s.name]),
+      computeHelper: (s) => ({ sensors: "Leer lassen: Die Karte zeigt jeden Raum mit Thermometer von selbst. Die Luftfeuchte findet sie dazu." }[s.name]) };
   }
-  _check(c) { if (!Array.isArray(c.rooms) || !c.rooms.length) throw new Error("Bitte Räume angeben (rooms: - name, temperature, humidity)."); }
+  // Räume selbst bilden: je Raum ein Thermometer, die Luftfeuchte vom selben Gerät oder aus demselben Raum
+  _auto(c, hass) {
+    if (c.rooms?.length) return c;
+    const S = Object.values(hass.states), areas = hass.areas || {};
+    const NOT_ROOM = /chip|cpu|prozessor|processor|core|gpu|disk|nvme|board|esp|batter|speicher|akku|inverter|wechselrichter|wasser|water|boiler|vorlauf|r(ü|ue)cklauf|au(ß|ss)en|outdoor|outside|wetter|weather|forecast|k(ü|ue)hlschrank|gefrier|fridge|freezer|pool|aquarium|taupunkt|dew/;
+    let temps = c.sensors?.length ? c.sensors.map((id) => hass.states[id]).filter(Boolean)
+      : S.filter((e) => e.entity_id.startsWith("sensor.") && e.attributes.device_class === "temperature" && isLive(e) && !NOT_ROOM.test(lcName(e)));
+    const withArea = temps.filter((e) => areaOf(hass, e.entity_id));
+    if (!c.sensors?.length && withArea.length) temps = withArea;          // mit Raumzuordnung nur die echten Räume
+    const hums = S.filter((e) => e.entity_id.startsWith("sensor.") && e.attributes.device_class === "humidity" && isLive(e));
+    const seen = new Set();
+    c.rooms = [];
+    for (const t of temps) {
+      const a = areaOf(hass, t.entity_id), key = a || t.entity_id;
+      if (seen.has(key)) continue; seen.add(key);
+      const hum = sameDevice(hass, t.entity_id, (e) => e.attributes.device_class === "humidity") || (a && hums.find((e) => areaOf(hass, e.entity_id) === a));
+      c.rooms.push({ name: (a && areas[a]?.name) || (t.attributes.friendly_name || t.entity_id).replace(/\s*(Temperatur|Temperature)\s*$/i, ""),
+        temperature: t.entity_id, humidity: hum ? hum.entity_id : undefined });
+      if (c.rooms.length >= 8) break;
+    }
+    return c;
+  }
   _watch() { return this._config.rooms.flatMap((r) => [r.temperature, r.humidity]).filter(Boolean); }
   _render() {
     if (!this._config || !this._hass) return;
     const c = this._config, S = this._hass.states;
+    if (!c.rooms.length) return this._setup(c.name, "Ich habe noch kein Thermometer in einem Raum gefunden.");
     let wet = 0, dry = 0;
     const rows = c.rooms.map((r) => {
       const t = parseFloat(S[r.temperature]?.state), h = r.humidity ? parseFloat(S[r.humidity]?.state) : NaN;
@@ -543,9 +697,10 @@ class MangfallBatteryCard extends MangfallBase {
       { type: "grid", name: "", schema: [
         { name: "low", selector: { number: { min: 1, max: 100, unit_of_measurement: "%", mode: "box" } } },
         { name: "show", selector: { number: { min: 1, max: 30, mode: "box" } } }] },
-      { name: "exclude", selector: { entity: { multiple: true } } },
+      { name: "exclude", selector: { entity: { multiple: true, filter: { domain: "sensor", device_class: "battery" } } } },
       { name: "show_branding", selector: { boolean: {} } }],
-      computeLabel: (s) => ({ name: "Name", low: "Schwach ab", show: "Anzahl anzeigen", exclude: "Ausblenden", show_branding: "MANGFALL-Zeichen anzeigen" }[s.name]) };
+      computeLabel: (s) => ({ name: "Name", low: "Schwach ab", show: "Anzahl anzeigen", exclude: "Ausblenden", show_branding: "MANGFALL-Zeichen anzeigen" }[s.name]),
+      computeHelper: (s) => ({ exclude: "Die Karte findet alle Batterien von selbst. Hier wählst du nur, was sie nicht zeigen soll." }[s.name]) };
   }
   _list() {
     return Object.values(this._hass.states).filter((e) => e.attributes.device_class === "battery" && e.entity_id.startsWith("sensor.")
@@ -586,8 +741,14 @@ const OPEN_CLASSES = ["door", "window", "garage_door", "opening"];
 class MangfallOpeningsCard extends MangfallBase {
   static defaults = { name: "Fenster & Türen", entities: null, exclude: [] };
   static getStubConfig() { return {}; }
+  static getConfigForm() {
+    const sel = { entity: { multiple: true, filter: OPEN_CLASSES.map((device_class) => ({ domain: "binary_sensor", device_class })) } };
+    return { schema: [{ name: "exclude", selector: sel }, { name: "name", selector: { text: {} } }, { name: "show_branding", selector: { boolean: {} } }],
+      computeLabel: (s) => ({ exclude: "Ausblenden", name: "Name", show_branding: "MANGFALL-Zeichen anzeigen" }[s.name]),
+      computeHelper: (s) => ({ exclude: "Die Karte findet alle Fenster- und Türkontakte von selbst. Hier wählst du nur, was sie nicht zeigen soll." }[s.name]) };
+  }
   _list() {
-    const ids = this._config.entities || Object.values(this._hass.states)
+    const ids = this._config.entities?.length ? this._config.entities : Object.values(this._hass.states)
       .filter((e) => e.entity_id.startsWith("binary_sensor.") && OPEN_CLASSES.includes(e.attributes.device_class)).map((e) => e.entity_id);
     return ids.filter((id) => !this._config.exclude.includes(id) && this._hass.states[id]).map((id) => this._hass.states[id]);
   }
@@ -622,18 +783,24 @@ class MangfallMowerCard extends MangfallBase {
   static getStubConfig(hass) { const m = Object.keys(hass.states).find((id) => id.startsWith("lawn_mower.")); return { entity: m || "" }; }
   static getConfigForm() {
     return { schema: [
-      { name: "entity", required: true, selector: { entity: { domain: "lawn_mower" } } },
-      { name: "battery", selector: { entity: { domain: "sensor" } } },
+      { name: "entity", selector: { entity: { domain: "lawn_mower" } } },
+      { name: "battery", selector: sensorSel("battery") },
       { name: "name", selector: { text: {} } },
       { name: "show_branding", selector: { boolean: {} } }],
-      computeLabel: (s) => ({ entity: "Mähroboter", battery: "Akku-Sensor (optional)", name: "Name", show_branding: "MANGFALL-Zeichen anzeigen" }[s.name]) };
+      computeLabel: (s) => ({ entity: "Mähroboter", battery: "Akku", name: "Name", show_branding: "MANGFALL-Zeichen anzeigen" }[s.name]),
+      computeHelper: (s) => ({ battery: "Leer lassen – die Karte nimmt den Akku des Mähroboters von selbst." }[s.name]) };
   }
-  _check(c) { if (!c.entity) throw new Error("Bitte den Mähroboter angeben (entity: lawn_mower.…)."); }
+  _auto(c, hass) {
+    if (!c.entity) c.entity = Object.keys(hass.states).find((id) => id.startsWith("lawn_mower.")) || "";
+    if (c.entity && !c.battery) c.battery = sameDevice(hass, c.entity, (e) => e.attributes.device_class === "battery")?.entity_id || "";
+    return c;
+  }
   _watch() { return [this._config.entity, this._config.battery].filter(Boolean); }
   _render() {
     if (!this._config || !this._hass) return;
     const c = this._config, st = this._hass.states[c.entity];
-    if (!st) return this._missing(c.name, `„${c.entity}“ nicht gefunden`);
+    if (!c.entity) return this._setup(c.name, "Ich habe keinen Mähroboter in deinem Home Assistant gefunden.");
+    if (!st) return this._missing(c.name, `„${c.entity}“ gibt es nicht mehr – bitte neu wählen.`);
     const m = MOWER[st.state] || { label: st.state, key: "info", icon: "mdi:robot-mower-outline" };
     const bat = c.battery ? parseFloat(this._hass.states[c.battery]?.state) : parseFloat(st.attributes.battery_level);
     const mowing = st.state === "mowing";

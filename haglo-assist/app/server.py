@@ -1013,9 +1013,9 @@ MANGFALL_DST = Path("/homeassistant/www/haglo/mangfall-cards.js")
 MANGFALL_URL = "/local/haglo/mangfall-cards.js"
 MANGFALL_LIB = "mangfall-cards"
 MANGFALL: dict = {"ready": None, "own": False}    # ready: Home Assistant liefert die Datei aus · own: unsere Ressource
-# Karte → Pflichtfeld (ohne zeigt die Karte nur einen Fehler)
-MANGFALL_CARDS = {"mangfall-energy-card": "grid", "mangfall-level-card": "entity", "mangfall-climate-card": "rooms",
-                  "mangfall-battery-card": None, "mangfall-openings-card": None, "mangfall-mower-card": "entity"}
+# Die Karten suchen fehlende Sensoren selbst (ab mangfall-cards 1.3.0) – geprüft wird nur, was angegeben ist.
+MANGFALL_CARDS = {"mangfall-energy-card", "mangfall-level-card", "mangfall-climate-card",
+                  "mangfall-battery-card", "mangfall-openings-card", "mangfall-mower-card"}
 
 
 def mangfall_version() -> str:
@@ -1027,19 +1027,14 @@ def mangfall_version() -> str:
 
 
 def check_mangfall(name: str, card: dict):
-    """Eine MANGFALL-Karte nur mit dem, was sie zum Anzeigen braucht – erfundene Kartennamen fallen weg."""
+    """Eine MANGFALL-Karte nur mit gültigen Angaben – erfundene Kartennamen fallen weg."""
     if name not in MANGFALL_CARDS:
         return None
-    need = MANGFALL_CARDS[name]
-    if need == "rooms":
-        rooms = [r for r in card.get("rooms") or [] if isinstance(r, dict) and r.get("temperature")]
-        if not rooms:
-            return None
-        card = {**card, "rooms": rooms}
-    elif need and not card.get(need):
-        return None
-    if name == "mangfall-mower-card" and not str(card.get("entity")).startswith("lawn_mower."):
-        return None
+    if name == "mangfall-climate-card" and card.get("rooms"):
+        rooms = [r for r in card["rooms"] if isinstance(r, dict) and r.get("temperature")]
+        card = {**card, "rooms": rooms} if rooms else {k: v for k, v in card.items() if k != "rooms"}
+    if name == "mangfall-mower-card" and card.get("entity") and not str(card["entity"]).startswith("lawn_mower."):
+        card = {k: v for k, v in card.items() if k != "entity"}
     return card
 
 
