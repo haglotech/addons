@@ -150,7 +150,7 @@ def is_ezsp(data):
 
 
 def probe(path):
-    """'thread', 'zigbee' oder None."""
+    """(Art, Baudrate): ('thread', 460800), ('zigbee', 115200) … oder (None, None)."""
     for kind, baud, frame, wait, check in (
         ('thread', 460800, spinel_frame(), 1.5, is_spinel),
         ('zigbee', 115200, ASH_RST, 2.5, is_ezsp),
@@ -159,11 +159,11 @@ def probe(path):
     ):
         try:
             if check(exchange(path, baud, frame, wait)):
-                return kind
+                return kind, baud
         except OSError as e:
             log(f'{path}: {e}')
-            return None
-    return None
+            return None, None
+    return None, None
 
 
 # ---------------------------------------------------------------- Supervisor und Home Assistant
@@ -308,7 +308,11 @@ def ensure_addon(slug, options=None):
         current = sup('GET', f'/addons/{slug}/info').get('options') or {}
         sup('POST', f'/addons/{slug}/options', {'options': {**current, **options}})
     sup('POST', f'/addons/{slug}/options', {'boot': 'auto', 'watchdog': True})
-    if sup('GET', f'/addons/{slug}/info').get('state') != 'started':
+    if sup('GET', f'/addons/{slug}/info').get('state') == 'started':
+        if options:
+            sup('POST', f'/addons/{slug}/restart', timeout=300)
+            log(f'{slug} mit neuen Einstellungen neu gestartet')
+    else:
         sup('POST', f'/addons/{slug}/start', timeout=300)
         log(f'{slug} gestartet')
 
@@ -369,16 +373,18 @@ class Watcher:
             log(f'{by_id}: ZHA ist eingerichtet – Stick bleibt bei Zigbee, keine Abfrage')
             return
 
-        kind = None
+        kind = baud = None
         for attempt in range(3):            # frisch eingesteckt bootet der Stick noch
-            kind = probe(dev)
+            kind, baud = probe(dev)
             if kind:
                 break
             time.sleep(3)
-        log(f'{by_id}: {"Thread" if kind == "thread" else "Zigbee" if kind == "zigbee" else "unbekannte Firmware"}')
+        log(f'{by_id}: {"Thread" if kind == "thread" else "Zigbee" if kind == "zigbee" else "unbekannte Firmware"}'
+            + (f' ({baud} Baud)' if baud else ''))
 
         if kind == 'thread':
-            ensure_addon(OTBR, {'device': by_id, 'baudrate': '460800', 'flow_control': False, 'autoflash_firmware': False})
+            # Baudrate, bei der der Stick geantwortet hat - je nach Firmware 460800 oder 115200
+            ensure_addon(OTBR, {'device': by_id, 'baudrate': str(baud), 'flow_control': False, 'autoflash_firmware': False})
             try:
                 ensure_addon(MATTER)
             except Exception as e:
@@ -413,6 +419,7 @@ class Watcher:
 
 if __name__ == '__main__':
     if len(sys.argv) == 3 and sys.argv[1] == '--probe':
-        print(probe(sys.argv[2]) or 'unbekannt')
+        kind, baud = probe(sys.argv[2])
+        print(f'{kind} {baud}' if kind else 'unbekannt')
     else:
         Watcher().run()
