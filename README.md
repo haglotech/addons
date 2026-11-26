@@ -58,3 +58,11 @@ info@haglotech.com
 Die App ist Open Source unter der [Apache-Lizenz 2.0](LICENSE). Die Namen „Haglo“ und „Haglo Assist“
 und die Logos bleiben Kennzeichen von Haglo, siehe [NOTICE](NOTICE). Der Dienst hinter der App ist
 nicht Teil dieser Software.
+
+## Haglo Stick-Erkennung
+
+Läuft still im Hintergrund, ohne Oberfläche. Steckt ein Funkstick, prüft sie einmal die Firmware:
+Bei einem **Thread-Stick** (OpenThread RCP) richtet sie OpenThread Border Router und Matter Server ein,
+danach genügt ein Klick auf „Entdeckt: OpenThread Border Router“. Bei einem **Zigbee-Stick** ändert sie nichts.
+Sie sendet keine Daten.
+

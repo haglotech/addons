@@ -1,0 +1,17 @@
+name: Haglo Stick-Erkennung
+version: "1.0.0"
+url: https://haglotech.com
+slug: haglo-stick
+description: Erkennt Zigbee- und Thread-Sticks und richtet Thread selbst ein
+arch:
+  - amd64
+  - aarch64
+startup: services
+boot: auto
+init: false
+uart: true
+hassio_api: true
+hassio_role: manager
+homeassistant_api: true
+options: {}
+schema: {}
