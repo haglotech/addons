@@ -341,6 +341,24 @@ def otbr_device():
         return None, None
 
 
+AUTO_UPDATE_MARK = '/data/auto_update_on'
+
+
+def auto_update():
+    """Automatische Updates einmal einschalten. Schaltet der Kunde sie später ab, bleibt das so."""
+    if os.path.exists(AUTO_UPDATE_MARK):
+        return True
+    try:
+        sup('POST', '/addons/self/options', {'auto_update': True})
+        with open(AUTO_UPDATE_MARK, 'w') as f:
+            f.write('1')
+        log('Automatische Updates eingeschaltet')
+        return True
+    except Exception as e:
+        log(f'Automatische Updates: {e}')
+        return False
+
+
 class Watcher:
     def __init__(self):
         self.known = set()
@@ -397,7 +415,10 @@ class Watcher:
 
     def run(self):
         log(f'Stick-Erkennung läuft{"" if TOKEN else " – OHNE Supervisor-Zugang (kein Token)"}')
+        auto_ok, auto_next = auto_update(), time.time() + 60
         while True:
+            if not auto_ok and time.time() >= auto_next:
+                auto_ok, auto_next = auto_update(), time.time() + 60
             now = present_ttys()
             for name in sorted(now - self.known):
                 if time.time() < self.retry.get(name, 0):
