@@ -279,6 +279,10 @@ def ha(fn):
 class Later(Exception):
     """Jetzt nicht abfragen (Home Assistant oder ZHA starten noch) - später erneut versuchen."""
 
+    def __init__(self, msg, delay=30):
+        super().__init__(msg)
+        self.delay = delay
+
 
 def zha_status(ws, paths):
     """'none' (kein ZHA), 'uses' (ZHA nutzt diesen Stick), 'other' (ZHA nutzt einen anderen), 'busy' (startet noch)."""
@@ -404,8 +408,17 @@ class Watcher:
     def handle(self, name):
         dev = f'/dev/{name}'
         hw = hw_device(name)
-        by_id = hw.get('by_id') or dev
+        by_id = hw.get('by_id') or ''
         serial = (hw.get('attributes') or {}).get('ID_SERIAL_SHORT', '')
+        if not by_id.startswith('/dev/serial/by-id/'):
+            # Frisch eingesteckt legt udev die feste Kennung erst einen Moment später an. Ohne sie nie
+            # einrichten: /dev/ttyUSB0 kann nach einem Neustart ein anderer Stick sein.
+            self.waits[name] = self.waits.get(name, 0) + 1
+            if self.waits[name] <= 12:
+                raise Later('feste Kennung fehlt noch', delay=5)
+            log(f'{dev}: keine feste Kennung (by-id) – Stick wird nicht eingerichtet')
+            return
+        self.waits.pop(name, None)      # Zähler gilt ab hier fürs Warten auf ZHA
 
         if not os.path.exists(dev):
             # Nachträglich eingesteckt und nicht in den Container gereicht: einmal neu starten.
@@ -418,6 +431,11 @@ class Watcher:
         state, device = otbr_device()
         mine = device in (by_id, dev)              # Border Router ist auf diesen Stick eingestellt
         if mine and state == 'started':
+            if device != by_id:      # ältere Einrichtung über /dev/ttyUSB… -> auf die feste Kennung umstellen
+                current = sup('GET', f'/addons/{OTBR}/info').get('options') or {}
+                sup('POST', f'/addons/{OTBR}/options', {'options': {**current, 'device': by_id}})
+                sup('POST', f'/addons/{OTBR}/restart', timeout=300)
+                log(f'Border Router auf feste Kennung umgestellt: {by_id}')
             log(f'{by_id}: Thread läuft schon')
             self.thread_serials.add(serial)
             self.sweep_until = time.time() + 300   # falls noch ein ZHA-Vorschlag für ihn offen ist
@@ -503,7 +521,7 @@ class Watcher:
                     self.retry.pop(name, None)
                     self.waits.pop(name, None)
                 except Later as e:
-                    self.retry[name] = time.time() + 30
+                    self.retry[name] = time.time() + e.delay
                     if self.waits.get(name, 0) <= 1:
                         log(f'/dev/{name}: {e} – prüfe gleich noch mal')
                 except Exception as e:
