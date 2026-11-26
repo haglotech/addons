@@ -25,7 +25,20 @@ import time
 OTBR = 'core_openthread_border_router'
 MATTER = 'core_matter_server'
 IGNORE_TITLE = 'Thread-Stick (Haglo)'
-TOKEN = os.environ.get('SUPERVISOR_TOKEN', '')
+
+
+def _token():
+    t = os.environ.get('SUPERVISOR_TOKEN', '')
+    if not t:   # unter s6 landet die Umgebung nur hier
+        try:
+            with open('/run/s6/container_environment/SUPERVISOR_TOKEN') as f:
+                t = f.read().strip()
+        except OSError:
+            pass
+    return t
+
+
+TOKEN = _token()
 
 
 def log(msg):
@@ -161,10 +174,14 @@ def sup(method, path, body=None, timeout=30):
         c.request(method, path, json.dumps(body) if body is not None else None,
                   {'Authorization': f'Bearer {TOKEN}', 'Content-Type': 'application/json'})
         r = c.getresponse()
-        data = json.loads(r.read() or b'{}')
+        raw = r.read()
+        try:
+            data = json.loads(raw or b'{}')
+        except ValueError:
+            data = {'message': raw[:200].decode('utf-8', 'replace')}
         if r.status >= 400:
             raise RuntimeError(f'{method} {path}: {r.status} {data.get("message", "")}')
-        return data.get('data', data)
+        return data.get('data', data) if isinstance(data, dict) else data
     finally:
         c.close()
 
@@ -323,6 +340,7 @@ def otbr_device():
 class Watcher:
     def __init__(self):
         self.known = set()
+        self.retry = {}            # Stick -> Zeitpunkt des nächsten Versuchs nach einem Fehler
         self.thread_serials = set()
         self.sweep_until = 0.0
         self.next_sweep = 0.0
@@ -372,15 +390,20 @@ class Watcher:
             ha(unignore_zha)
 
     def run(self):
-        log('Stick-Erkennung läuft')
+        log(f'Stick-Erkennung läuft{"" if TOKEN else " – OHNE Supervisor-Zugang (kein Token)"}')
         while True:
             now = present_ttys()
             for name in sorted(now - self.known):
+                if time.time() < self.retry.get(name, 0):
+                    continue
                 try:
                     self.handle(name)
+                    self.known.add(name)
+                    self.retry.pop(name, None)
                 except Exception as e:
-                    log(f'/dev/{name}: {e}')
-            self.known = now
+                    log(f'/dev/{name}: {e} – neuer Versuch in 30 s')
+                    self.retry[name] = time.time() + 30
+            self.known &= now
             t = time.time()
             if t < self.sweep_until and t >= self.next_sweep:
                 self.next_sweep = t + 20
