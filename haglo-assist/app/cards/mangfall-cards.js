@@ -5,7 +5,7 @@
  *         Haus auf einen Blick, Rollläden, Sicherheit, Kameras, Musik, Schnellaktionen, Verbraucher, Luftqualität, Termine, Haus-Check
  * (c) Mangfall · MIT-Lizenz
  */
-const MC_VERSION = "1.5.0";
+const MC_VERSION = "1.5.2";
 
 const fmt = (n, d = 0) =>
   Number(n).toLocaleString("de-DE", { minimumFractionDigits: d, maximumFractionDigits: d });
@@ -33,7 +33,7 @@ const toWatt = (st) => {
   return u === "kw" ? v * 1000 : u === "mw" ? v * 1e6 : v;
 };
 const fmtL = (l) => fmt(l, l > 0 && l < 10 ? 1 : 0);   // kleine Behälter: 2,2 L statt 2 L
-const fmtW = (w) => (Math.abs(w) >= 1000 ? `${fmt(w / 1000, 1)} kW` : `${fmt(w)} W`);
+const fmtW = (w) => (Math.abs(w) >= 999.5 ? `${fmt(w / 1000, 1)} kW` : `${fmt(w)} W`);
 
 /* Zahlen mit Einheit: unter 10 mit Nachkommastelle, Tausenderpunkt, Watt ab 1000 als kW */
 const fmtNum = (v, unit = "") => {
@@ -788,7 +788,11 @@ function energySeries24(res, c, states, end = Date.now(), N = 288) {
   const at = (id) => {
     if (!id || !res?.[id]) return null;
     const k = (states[id]?.attributes.unit_of_measurement || "W").toLowerCase() === "kw" ? 1000 : 1;
-    const arr = res[id].map((r) => ({ t: (r.lu ?? r.lc ?? 0) * 1000 || toMs(r.last_updated || r.last_changed), v: parseFloat(r.s ?? r.state) * k }));
+    const arr = res[id].map((r) => ({ t: (r.lu ?? r.lc ?? 0) * 1000 || toMs(r.last_updated || r.last_changed), v: parseFloat(r.s ?? r.state) * k }))
+      .filter((r) => isFinite(r.t));
+    // Der gespeicherte Verlauf kann hinterherhinken: der aktuelle Wert gehört immer dazu, sonst endet die Linie vor „jetzt“
+    const live = states[id], lv = parseFloat(live?.state) * k, lt = Math.min(end, toMs(live?.last_updated || live?.last_changed || end));
+    if (isFinite(lv) && isFinite(lt) && (!arr.length || lt > arr[arr.length - 1].t)) arr.push({ t: lt, v: lv });
     let j = -1;
     return times.map((t) => { while (j + 1 < arr.length && arr[j + 1].t <= t) j++; return j >= 0 && isFinite(arr[j].v) ? arr[j].v : null; });
   };
@@ -802,7 +806,8 @@ function energySeries24(res, c, states, end = Date.now(), N = 288) {
   const solar = c.solar ? at(c.solar)?.map((v) => (v === null ? null : Math.max(0, v))) : null;
   const batt = signed(c.battery, c.battery_discharge, c.battery_charge, c.invert_battery);
   const home = c.home ? at(c.home) : grid && times.map((_, i) => (grid[i] === null ? null : Math.max(0, grid[i] + (solar?.[i] ?? 0) + (batt?.[i] ?? 0))));
-  return { times, grid, solar, batt, home };
+  const soc = c.battery_soc ? at(c.battery_soc) : null;
+  return { times, grid, solar, batt, home, soc };
 }
 
 class MangfallEnergyCard extends MangfallBase {
@@ -889,7 +894,9 @@ class MangfallEnergyCard extends MangfallBase {
       const res = await this._hass.callWS({ type: "history/history_during_period", start_time: start.toISOString(), end_time: new Date().toISOString(),
         entity_ids: ids, minimal_response: true, no_attributes: true, significant_changes_only: false });
       const integ = (id, sign) => {
-        const arr = res[id] || [], u = (this._hass.states[id]?.attributes.unit_of_measurement || "W").toLowerCase();
+        const arr = [...(res[id] || [])], live = this._hass.states[id], u = (live?.attributes.unit_of_measurement || "W").toLowerCase();
+        const lt = live ? toMs(live.last_updated || live.last_changed) / 1000 : NaN;            // Verlauf kann hinterherhinken
+        if (live && isFinite(lt) && (!arr.length || lt > arr[arr.length - 1].lu)) arr.push({ s: live.state, lu: lt });
         const k = (u === "kw" ? 1000 : 1) * sign; let pos = 0, neg = 0;
         for (let i = 0; i < arr.length; i++) {
           const v = parseFloat(arr[i].s) * k; if (isNaN(v)) continue;
@@ -926,16 +933,21 @@ class MangfallEnergyCard extends MangfallBase {
 
     // Wer liefert an wen: Sonne zuerst ans Haus, dann in den Speicher, Rest ins Netz
     const chg = Math.max(0, -b), dis = Math.max(0, b), exp = Math.max(0, -g);
-    const s2h = Math.min(s, h); let rs = s - s2h;
-    const s2b = Math.min(rs, chg); rs -= s2b;
-    const s2g = Math.min(rs, exp);
+    // Lädt der Speicher, während Strom aus dem Netz kommt, lädt ihn die Sonne (Hybrid-Wechselrichter) und das Netz
+    // versorgt das Haus – aus dem Netz geladen wird nur, was die Sonne nicht schafft. Sonst: Sonne zuerst ans Haus.
+    const solarToBattFirst = chg > 15 && g > 15;
+    const s2b = solarToBattFirst ? Math.min(s, chg) : Math.min(Math.max(0, s - Math.min(s, h)), chg);
+    const s2h = Math.min(s - s2b, h);
+    const s2g = Math.min(s - s2b - s2h, exp);
     const b2h = Math.min(dis, h - s2h);
-    const g2h = Math.max(0, h - s2h - b2h), g2b = Math.max(0, chg - s2b);
+    const b2g = Math.max(0, Math.min(dis - b2h, exp - s2g));          // Speicher speist ein (z. B. dynamischer Tarif)
+    const imp = Math.max(0, g);                                        // mehr als der Bezug kann nicht aus dem Netz kommen
+    const g2b = Math.min(Math.max(0, chg - s2b), imp), g2h = Math.min(Math.max(0, h - s2h - b2h), imp - g2b);
     const own = h > 0 ? Math.max(0, Math.min(100, ((s2h + b2h) / h) * 100)) : 100;
     const T = 15;
 
     let state;
-    if (s2g > T || exp > T) state = { key: "ok", label: "Speist ein", icon: "mdi:transmission-tower-export" };
+    if (s2g + b2g > T || exp > T) state = { key: "ok", label: "Speist ein", icon: "mdi:transmission-tower-export" };
     else if (g2h + g2b <= T) state = { key: "ok", label: "Autark", icon: "mdi:check-circle" };
     else if (own >= 50) state = { key: "info", label: "Teilweise Netzstrom", icon: "mdi:transmission-tower-import" };
     else state = { key: "low", label: "Bezieht Netzstrom", icon: "mdi:transmission-tower-import" };
@@ -944,13 +956,16 @@ class MangfallEnergyCard extends MangfallBase {
     let say;
     if (s2h + s2b + s2g > T) {
       const p = [];
-      if (s2h > T) p.push(s2h >= h - T ? "deckt das ganze Haus" : `deckt ${fmt((s2h / h) * 100)} % vom Haus`);
+      if (s2h > T) p.push(s2h >= h - T ? "deckt das ganze Haus" : `deckt ${fmt(Math.min(99, Math.round((s2h / h) * 100)))} % vom Haus`);
       if (s2b > T) p.push("lädt den Speicher");
       if (s2g > T) p.push(`speist ${fmtW(s2g)} ein`);
       const last = p.pop(); say = "Die Sonne " + (p.length ? p.join(", ") + " und " : "") + last;
-      if (g2h > T) say += `, ${fmtW(g2h)} kommen aus dem Netz`;
-    } else if (b2h > T) say = "Der Speicher versorgt das Haus" + (g2h > T ? `, ${fmtW(g2h)} kommen aus dem Netz` : "");
-    else if (g2b > T) say = "Der Speicher lädt aus dem Netz";
+      if (b2h > T) say += `, der Speicher liefert ${fmtW(b2h)}`;
+      if (b2g > T) say += `, der Speicher speist ${fmtW(b2g)} ein`;
+      if (g2h + g2b > T) say += `, ${fmtW(g2h + g2b)} kommen aus dem Netz`;
+    } else if (b2h > T || b2g > T) say = (b2h > T ? "Der Speicher versorgt das Haus" + (b2g > T ? ` und speist ${fmtW(b2g)} ein` : "")
+        : `Der Speicher speist ${fmtW(b2g)} ein`) + (g2h > T ? `, ${fmtW(g2h)} kommen aus dem Netz` : "");
+    else if (g2b > T) say = g2h > T ? `Haus und Speicher beziehen ${fmtW(g2h + g2b)} aus dem Netz` : "Der Speicher lädt aus dem Netz";
     else say = h > T ? `Das Haus bezieht ${fmtW(g2h)} aus dem Netz` : "Gerade fließt kaum Strom";
 
     // Grafik
@@ -963,13 +978,17 @@ class MangfallEnergyCard extends MangfallBase {
     };
     const routes = [
       ["solar", "home", s2h, "solar", hasS], ["solar", "batt", s2b, "solar", hasS && hasB], ["solar", "grid", s2g, "solar", hasS],
-      ["batt", "home", b2h, "batt", hasB], ["grid", "home", g2h, "grid", true], ["grid", "batt", g2b, "grid", hasB],
+      ["batt", "home", b2h, "batt", hasB], ["grid", "home", g2h, "grid", true],
+      b2g > g2b ? ["batt", "grid", b2g, "batt", hasB] : ["grid", "batt", g2b, "grid", hasB],
     ].filter((r) => r[4]);
+    const now = Date.now() / 1000;
     const lines = routes.map(([a, z, w, col]) => {
       const d = curve(a, z);
       if (w <= T) return `<path d="${d}" class="base"/>`;
       const sw = (3 + Math.min(3, w / 1500)).toFixed(1), dur = Math.max(0.28, Math.min(1.4, 1.7 - Math.log10(w) * 0.35)).toFixed(2);
-      return `<path d="${d}" class="lane" style="stroke:${EC[col]}"/><path d="${d}" class="run" style="stroke:${EC[col]};stroke-width:${sw};animation-duration:${dur}s"/>`;
+      // Neu zeichnen startet Animationen von vorn – mit der Uhrzeit als Phase läuft der Fluss ohne Sprung weiter
+      const delay = (-(now % dur)).toFixed(3);
+      return `<path d="${d}" class="lane" style="stroke:${EC[col]}"/><path d="${d}" class="run" style="stroke:${EC[col]};stroke-width:${sw};animation-duration:${dur}s;animation-delay:${delay}s"/>`;
     }).join("");
 
     const CIRC = 2 * Math.PI * P.R;
@@ -988,7 +1007,7 @@ class MangfallEnergyCard extends MangfallBase {
       return `<div class="hit${this._sheet === key ? " sel" : ""}" style="left:${(x / P.W) * 100}%;top:${(y / P.H) * 100}%;color:${col}" data-node="${key}" role="button" tabindex="0" aria-label="Verlauf"><ha-icon icon="${icon}"></ha-icon></div>`;
     };
     const battIcon = soc !== null ? (soc >= 95 ? "mdi:battery" : `mdi:battery-${Math.max(10, Math.round(soc / 10) * 10)}`) : "mdi:home-battery-outline";
-    const gridActive = g2h + g2b + s2g > T;
+    const gridActive = g2h + g2b + s2g + b2g > T;
     const td = this._today;
 
     const svg = `<svg viewBox="0 0 ${P.W} ${P.H}" aria-hidden="true">${lines}
@@ -1032,7 +1051,17 @@ class MangfallEnergyCard extends MangfallBase {
       .nl { font-size: 11px; fill: var(--secondary-text-color); text-anchor: middle; }
       .hit { position: absolute; width: ${((2 * P.R) / P.W) * 100}%; aspect-ratio: 1; transform: translate(-50%, -50%); border-radius: 50%;
         display: grid; place-items: center; cursor: pointer; }
-      .hit.sel { background: color-mix(in srgb, currentColor 12%, transparent); }
+      .flow .hit.sel { background: color-mix(in srgb, currentColor 12%, transparent); border-radius: 50%; }
+      .shplot { position: relative; margin-top: 6px; touch-action: pan-y; cursor: crosshair; }
+      .shplot svg { height: 90px; margin-top: 0; }
+      .shy { position: absolute; left: 0; transform: translateY(-50%); font-size: 10px; line-height: 1; padding: 1px 3px; border-radius: 4px;
+        color: var(--secondary-text-color); background: color-mix(in srgb, var(--secondary-background-color, #f2f2f2) 85%, transparent); pointer-events: none; }
+      .shcur { position: absolute; top: 0; bottom: 0; width: 1px; background: var(--secondary-text-color); opacity: .5; pointer-events: none; }
+      .shdot { position: absolute; width: 8px; height: 8px; border-radius: 50%; transform: translate(-50%, -50%); pointer-events: none;
+        box-shadow: 0 0 0 2px var(--ha-card-background, var(--card-background-color, #fff)); }
+      .shtip { position: absolute; top: 2px; transform: translateX(-50%); white-space: nowrap; font-size: 11.5px; font-weight: 600;
+        padding: 3px 7px; border-radius: 6px; color: var(--primary-text-color); background: var(--ha-card-background, var(--card-background-color, #fff));
+        box-shadow: 0 1px 4px rgba(0,0,0,.18); pointer-events: none; font-variant-numeric: tabular-nums; }
       .hit ha-icon { --mdc-icon-size: 21px; width: 21px; height: 21px; transform: translateY(-9px); }
       .today { margin-top: 10px; padding-top: 10px; border-top: 1px solid var(--divider-color, rgba(127,127,127,.2)); }
       .tt { font-size: 11px; font-weight: 600; letter-spacing: .08em; text-transform: uppercase; color: var(--secondary-text-color); }
@@ -1056,6 +1085,20 @@ class MangfallEnergyCard extends MangfallBase {
       el.addEventListener("keydown", (ev) => { if (ev.key === "Enter" || ev.key === " ") { ev.preventDefault(); open(k); } });
     });
     R.querySelector(".shc")?.addEventListener("click", () => open(this._sheet));
+    const pl = R.querySelector(".shplot");
+    if (pl && this._plot) {
+      const [cur, dot, tip] = [".shcur", ".shdot", ".shtip"].map((q) => pl.querySelector(q));
+      const hide = () => { cur.hidden = dot.hidden = tip.hidden = true; };
+      const show = (ev) => {
+        const r = pl.getBoundingClientRect(), f = Math.min(1, Math.max(0, (ev.clientX - r.left) / r.width));
+        const { v, times, fv, yp } = this._plot, i = Math.round(f * (v.length - 1)), x = v[i];
+        if (x === null || x === undefined) return hide();
+        cur.style.left = dot.style.left = `${f * 100}%`; dot.style.top = `${yp(x)}%`;
+        tip.style.left = `${Math.min(85, Math.max(15, f * 100))}%`; tip.textContent = `${hm(times[i])} · ${fv(x)}`;
+        cur.hidden = dot.hidden = tip.hidden = false;
+      };
+      pl.addEventListener("pointermove", show); pl.addEventListener("pointerdown", show); pl.addEventListener("pointerleave", hide);
+    }
   }
   /* Verlaufsfeld je Knoten: Tipp auf Solar, Netz, Haus oder Speicher zeigt die letzten 24 h direkt in der Karte */
   _nodeEntity(k) {
@@ -1064,7 +1107,7 @@ class MangfallEnergyCard extends MangfallBase {
   }
   async _load24() {
     if (this._busy24 || !this._hass.callWS || (this._h24 && Date.now() - this._h24.at < 3e5)) return;
-    const c = this._config, ids = [c.grid, c.grid_import, c.grid_export, c.solar, c.battery, c.battery_charge, c.battery_discharge, c.home].filter(Boolean);
+    const c = this._config, ids = [c.grid, c.grid_import, c.grid_export, c.solar, c.battery, c.battery_charge, c.battery_discharge, c.home, c.battery_soc].filter(Boolean);
     if (!ids.length) return;
     this._busy24 = true;
     const end = Date.now();
@@ -1085,20 +1128,41 @@ class MangfallEnergyCard extends MangfallBase {
     else if (this._h24.err && !d) body = `<div class="shw">Verlauf nicht abrufbar.</div>`;
     else if (!d || !d[k] || !d[k].some((v) => v !== null)) body = `<div class="shw">Noch kein Verlauf – erscheint, sobald der Sensor Werte liefert.</div>`;
     else {
-      const v = d[k], W = 300, H = 60, ok = v.map((x, i) => [x, i]).filter((p) => p[0] !== null);
+      const isSoc = k === "batt" && d.soc?.some((x) => x !== null);
+      const v = isSoc ? d.soc : d[k], fv = (x) => (isSoc ? `${fmt(x)} %` : fmtW(x));
+      const W = 300, H = 90, ok = v.map((x, i) => [x, i]).filter((p) => p[0] !== null);
       const max = ok.reduce((a, b) => (b[0] > a[0] ? b : a)), min = ok.reduce((a, b) => (b[0] < a[0] ? b : a));
-      const avg = ok.reduce((s, p) => s + p[0], 0) / ok.length, lo = Math.min(0, min[0]), hi = Math.max(1, max[0]);
-      const X = (i) => ((i / (v.length - 1)) * W).toFixed(1), Y = (x) => (H - 2 - ((x - lo) / (hi - lo)) * (H - 6)).toFixed(1), y0 = Y(0);
+      const avg = ok.reduce((s, p) => s + p[0], 0) / ok.length;
+      const lo = isSoc ? 0 : Math.min(0, min[0]), hi = isSoc ? 100 : Math.max(lo < 0 ? 0 : 1, max[0]) || 1;
+      const X = (i) => ((i / (v.length - 1)) * W).toFixed(1), Y = (x) => (H - 2 - ((x - lo) / (hi - lo)) * (H - 6)).toFixed(1), y0 = Y(isSoc ? 0 : 0);
       let line = "", area = "", run = [];
       const flush = () => { if (run.length > 1) { const p = run.map(([x, i], j) => `${j ? "L" : "M"}${X(i)} ${Y(x)}`).join(" ");
         line += p + " "; area += `${p} V${y0} H${X(run[0][1])} Z `; } run = []; };
       v.forEach((x, i) => (x === null ? flush() : run.push([x, i]))); flush();
-      const tOf = (i) => d.times[i];
-      const more = (k === "grid" || k === "batt") && min[0] < -15 ? ` · ${k === "grid" ? "Einspeisung" : "Laden"} bis ${fmtW(-min[0])}` : "";
-      body = `<svg viewBox="0 0 ${W} ${H}" preserveAspectRatio="none" aria-hidden="true"><path d="${area}" class="sha" style="fill:${col}"/>
+      const tOf = (i) => d.times[i], at = (p) => `<b>${fv(p[0])}</b> um ${hm(tOf(p[1]))}`;
+      const yp = (x) => ((Number(Y(x)) / H) * 100).toFixed(1);
+      const ticks = [hi, ...(lo < 0 && hi > 0 ? [0] : []), lo].filter((x, i, a) => a.indexOf(x) === i);
+      this._plot = { v, times: d.times, fv, yp };
+      // Zusammenfassung in Worten, die zum Knoten passen (Netz: Bezug/Einspeisung, Speicher: Laden/Entladen)
+      const pw = d[k] || [], pmax = Math.max(0, ...pw.filter((x) => x !== null)), pmin = Math.min(0, ...pw.filter((x) => x !== null));
+      let sum;
+      if (isSoc) {
+        const bt = d.batt || [], dis = Math.max(0, ...bt.filter((x) => x !== null)), chg = -Math.min(0, ...bt.filter((x) => x !== null));
+        sum = `Jetzt <b>${fv(ok[ok.length - 1][0])}</b> · tiefster Stand ${at(min)} · höchster ${at(max)}` +
+          (chg > 15 ? ` · Laden bis <b>${fmtW(chg)}</b>` : "") + (dis > 15 ? ` · Entladen bis <b>${fmtW(dis)}</b>` : "");
+      } else if (k === "grid" || k === "batt") {
+        const [plus, minus] = k === "grid" ? ["Bezug", "Einspeisung"] : ["Entladen", "Laden"];
+        const parts = [];
+        if (pmax > 15) parts.push(`${plus} bis ${at(max)}`);
+        if (pmin < -15) parts.push(`${minus} bis <b>${fmtW(-min[0])}</b> um ${hm(tOf(min[1]))}`);
+        sum = (parts.length ? parts.join(" · ") : `kaum ${k === "grid" ? "Netzstrom" : "Speicherbetrieb"}`) + ` · Ø <b>${fmtW(Math.abs(avg))}</b> ${avg < 0 ? minus : plus}`;
+      } else sum = `Höchstwert ${at(max)} · Ø <b>${fmtW(avg)}</b>`;
+      body = `<div class="shplot"><svg viewBox="0 0 ${W} ${H}" preserveAspectRatio="none" aria-hidden="true"><path d="${area}" class="sha" style="fill:${col}"/>
           ${lo < 0 ? `<line x1="0" x2="${W}" y1="${y0}" y2="${y0}" class="sh0"/>` : ""}<path d="${line}" class="shl" style="stroke:${col}"/></svg>
+          ${ticks.map((x) => `<span class="shy" style="top:${yp(x)}%">${fv(x)}</span>`).join("")}
+          <i class="shcur" hidden></i><i class="shdot" hidden style="background:${col}"></i><span class="shtip" hidden></span></div>
         <div class="shx"><span>vor 24 h</span><span>vor 12 h</span><span>jetzt</span></div>
-        <div class="shs">Höchstwert <b>${fmtW(max[0])}</b> um ${hm(tOf(max[1]))} · Ø <b>${fmtW(avg)}</b>${more}</div>`;
+        <div class="shs">${sum}</div>`;
     }
     return `<div class="sheet${this._sheetAnim ? " in" : ""}"><div class="shh"><span><i style="background:${col}"></i>${names[k]} · letzte 24 h</span>
       <span>${ent ? `<button class="shd" data-entity="${ent}">Details</button>` : ""}<button class="shc" aria-label="Schließen"><ha-icon icon="mdi:close"></ha-icon></button></span></div>${body}</div>`;
