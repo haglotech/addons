@@ -1,5 +1,5 @@
 name: Haglo Stick-Erkennung
-version: "1.0.3"
+version: "1.0.4"
 url: https://haglotech.com
 slug: haglo-stick
 description: Erkennt Zigbee- und Thread-Sticks und richtet Thread selbst ein

@@ -276,28 +276,59 @@ def ha(fn):
             ws.close()
 
 
-def zha_loaded(ws):
-    return any(e.get('state') == 'loaded' and e.get('source') != 'ignore'
-               for e in ws.call(type='config_entries/get', domain='zha') or [])
+class Later(Exception):
+    """Jetzt nicht abfragen (Home Assistant oder ZHA starten noch) - später erneut versuchen."""
+
+
+def zha_status(ws, paths):
+    """'none' (kein ZHA), 'uses' (ZHA nutzt diesen Stick), 'other' (ZHA nutzt einen anderen), 'busy' (startet noch)."""
+    entries = [e for e in ws.call(type='config_entries/get', domain='zha') or [] if e.get('source') != 'ignore']
+    if not entries:
+        return 'none'
+    if any(e.get('state') in ('not_loaded', 'setup_in_progress', 'setup_retry') for e in entries):
+        return 'busy'
+    if not any(e.get('state') == 'loaded' for e in entries):
+        return 'none'
+    try:
+        path = ((ws.call(type='zha/network/settings') or {}).get('device') or {}).get('path')
+    except Exception:
+        return 'uses'          # Pfad unbekannt: lieber nicht stören
+    return 'uses' if path in paths else 'other'
+
+
+def ignore_title(serial):
+    return f'{IGNORE_TITLE} {serial}'
 
 
 def ignore_zha_flows(ws, serials):
-    """ZHA-Vorschläge für Thread-Sticks ausblenden (der Kunde soll dort nicht klicken)."""
-    serials = {s for s in serials if s}
+    """ZHA-Vorschläge für Thread-Sticks ausblenden (der Kunde soll dort nicht klicken).
+    Nur für diese Sticks - ein Zigbee-Stick daneben behält seinen Vorschlag."""
     for f in ws.call(type='config_entries/flow/progress') or []:
         ctx = f.get('context') or {}
         uid = str(ctx.get('unique_id') or '')
-        if f.get('handler') == 'zha' and ctx.get('source') == 'usb' and (not serials or any(s in uid for s in serials)):
-            ws.call(type='config_entries/ignore_flow', flow_id=f['flow_id'], title=IGNORE_TITLE)
+        hit = next((s for s in serials if s and s in uid), None)
+        if f.get('handler') == 'zha' and ctx.get('source') == 'usb' and hit:
+            ws.call(type='config_entries/ignore_flow', flow_id=f['flow_id'], title=ignore_title(hit))
             log('ZHA-Vorschlag für den Thread-Stick ausgeblendet')
 
 
-def unignore_zha(ws):
-    """Stick wurde auf Zigbee umgeflasht: unsere ZHA-Sperre wieder aufheben."""
+def unignore_zha(ws, serial):
+    """Dieser Stick ist (jetzt) Zigbee: unsere ZHA-Sperre für ihn aufheben."""
     for e in ws.call(type='config_entries/get', domain='zha') or []:
-        if e.get('source') == 'ignore' and e.get('title') == IGNORE_TITLE:
+        if e.get('source') == 'ignore' and e.get('title') in (ignore_title(serial), IGNORE_TITLE):
             sup('DELETE', f'/core/api/config/config_entries/entry/{e["entry_id"]}')
-            log('ZHA-Sperre aufgehoben (Stick ist jetzt Zigbee)')
+            log('ZHA-Sperre aufgehoben (Stick ist Zigbee)')
+
+
+def stop_otbr(reason):
+    """Border Router anhalten und nicht mehr beim Booten starten (sein Stick ist weg oder kein Thread-Stick mehr)."""
+    try:
+        sup('POST', f'/addons/{OTBR}/options', {'boot': 'manual', 'watchdog': False})
+        if sup('GET', f'/addons/{OTBR}/info').get('state') in ('started', 'error'):
+            sup('POST', f'/addons/{OTBR}/stop', timeout=120)
+        log(f'Border Router angehalten – {reason}')
+    except Exception as e:
+        log(f'Border Router anhalten: {e}')
 
 
 def ensure_addon(slug, options=None):
@@ -362,11 +393,13 @@ def auto_update():
 class Watcher:
     def __init__(self):
         self.known = set()
-        self.retry = {}            # Stick -> Zeitpunkt des nächsten Versuchs nach einem Fehler
+        self.retry = {}            # Stick -> Zeitpunkt des nächsten Versuchs
+        self.waits = {}            # Stick -> wie oft schon auf ZHA gewartet
         self.thread_serials = set()
         self.sweep_until = 0.0
         self.next_sweep = 0.0
         self.restarted = 0.0
+        self.started = time.time()
 
     def handle(self, name):
         dev = f'/dev/{name}'
@@ -383,13 +416,24 @@ class Watcher:
             return
 
         state, device = otbr_device()
-        if state == 'started' and device in (by_id, dev):
+        mine = device in (by_id, dev)              # Border Router ist auf diesen Stick eingestellt
+        if mine and state == 'started':
             log(f'{by_id}: Thread läuft schon')
             self.thread_serials.add(serial)
             return
-        if ha(zha_loaded):
-            log(f'{by_id}: ZHA ist eingerichtet – Stick bleibt bei Zigbee, keine Abfrage')
+        if mine and time.time() - self.started < 90:
+            raise Later('Border Router startet evtl. gerade')
+
+        z = ha(lambda ws: zha_status(ws, (by_id, dev)))
+        if z is None:
+            raise Later('Home Assistant noch nicht bereit')
+        if z == 'uses':
+            log(f'{by_id}: wird von ZHA benutzt – Zigbee, keine Abfrage')
             return
+        if z == 'busy':
+            self.waits[name] = self.waits.get(name, 0) + 1
+            if self.waits[name] <= 10:          # bis 5 min warten, dann trotzdem prüfen
+                raise Later('ZHA startet noch')
 
         kind = baud = None
         for attempt in range(3):            # frisch eingesteckt bootet der Stick noch
@@ -411,27 +455,56 @@ class Watcher:
             self.sweep_until = time.time() + 300   # ZHA-Vorschlag kann noch nachkommen
             self.next_sweep = 0
         elif kind == 'zigbee':
-            ha(unignore_zha)
+            if mine:
+                stop_otbr('der Stick ist jetzt ein Zigbee-Stick')
+            if serial:
+                ha(lambda ws: unignore_zha(ws, serial))
+
+    def otbr_stick_gone(self):
+        """Border Router läuft auf einem Stick, der nicht mehr steckt -> anhalten statt Fehler-Schleife."""
+        state, device = otbr_device()
+        if not device or state not in ('started', 'error'):
+            return
+        try:
+            devices = sup('GET', '/hardware/info').get('devices') or []
+            present = {d.get('by_id') for d in devices} | {d.get('dev_path') for d in devices}
+        except Exception:
+            return
+        if device not in present:
+            stop_otbr('der Thread-Stick wurde abgezogen')
 
     def run(self):
         log(f'Stick-Erkennung läuft{"" if TOKEN else " – OHNE Supervisor-Zugang (kein Token)"}')
         auto_ok, auto_next = auto_update(), time.time() + 60
+        gone_check = time.time() + 60          # einmal kurz nach dem Start, sonst nur beim Abziehen
         while True:
-            if not auto_ok and time.time() >= auto_next:
-                auto_ok, auto_next = auto_update(), time.time() + 60
+            t = time.time()
+            if not auto_ok and t >= auto_next:
+                auto_ok, auto_next = auto_update(), t + 60
             now = present_ttys()
+            if self.known - now:               # ein Stick wurde abgezogen
+                gone_check = t + 3
+                for name in self.known - now:
+                    self.waits.pop(name, None)
+            self.known &= now
             for name in sorted(now - self.known):
-                if time.time() < self.retry.get(name, 0):
+                if t < self.retry.get(name, 0):
                     continue
                 try:
                     self.handle(name)
                     self.known.add(name)
                     self.retry.pop(name, None)
+                    self.waits.pop(name, None)
+                except Later as e:
+                    self.retry[name] = time.time() + 30
+                    if self.waits.get(name, 0) <= 1:
+                        log(f'/dev/{name}: {e} – prüfe gleich noch mal')
                 except Exception as e:
                     log(f'/dev/{name}: {e} – neuer Versuch in 30 s')
                     self.retry[name] = time.time() + 30
-            self.known &= now
-            t = time.time()
+            if gone_check and t >= gone_check:
+                gone_check = 0
+                self.otbr_stick_gone()
             if t < self.sweep_until and t >= self.next_sweep:
                 self.next_sweep = t + 20
                 ha(lambda ws: ignore_zha_flows(ws, self.thread_serials))
