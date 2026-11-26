@@ -324,7 +324,7 @@ def stop_otbr(reason):
     """Border Router anhalten und nicht mehr beim Booten starten (sein Stick ist weg oder kein Thread-Stick mehr)."""
     try:
         sup('POST', f'/addons/{OTBR}/options', {'boot': 'manual', 'watchdog': False})
-        if sup('GET', f'/addons/{OTBR}/info').get('state') in ('started', 'error'):
+        if sup('GET', f'/addons/{OTBR}/info').get('state') in ('started', 'error', 'startup'):
             sup('POST', f'/addons/{OTBR}/stop', timeout=120)
         log(f'Border Router angehalten – {reason}')
     except Exception as e:
@@ -464,8 +464,13 @@ class Watcher:
 
     def otbr_stick_gone(self):
         """Border Router läuft auf einem Stick, der nicht mehr steckt -> anhalten statt Fehler-Schleife."""
-        state, device = otbr_device()
-        if not device or state not in ('started', 'error'):
+        try:
+            info = sup('GET', f'/addons/{OTBR}/info')
+        except Exception:
+            return
+        state, device = info.get('state'), (info.get('options') or {}).get('device')
+        # auch wenn er sich selbst schon beendet hat: Autostart/Watchdog würden ihn sonst immer wieder anwerfen
+        if not device or (state not in ('started', 'error') and info.get('boot') != 'auto' and not info.get('watchdog')):
             return
         try:
             devices = sup('GET', '/hardware/info').get('devices') or []
