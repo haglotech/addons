@@ -420,6 +420,8 @@ class Watcher:
         if mine and state == 'started':
             log(f'{by_id}: Thread läuft schon')
             self.thread_serials.add(serial)
+            self.sweep_until = time.time() + 300   # falls noch ein ZHA-Vorschlag für ihn offen ist
+            self.next_sweep = 0
             return
         if mine and time.time() - self.started < 90:
             raise Later('Border Router startet evtl. gerade')
